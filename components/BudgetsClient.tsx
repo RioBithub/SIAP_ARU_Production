@@ -1,6 +1,7 @@
 "use client";
 import { FormEvent,useEffect,useState } from "react";
 import type { SessionUser } from "@/lib/types";
+import CurrencyInput from "@/components/CurrencyInput";
 import Modal from "@/components/Modal";
 import { useAppDialog } from "@/components/AppDialogProvider";
 const rupiah=(n:number)=>new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",maximumFractionDigits:0}).format(n||0);
@@ -22,7 +23,7 @@ export default function BudgetsClient({user}:{user:SessionUser}){
     {open&&<Modal title="Tambah / Update Anggaran" onClose={()=>setOpen(false)}><form className="form-grid" onSubmit={create}>
       <div className="field"><label>Tahun</label><input className="input" type="number" min="2000" max="2100" name="budget_year" defaultValue={new Date().getFullYear()} required/></div>
       <div className="field"><label>Kategori</label><input className="input" name="category" required/></div>
-      <div className="field"><label>Pagu</label><input className="input" type="number" min="0" step="0.01" name="amount" required/></div>
+      <div className="field"><label>Pagu</label><CurrencyInput name="amount" required/></div>
       <div className="field full"><label>Catatan</label><textarea className="textarea" name="notes"/></div>
       <div className="field full" style={{display:"flex",flexDirection:"row",justifyContent:"flex-end",gap:8}}><button type="button" className="btn btn-secondary" onClick={()=>setOpen(false)}>Batal</button><button className="btn btn-primary">Simpan</button></div>
     </form></Modal>}

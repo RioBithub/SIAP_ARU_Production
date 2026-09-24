@@ -1,6 +1,7 @@
 "use client";
 import { FormEvent,useEffect,useMemo,useState } from "react";
 import type { SessionUser } from "@/lib/types";
+import CurrencyInput from "@/components/CurrencyInput";
 import Modal from "@/components/Modal";
 import StatusBadge from "@/components/StatusBadge";
 import { useAppDialog } from "@/components/AppDialogProvider";
@@ -30,7 +31,7 @@ export default function FinanceEntriesClient({type,user}:{type:"INCOME"|"EXPENSE
         <div className="field"><label>Tanggal</label><input className="input" type="date" name="entry_date" defaultValue={new Date().toISOString().slice(0,10)} required/></div>
         <div className="field"><label>Kategori</label><input className="input" name="category" required placeholder={type==="INCOME"?"Jasa / Pendapatan Operasional":"Operasional / SDM / IT"}/></div>
         <div className="field full"><label>Deskripsi</label><input className="input" name="description" required/></div>
-        <div className="field"><label>Nominal</label><input className="input" type="number" min="0" step="0.01" name="amount" required/></div>
+        <div className="field"><label>Nominal</label><CurrencyInput name="amount" required/></div>
         <div className="field"><label>Status</label><select className="select" name="status"><option value="POSTED">POSTED</option><option value="PENDING">PENDING</option><option value="VERIFIED">VERIFIED</option></select></div>
         <div className="field full"><label>No. Referensi</label><input className="input" name="reference_no"/></div>
         <div className="field full" style={{display:"flex",flexDirection:"row",justifyContent:"flex-end",gap:8}}><button type="button" className="btn btn-secondary" onClick={()=>setOpen(false)}>Batal</button><button className="btn btn-primary">Simpan</button></div>
