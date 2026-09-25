@@ -37,7 +37,12 @@ export async function GET() {
 
   let finance = null;
   if (canSeeFinance(user.role)) {
-    const currentYear = new Date().getFullYear();
+    const [clockRows] = await db.query<RowDataPacket[]>(
+      `SELECT YEAR(CURDATE()) AS current_year, DATE_FORMAT(CURDATE(),'%Y-%m-01') AS current_period`
+    );
+    const currentYear = Number(clockRows[0]?.current_year || new Date().getFullYear());
+    const currentPeriod = dateOnly(clockRows[0]?.current_period) || `${currentYear}-01-01`;
+
     const [summaryRows] = await db.query<RowDataPacket[]>(
       `SELECT income_amount,expense_amount,budget_amount,(income_amount-expense_amount) AS profit_amount,
               period_month,data_date,updated_at
@@ -58,12 +63,15 @@ export async function GET() {
     ]);
     const s=summaryRows[0]||{};
     finance = {
+      current_year:currentYear,
+      current_period:currentPeriod,
       ytd_available:Boolean(ytd.configured),
       ytd_income:Number(ytd.income_amount||0),
       ytd_expense:Number(ytd.expense_amount||0),
       ytd_profit:Number(ytd.profit_amount||0),
       ytd_budget:Number(ytd.budget_amount||0),
       ytd_as_of_date:ytd.as_of_date,
+      ytd_updated_at:ytd.updated_at,
       income:Number(s.income_amount||0),
       expense:Number(s.expense_amount||0),
       budget:Number(s.budget_amount||0),
