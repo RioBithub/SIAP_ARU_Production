@@ -17,7 +17,7 @@ export async function GET(request:Request,{params}:{params:{id:string}}){
      WHERE a.id=? LIMIT 1`,[params.id]);
   const a=rows[0]; if(!a) return NextResponse.json({ok:false,error:"File tidak ditemukan."},{status:404});
   if(user.role!=="ROOT_ADMIN" && !a.is_public && a.created_by!==user.id && a.current_owner_user_id!==user.id){
-    const [letterRole]=await db.query<RowDataPacket[]>(`SELECT current_role FROM siap_letters WHERE id=? LIMIT 1`,[a.letter_id]);
+    const [letterRole]=await db.query<RowDataPacket[]>(`SELECT \`current_role\` AS current_role FROM siap_letters WHERE id=? LIMIT 1`,[a.letter_id]);
     if(letterRole[0]?.current_role===user.role) {
       // current workflow role may access
     } else {

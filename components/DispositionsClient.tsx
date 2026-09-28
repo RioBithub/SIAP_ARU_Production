@@ -12,6 +12,7 @@ type ProcessAction={id:string;action:string;label:string;requiredNote?:boolean;t
 
 export default function DispositionsClient({user}:{user:SessionUser}){
   const [rows,setRows]=useState<any[]>([]);const [users,setUsers]=useState<any[]>([]);const [letters,setLetters]=useState<any[]>([]);
+  const [selectedLetterId,setSelectedLetterId]=useState("");
   const [open,setOpen]=useState(false);const [error,setError]=useState("");const [message,setMessage]=useState("");
   const [createFiles,setCreateFiles]=useState<File[]>([]);const [createBusy,setCreateBusy]=useState(false);
   const [detail,setDetail]=useState<any>(null);const [detailOpen,setDetailOpen]=useState(false);
@@ -25,7 +26,14 @@ export default function DispositionsClient({user}:{user:SessionUser}){
     const [d,u,l]=await Promise.all([dr.json(),ur.json(),lr.json()]);
     if(d.ok)setRows(d.data);else setError(d.error);if(u.ok)setUsers(u.data);if(l.ok)setLetters(l.data);
   }
-  useEffect(()=>{load()},[]);
+  useEffect(()=>{
+    const prefill=new URLSearchParams(window.location.search).get("letter_id")||"";
+    if(prefill){
+      setSelectedLetterId(prefill);
+      setOpen(true);
+    }
+    load();
+  },[]);
 
   const filtered=useMemo(()=>rows.filter(d=>{
     const hay=[d.subject,d.letter_number,d.external_number,d.instruction,d.from_name,d.to_name].join(" ").toLowerCase();
@@ -33,10 +41,51 @@ export default function DispositionsClient({user}:{user:SessionUser}){
   }),[rows,q,status]);
 
   async function create(e:FormEvent<HTMLFormElement>){
-    e.preventDefault();setCreateBusy(true);setError("");
-    const form=new FormData(e.currentTarget);createFiles.slice(0,5).forEach(f=>form.append("files",f));
-    const r=await fetch("/api/dispositions",{method:"POST",body:form});const j=await r.json();setCreateBusy(false);
-    if(!r.ok){setError(j.error);return}setOpen(false);setCreateFiles([]);setMessage(`Disposisi berhasil dikirim${j.data.attachments?` dengan ${j.data.attachments} lampiran`:""} dan berstatus UNSEEN.`);await load();
+    e.preventDefault();
+    setCreateBusy(true);
+    setError("");
+
+    const form=new FormData(e.currentTarget);
+    const payload=Object.fromEntries(form.entries());
+
+    const r=await fetch("/api/dispositions",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(payload)
+    });
+
+    const j=await r.json();
+
+    if(!r.ok){
+      setCreateBusy(false);
+      setError(j.error);
+      return;
+    }
+
+    let uploaded=0;
+
+    for(const file of createFiles.slice(0,5)){
+      const fd=new FormData();
+      fd.set("file",file);
+
+      const ur=await fetch(`/api/dispositions/${j.data.id}/attachments`,{
+        method:"POST",
+        body:fd
+      });
+
+      if(ur.ok) uploaded++;
+    }
+
+    setCreateBusy(false);
+    setOpen(false);
+    setCreateFiles([]);
+    setSelectedLetterId("");
+
+    setMessage(
+      `Disposisi berhasil dikirim${uploaded?` dengan ${uploaded} lampiran`:""} dan berstatus UNSEEN.`
+    );
+
+    await load();
   }
 
   async function openDetail(id:string){
@@ -91,8 +140,25 @@ export default function DispositionsClient({user}:{user:SessionUser}){
 
     {open&&<Modal title="Buat Disposisi" subtitle="Instruksi, penerima, deadline, dan lampiran akan tercatat sebagai awal riwayat disposisi." onClose={()=>!createBusy&&setOpen(false)}>
       <form onSubmit={create} className="form-grid">
-        <div className="field full"><label>Surat</label><select className="select" name="letter_id" required><option value="">Pilih surat...</option>{letters.filter(l=>["APPROVED","ISSUED","DISPOSED","IN_PROGRESS","COMPLETED"].includes(l.status)).map(l=><option value={l.id} key={l.id}>{l.display_number||l.letter_number||l.external_number||"-"} — {l.subject}</option>)}</select></div>
-        <div className="field"><label>Diteruskan Kepada</label><select className="select" name="to_user_id" required><option value="">Pilih user...</option>{users.filter(u=>u.id!==user.id).map(u=><option key={u.id} value={u.id}>{u.name} — {u.role}</option>)}</select></div>
+        <div className="field full"><label>Surat</label><select className="select" name="letter_id" required value={selectedLetterId} onChange={e=>setSelectedLetterId(e.target.value)}>
+          <option value="">Pilih dokumen...</option>
+          {letters.filter(l=>[
+            "MANAGER_REVIEW",
+            "DIRECTOR_OPS_REVIEW",
+            "PRESIDENT_DIRECTOR_REVIEW",
+            "APPROVED",
+            "READY_TO_ISSUE",
+            "ISSUED",
+            "DISPOSED",
+            "IN_PROGRESS",
+            "COMPLETED"
+          ].includes(l.status)).map(l=>
+            <option value={l.id} key={l.id}>
+              {l.direction==="INCOMING"?"Surat Masuk":l.direction==="INTERNAL"?"Nota Dinas":"Surat Keluar"} — {l.display_number||l.letter_number||l.external_number||"-"} — {l.subject}
+            </option>
+          )}
+        </select></div>
+        <div className="field"><label>Diteruskan Kepada</label><select className="select" name="to_user_id" required><option value="">Pilih user...</option>{users.filter(u=>u.id!==user.id).map(u=><option key={u.id} value={u.id}>{u.name} — {u.unit_name||u.role}</option>)}</select></div>
         <div className="field"><label>Visibility</label><select className="select" name="visibility" defaultValue="ROUTE"><option value="PUBLIC">PUBLIC — semua user persuratan</option><option value="ROUTE">ROUTE — orang dalam jalur</option><option value="PRIVATE">PRIVATE — pengirim & penerima</option></select></div>
         <div className="field"><label>Prioritas</label><select className="select" name="priority"><option value="NORMAL">Normal</option><option value="HIGH">High</option><option value="URGENT">Urgent</option></select></div>
         <div className="field"><label>Target Selesai</label><input className="input" type="date" name="due_date"/></div>

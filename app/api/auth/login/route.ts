@@ -12,7 +12,7 @@ export async function POST(request: Request) {
     if (ip) {
       const [attempts] = await db.query<RowDataPacket[]>(
         `SELECT COUNT(*) AS c FROM siap_audit_logs
-         WHERE action='LOGIN_FAILED' AND ip_address=? AND created_at >= (UTC_TIMESTAMP() - INTERVAL 15 MINUTE)`,
+         WHERE action='LOGIN_FAILED' AND ip_address=? AND created_at >= (NOW() - INTERVAL 15 MINUTE)`,
         [ip]
       );
       if (Number(attempts[0]?.c || 0) >= 10) {

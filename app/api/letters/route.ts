@@ -8,7 +8,33 @@ import { canCreateInternal, canCreateOutgoing, canRegisterIncoming } from "@/lib
 import { dateOnly, required, str } from "@/lib/http";
 import { reserveOutgoingNumber } from "@/lib/numbering";
 
+
 export const runtime = "nodejs";
+
+function reviewStatusForRole(role:string){
+  if(role==="MANAGER") return "MANAGER_REVIEW";
+  if(role==="DIRECTOR_OPS") return "DIRECTOR_OPS_REVIEW";
+  if(role==="PRESIDENT_DIRECTOR") return "PRESIDENT_DIRECTOR_REVIEW";
+  throw new Error("Tujuan review tidak valid.");
+}
+
+async function getReviewTarget(value:unknown){
+  const targetId=required(value,"Tujuan review awal",36);
+
+  const [rows]=await db.query<RowDataPacket[]>(
+    `SELECT id,name,email,role,unit_name
+     FROM siap_users
+     WHERE id=? AND is_active=1
+       AND role IN ('MANAGER','DIRECTOR_OPS','PRESIDENT_DIRECTOR')
+     LIMIT 1`,
+    [targetId]
+  );
+
+  const target=rows[0];
+  if(!target) throw new Error("Tujuan review tidak ditemukan atau tidak aktif.");
+  return target;
+}
+
 
 export async function GET(request: Request) {
   const user = await getCurrentUser();
@@ -34,7 +60,7 @@ export async function GET(request: Request) {
       l.is_public=1
       OR l.created_by=?
       OR l.current_owner_user_id=?
-      OR (l.current_owner_user_id IS NULL AND l.current_role=?)
+      OR (l.current_owner_user_id IS NULL AND l.\`current_role\`=?)
       OR EXISTS (
         SELECT 1 FROM siap_dispositions d
         WHERE d.letter_id=l.id AND (d.to_user_id=? OR d.from_user_id=?)
@@ -49,7 +75,12 @@ export async function GET(request: Request) {
 
   params.push(limit);
   const [rows] = await db.query<RowDataPacket[]>(
-    `SELECT l.*, u.name AS creator_name, nf.name AS format_name, nf.code AS format_code,
+    `SELECT l.*, u.name AS creator_name,
+      uo.name AS current_owner_name,
+      uo.unit_name AS current_owner_unit,
+      rt.name AS routing_target_name,
+      rt.unit_name AS routing_target_unit,
+      nf.name AS format_name, nf.code AS format_code,
       nl.seq_base, nl.variant,
       COALESCE(NULLIF(l.legacy_number_text,''),
         CASE WHEN nl.seq_base IS NULL THEN NULL
@@ -58,6 +89,8 @@ export async function GET(request: Request) {
       (SELECT COUNT(*) FROM siap_attachments a WHERE a.letter_id=l.id) AS attachment_count
      FROM siap_letters l
      JOIN siap_users u ON u.id=l.created_by
+     LEFT JOIN siap_users uo ON uo.id=l.current_owner_user_id
+     LEFT JOIN siap_users rt ON rt.id=l.routing_target_user_id
      LEFT JOIN siap_number_formats nf ON nf.id=l.number_format_id
      LEFT JOIN siap_number_ledger nl ON nl.letter_id=l.id
      WHERE ${where.join(" AND ")}
@@ -105,36 +138,73 @@ export async function POST(request: Request) {
       const externalNumber = required(body.external_number,"Nomor surat asal",255);
       const sender = required(body.sender,"Asal/pengirim",255);
       const receivedDate = dateOnly(body.received_date || today,"Tanggal diterima");
+
+      const target = await getReviewTarget(body.routing_target_user_id);
+      const initialStatus = reviewStatusForRole(String(target.role));
+
       await db.execute(
         `INSERT INTO siap_letters
-         (id,direction,document_type,external_number,subject,sender,letter_date,received_date,confidentiality,summary,notes,status,current_role,is_public,is_backdated,created_by,updated_by)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [id,"INCOMING",documentType,externalNumber,subject,sender,letterDate,receivedDate,confidentiality,
-         str(body.summary,5000)||null,str(body.notes,5000)||null,"MANAGER_REVIEW","MANAGER",isPublic,isBackdated,user.id,user.id]
+         (id,direction,document_type,external_number,subject,sender,letter_date,received_date,
+          confidentiality,summary,notes,status,\`current_role\`,current_owner_user_id,
+          routing_target_user_id,is_public,is_backdated,created_by,updated_by)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [
+          id,"INCOMING",documentType,externalNumber,subject,sender,
+          letterDate,receivedDate,confidentiality,
+          str(body.summary,5000)||null,
+          str(body.notes,5000)||null,
+          initialStatus,String(target.role),String(target.id),String(target.id),
+          isPublic,isBackdated,user.id,user.id
+        ]
       );
+
       await db.execute(
-        `INSERT INTO siap_letter_actions (id,letter_id,actor_user_id,action,from_status,to_status,comment)
+        `INSERT INTO siap_letter_actions
+         (id,letter_id,actor_user_id,action,from_status,to_status,comment)
          VALUES (?,?,?,?,?,?,?)`,
-        [crypto.randomUUID(),id,user.id,"REGISTER_INCOMING",null,"MANAGER_REVIEW",str(body.notes,5000)||null]
+        [
+          crypto.randomUUID(),id,user.id,"REGISTER_INCOMING",
+          null,initialStatus,
+          `Tujuan awal: ${target.name}${target.unit_name?` — ${target.unit_name}`:""}${body.notes?` • ${str(body.notes,5000)}`:""}`
+        ]
       );
+
     } else if (direction==="INTERNAL") {
       if (documentType !== "NOTA_DINAS") {
         throw new Error("Dokumen internal Staff ke atasan harus Nota Dinas.");
       }
-      const recipient = required(body.recipient,"Tujuan Manager/Unit",255);
+
+      const target = await getReviewTarget(body.routing_target_user_id);
+      const recipient = `${target.name}${target.unit_name?` — ${target.unit_name}`:""}`;
       const sender = user.unit_name || user.name;
+
       await db.execute(
         `INSERT INTO siap_letters
-         (id,direction,document_type,subject,sender,recipient,letter_date,confidentiality,summary,notes,status,current_role,is_public,is_backdated,created_by,updated_by)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [id,"INTERNAL",documentType,subject,sender,recipient,letterDate,confidentiality,
-         str(body.summary,5000)||null,str(body.notes,5000)||null,"DRAFT","STAFF",isPublic,isBackdated,user.id,user.id]
+         (id,direction,document_type,subject,sender,recipient,letter_date,
+          confidentiality,summary,notes,status,\`current_role\`,
+          routing_target_user_id,is_public,is_backdated,created_by,updated_by)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [
+          id,"INTERNAL",documentType,subject,sender,recipient,letterDate,
+          confidentiality,
+          str(body.summary,5000)||null,
+          str(body.notes,5000)||null,
+          "DRAFT","STAFF",String(target.id),
+          isPublic,isBackdated,user.id,user.id
+        ]
       );
+
       await db.execute(
-        `INSERT INTO siap_letter_actions (id,letter_id,actor_user_id,action,from_status,to_status,comment)
+        `INSERT INTO siap_letter_actions
+         (id,letter_id,actor_user_id,action,from_status,to_status,comment)
          VALUES (?,?,?,?,?,?,?)`,
-        [crypto.randomUUID(),id,user.id,"CREATE_INTERNAL",null,"DRAFT",str(body.notes,5000)||null]
+        [
+          crypto.randomUUID(),id,user.id,"CREATE_INTERNAL",
+          null,"DRAFT",
+          `Tujuan awal: ${recipient}${body.notes?` • ${str(body.notes,5000)}`:""}`
+        ]
       );
+
     } else {
       const recipient = required(body.recipient,"Tujuan surat",255);
       const formatId = required(body.number_format_id,"Format nomor",36);
@@ -146,7 +216,7 @@ export async function POST(request: Request) {
       await withTransaction(async conn => {
         await conn.execute(
           `INSERT INTO siap_letters
-           (id,direction,document_type,number_format_id,subject,recipient,letter_date,issued_date,confidentiality,summary,notes,status,current_role,is_public,is_backdated,created_by,updated_by)
+           (id,direction,document_type,number_format_id,subject,recipient,letter_date,issued_date,confidentiality,summary,notes,status,\`current_role\`,is_public,is_backdated,created_by,updated_by)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
           [id,"OUTGOING",documentType,formatId,subject,recipient,letterDate,issuedDate,confidentiality,
            str(body.summary,5000)||null,str(body.notes,5000)||null,"DRAFT","STAFF",isPublic,isBackdated,user.id,user.id]

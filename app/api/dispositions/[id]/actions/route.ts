@@ -14,7 +14,10 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
     const b=await request.json();
     const action=String(b.action||"").toUpperCase();
     const note=str(b.note,5000);
-    const [rows]=await db.query<RowDataPacket[]>(`SELECT d.*,l.direction letter_direction FROM siap_dispositions d JOIN siap_letters l ON l.id=d.letter_id WHERE d.id=? LIMIT 1`,[params.id]);
+    const [rows]=await db.query<RowDataPacket[]>(`SELECT d.*,l.direction letter_direction,l.status letter_status
+       FROM siap_dispositions d
+       JOIN siap_letters l ON l.id=d.letter_id
+       WHERE d.id=? LIMIT 1`,[params.id]);
     const d=rows[0]; if(!d) throw new Error("Disposisi tidak ditemukan.");
     if(user.role!=="ROOT_ADMIN" && d.to_user_id!==user.id && d.from_user_id!==user.id) throw new Error("Tidak berhak memproses disposisi ini.");
     if(action==="SEEN"){
@@ -23,12 +26,29 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
     }else if(action==="START"){
       if(user.role!=="ROOT_ADMIN" && d.to_user_id!==user.id) throw new Error("Hanya penerima yang dapat memulai.");
       await db.execute(`UPDATE siap_dispositions SET status='IN_PROGRESS',seen_at=COALESCE(seen_at,UTC_TIMESTAMP()),started_at=COALESCE(started_at,UTC_TIMESTAMP()) WHERE id=?`,[params.id]);
-      if(String(d.letter_direction)!=="OUTGOING") await db.execute(`UPDATE siap_letters SET status='IN_PROGRESS',updated_by=? WHERE id=?`,[user.id,d.letter_id]);
+      if(
+        String(d.letter_direction)!=="OUTGOING" &&
+        ["APPROVED","DISPOSED","IN_PROGRESS","COMPLETED"].includes(String(d.letter_status))
+      ){
+        await db.execute(
+          `UPDATE siap_letters SET status='IN_PROGRESS',updated_by=? WHERE id=?`,
+          [user.id,d.letter_id]
+        );
+      }
     }else if(action==="COMPLETE"){
       if(user.role!=="ROOT_ADMIN" && d.to_user_id!==user.id) throw new Error("Hanya penerima yang dapat menyelesaikan.");
       await db.execute(`UPDATE siap_dispositions SET status='COMPLETED',completed_at=UTC_TIMESTAMP() WHERE id=?`,[params.id]);
       const [pending]=await db.query<RowDataPacket[]>(`SELECT COUNT(*) c FROM siap_dispositions WHERE letter_id=? AND status NOT IN ('COMPLETED','RETURNED')`,[d.letter_id]);
-      if(Number(pending[0]?.c||0)===0 && String(d.letter_direction)!=="OUTGOING") await db.execute(`UPDATE siap_letters SET status='COMPLETED',updated_by=? WHERE id=?`,[user.id,d.letter_id]);
+      if(
+        Number(pending[0]?.c||0)===0 &&
+        String(d.letter_direction)!=="OUTGOING" &&
+        ["APPROVED","DISPOSED","IN_PROGRESS","COMPLETED"].includes(String(d.letter_status))
+      ){
+        await db.execute(
+          `UPDATE siap_letters SET status='COMPLETED',updated_by=? WHERE id=?`,
+          [user.id,d.letter_id]
+        );
+      }
     }else if(action==="RETURN"){
       if(!note) throw new Error("Catatan return wajib diisi.");
       if(user.role!=="ROOT_ADMIN" && d.to_user_id!==user.id) throw new Error("Hanya penerima yang dapat mengembalikan.");

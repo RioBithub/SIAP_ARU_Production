@@ -23,6 +23,7 @@ export async function GET() {
   }
   const [rows]=await db.query<RowDataPacket[]>(
     `SELECT d.*,l.subject,l.letter_number,l.external_number,
+      l.direction,l.document_type,
       fu.name from_name,tu.name to_name
      FROM siap_dispositions d
      JOIN siap_letters l ON l.id=d.letter_id
@@ -48,8 +49,20 @@ export async function POST(request:Request) {
     const [letters]=await db.query<RowDataPacket[]>(`SELECT status,direction FROM siap_letters WHERE id=? LIMIT 1`,[letterId]);
     if(!letters[0]) throw new Error("Surat tidak ditemukan.");
     const letterStatus=String(letters[0].status);
-    if(!["APPROVED","ISSUED","DISPOSED","IN_PROGRESS","COMPLETED"].includes(letterStatus)) {
-      throw new Error("Disposisi baru dapat dibuat setelah approval surat selesai.");
+    const dispositionable=[
+      "MANAGER_REVIEW",
+      "DIRECTOR_OPS_REVIEW",
+      "PRESIDENT_DIRECTOR_REVIEW",
+      "APPROVED",
+      "READY_TO_ISSUE",
+      "ISSUED",
+      "DISPOSED",
+      "IN_PROGRESS",
+      "COMPLETED"
+    ];
+
+    if(!dispositionable.includes(letterStatus)) {
+      throw new Error("Dokumen belum berada pada tahap yang dapat didisposisikan.");
     }
     const id=crypto.randomUUID();
     await db.execute(
@@ -58,8 +71,16 @@ export async function POST(request:Request) {
        VALUES (?,?,?,?,?,?,?,'UNSEEN',?,?)`,
       [id,letterId,b.parent_id||null,user.id,toUser,visibility,instruction,priority,due]
     );
-    if(String(letters[0].direction)!=="OUTGOING") {
-      await db.execute(`UPDATE siap_letters SET status='DISPOSED',updated_by=? WHERE id=?`,[user.id,letterId]);
+    // Jangan merusak status approval jika disposisi dibuat
+    // ketika dokumen masih MANAGER/DIROPS/DIRUT REVIEW.
+    if(
+      String(letters[0].direction)!=="OUTGOING" &&
+      ["APPROVED","DISPOSED","IN_PROGRESS","COMPLETED"].includes(letterStatus)
+    ) {
+      await db.execute(
+        `UPDATE siap_letters SET status='DISPOSED',updated_by=? WHERE id=?`,
+        [user.id,letterId]
+      );
     }
     await auditLog({userId:user.id,action:"DISPOSITION_CREATE",entityType:"DISPOSITION",entityId:id,metadata:{letterId,toUser,visibility,priority,due},request});
     return NextResponse.json({ok:true,data:{id}},{status:201});

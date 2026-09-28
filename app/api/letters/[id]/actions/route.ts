@@ -41,6 +41,51 @@ function expectedRole(status:string) {
   return null;
 }
 
+function reviewStatusForRole(role:string){
+  if(role==="MANAGER") return "MANAGER_REVIEW";
+  if(role==="DIRECTOR_OPS") return "DIRECTOR_OPS_REVIEW";
+  if(role==="PRESIDENT_DIRECTOR") return "PRESIDENT_DIRECTOR_REVIEW";
+  throw new Error("Role tujuan review tidak valid.");
+}
+
+async function getRoutingTarget(targetId:unknown){
+  if(!targetId) return null;
+
+  const [rows]=await db.query<RowDataPacket[]>(
+    `SELECT id,name,role,unit_name
+     FROM siap_users
+     WHERE id=? AND is_active=1
+       AND role IN ('MANAGER','DIRECTOR_OPS','PRESIDENT_DIRECTOR')
+     LIMIT 1`,
+    [targetId]
+  );
+
+  return rows[0]||null;
+}
+
+async function getActiveRoleUser(role:string){
+  const [rows]=await db.query<RowDataPacket[]>(
+    `SELECT id,name,role,unit_name
+     FROM siap_users
+     WHERE role=? AND is_active=1
+     ORDER BY name ASC
+     LIMIT 1`,
+    [role]
+  );
+  return rows[0]||null;
+}
+
+function assertCurrentReviewer(user:any,letter:any,expected:string){
+  if(user.role==="ROOT_ADMIN") return;
+
+  if(user.role!==expected)
+    throw new Error("Approval harus dilakukan role pada tahap saat ini.");
+
+  if(letter.current_owner_user_id &&
+     String(letter.current_owner_user_id)!==String(user.id))
+    throw new Error("Dokumen ini ditujukan kepada reviewer lain.");
+}
+
 async function parseRequest(request:Request) {
   const type=request.headers.get("content-type")||"";
   if(type.includes("multipart/form-data")) {
@@ -83,28 +128,96 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
     if(action==="SUBMIT") {
       if(!["DRAFT","RETURNED_STAFF"].includes(status)) throw new Error("Dokumen tidak berada pada tahap yang dapat diajukan.");
       if(user.role!=="ROOT_ADMIN" && letter.created_by!==user.id) throw new Error("Hanya penyusun dokumen yang dapat mengajukan ulang.");
-      next="MANAGER_REVIEW"; nextRole="MANAGER"; nextOwner=null;
+
+      if(direction==="INTERNAL"){
+        const target=await getRoutingTarget(letter.routing_target_user_id);
+        if(!target) throw new Error("Tujuan review Nota Dinas tidak ditemukan.");
+
+        next=reviewStatusForRole(String(target.role));
+        nextRole=String(target.role);
+        nextOwner=String(target.id);
+      }else{
+        next="MANAGER_REVIEW";
+        nextRole="MANAGER";
+        nextOwner=null;
+      }
     } else if(action==="APPROVE") {
       const expected=expectedRole(status);
       if(!expected) throw new Error("Dokumen tidak sedang menunggu approval.");
-      if(user.role!=="ROOT_ADMIN" && user.role!==expected) throw new Error("Approval harus dilakukan role pada tahap saat ini.");
+      assertCurrentReviewer(user,letter,expected);
       const t=approveTransition(status,direction)!;
-      next=t.next; nextRole=t.nextRole;
+      next=t.next;
+      nextRole=t.nextRole;
       nextOwner=next==="READY_TO_ISSUE" ? String(letter.created_by) : null;
+
+      if(nextRole && ["DIRECTOR_OPS","PRESIDENT_DIRECTOR"].includes(nextRole)){
+        const target=await getActiveRoleUser(nextRole);
+        if(target) nextOwner=String(target.id);
+      }
     } else if(action==="APPROVE_FINAL") {
       if(direction!=="INTERNAL") throw new Error("Approve selesai pada level ini hanya tersedia untuk Nota Dinas.");
       if(!["MANAGER_REVIEW","DIRECTOR_OPS_REVIEW"].includes(status)) throw new Error("Tahap ini tidak dapat diselesaikan pada level sekarang.");
       const expected=expectedRole(status);
-      if(user.role!=="ROOT_ADMIN" && user.role!==expected) throw new Error("Approval harus dilakukan role pada tahap saat ini.");
+      if(!expected) throw new Error("Dokumen tidak sedang menunggu approval.");
+      assertCurrentReviewer(user,letter,expected);
       next="APPROVED"; nextRole=null; nextOwner=null;
     } else if(action==="RETURN") {
       const expected=expectedRole(status);
       if(!expected) throw new Error("Dokumen tidak sedang dalam review.");
-      if(user.role!=="ROOT_ADMIN" && user.role!==expected) throw new Error("Return harus dilakukan role pada tahap saat ini.");
+      assertCurrentReviewer(user,letter,expected);
       if(!comment) throw new Error("Catatan pengembalian wajib diisi.");
-      const t=returnTransition(status,direction)!;
-      next=t.next; nextRole=t.nextRole;
-      nextOwner=next==="RETURNED_STAFF" ? String(letter.created_by) : null;
+
+      const initialTarget=await getRoutingTarget(letter.routing_target_user_id);
+      const isInitialTarget=
+        initialTarget &&
+        String(initialTarget.id)===String(user.id) &&
+        direction!=="OUTGOING";
+
+      if(isInitialTarget){
+        // Jika Staff memang mengirim langsung ke Dirops/Dirut,
+        // Return pertama kembali ke Staff, tidak dipaksa turun ke level yang dilewati.
+        next="RETURNED_STAFF";
+        nextRole="STAFF";
+        nextOwner=String(letter.created_by);
+      }else{
+        const t=returnTransition(status,direction)!;
+        next=t.next;
+        nextRole=t.nextRole;
+        nextOwner=next==="RETURNED_STAFF" ? String(letter.created_by) : null;
+
+        // Saat kembali ke level reviewer awal, kembalikan ke orang yang sama.
+        if(initialTarget && nextRole===String(initialTarget.role)){
+          nextOwner=String(initialTarget.id);
+        }
+      }
+      if(!nextOwner && nextRole && ["DIRECTOR_OPS","PRESIDENT_DIRECTOR"].includes(nextRole)){
+        const target=await getActiveRoleUser(nextRole);
+        if(target) nextOwner=String(target.id);
+      }
+
+    } else if(action==="RESPONSE") {
+      if(direction!=="INTERNAL") throw new Error("Tanggapan khusus tersedia untuk Nota Dinas.");
+      if(!comment) throw new Error("Isi tanggapan wajib diisi.");
+
+      const [prior]=await db.query<RowDataPacket[]>(
+        `SELECT 1
+         FROM siap_letter_actions
+         WHERE letter_id=? AND actor_user_id=?
+         LIMIT 1`,
+        [params.id,user.id]
+      );
+
+      const canRespond =
+        user.role==="ROOT_ADMIN" ||
+        String(letter.created_by)===String(user.id) ||
+        String(letter.current_owner_user_id||"")===String(user.id) ||
+        Boolean(prior[0]);
+
+      if(!canRespond) throw new Error("Anda bukan pihak dalam Nota Dinas ini.");
+
+      // RESPONSE hanya menambah histori/tanggapan.
+      // Status approval tidak berubah.
+
     } else if(action==="ISSUE") {
       if(direction!=="OUTGOING" || status!=="READY_TO_ISSUE") throw new Error("Surat belum siap diterbitkan.");
       if(user.role!=="ROOT_ADMIN" && letter.created_by!==user.id) throw new Error("Hanya Staff penyusun atau Root Admin yang dapat menerbitkan surat.");
@@ -130,7 +243,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
     const actionId=crypto.randomUUID();
     await withTransaction(async conn=>{
       await conn.execute(
-        `UPDATE siap_letters SET status=?,current_role=?,current_owner_user_id=?,
+        `UPDATE siap_letters SET status=?,\`current_role\`=?,current_owner_user_id=?,
          cancelled_reason=IF(?='CANCELLED',?,cancelled_reason),
          issued_date=CASE WHEN ?='ISSUED' THEN ? ELSE issued_date END,
          updated_by=? WHERE id=?`,
