@@ -22,7 +22,7 @@ const DOC_LABELS:Record<string,string>={
   NOTA_DINAS:"Nota Dinas",
   LEMBAR_PENGANTAR:"Lembar Pengantar"
 };
-const docLabel=(r:any)=>r.format_name||DOC_LABELS[r.document_type]||String(r.document_type||"-").replaceAll("_"," ");
+const docLabel=(r:any)=>r.format_name||DOC_LABELS[r.document_type]||String(r.document_type||"-").replace(/_/g," ");
 const DOC_TYPE_CLASS:Record<string,string>={
   PERJANJIAN_KERJA_SAMA:"letter-pks",
   PURCHASE_ORDER:"letter-po",
@@ -34,6 +34,24 @@ const DOC_TYPE_CLASS:Record<string,string>={
   LEMBAR_PENGANTAR:"letter-nota"
 };
 const docTypeClass=(t:any)=>DOC_TYPE_CLASS[String(t||"")]||"letter-default";
+const currentTargetLabel=(r:any)=>{
+  if(r.current_owner_name){
+    return `${r.current_owner_name}${r.current_owner_unit?` — ${r.current_owner_unit}`:""}`;
+  }
+
+  if(r.status==="DRAFT" && r.routing_target_name){
+    return `Tujuan awal: ${r.routing_target_name}${r.routing_target_unit?` — ${r.routing_target_unit}`:""}`;
+  }
+
+  if(r.status==="MANAGER_REVIEW") return "Manager";
+  if(r.status==="DIRECTOR_OPS_REVIEW") return "Direktur Operasional";
+  if(r.status==="PRESIDENT_DIRECTOR_REVIEW") return "Direktur Utama";
+  if(r.status==="READY_TO_ISSUE") return "Staff Pembuat";
+  if(r.status==="RETURNED_STAFF") return "Staff Pembuat";
+
+  return "-";
+};
+
 const LETTER_TYPE_OPTIONS=[
   ["PERJANJIAN_KERJA_SAMA","Perjanjian Kerja Sama"],
   ["PURCHASE_ORDER","Purchase Order (PO)"],
@@ -41,7 +59,7 @@ const LETTER_TYPE_OPTIONS=[
   ["SURAT_OPERASIONAL","Bagian Operasional"],
   ["SURAT_UMUM","Surat Keluar Umum"]
 ] as const;
-const humanAction=(a:string)=>({SUBMIT:"Diajukan",APPROVE:"Disetujui & Diteruskan",APPROVE_FINAL:"Disetujui / Selesai",RETURN:"Dikembalikan",ISSUE:"Diterbitkan",CANCEL:"Dibatalkan",COMPLETE:"Diselesaikan",CREATE_OUTGOING:"Draft Dibuat",CREATE_INTERNAL:"Nota Dinas Dibuat",REGISTER_INCOMING:"Surat Diregistrasi",IMPORT_LEGACY_EXCEL:"Diimpor dari Excel Lama"}[a]||a.replaceAll("_"," "));
+const humanAction=(a:string)=>({SUBMIT:"Diajukan",APPROVE:"Disetujui & Diteruskan",APPROVE_FINAL:"Disetujui / Selesai",RETURN:"Dikembalikan",ISSUE:"Diterbitkan",CANCEL:"Dibatalkan",COMPLETE:"Diselesaikan",RESPONSE:"Tanggapan",CREATE_OUTGOING:"Draft Dibuat",CREATE_INTERNAL:"Nota Dinas Dibuat",REGISTER_INCOMING:"Surat Diregistrasi",IMPORT_LEGACY_EXCEL:"Diimpor dari Excel Lama"}[a]||a.replace(/_/g," "));
 
 function titleFor(direction:Direction){
   if(direction==="INCOMING") return "Surat Masuk";
@@ -52,6 +70,7 @@ function titleFor(direction:Direction){
 export default function LettersClient({direction,user}:Props){
   const [rows,setRows]=useState<any[]>([]);
   const [formats,setFormats]=useState<any[]>([]);
+  const [reviewers,setReviewers]=useState<any[]>([]);
   const [q,setQ]=useState("");
   const [status,setStatus]=useState("");
   const [docType,setDocType]=useState("");
@@ -85,17 +104,31 @@ export default function LettersClient({direction,user}:Props){
     if(direction!=="OUTGOING")return;
     const r=await fetch("/api/admin/number-formats");const j=await r.json();if(j.ok)setFormats(j.data.filter((x:any)=>x.is_active));
   }
-  useEffect(()=>{load();loadFormats()},[direction]);
 
-  const canCreate=direction==="INCOMING"
-    ?["ROOT_ADMIN","STAFF"].includes(user.role)
-    :direction==="INTERNAL"
-      ?["ROOT_ADMIN","STAFF"].includes(user.role)
-      :["ROOT_ADMIN","STAFF"].includes(user.role);
+  async function loadReviewers(){
+    const r=await fetch("/api/users/lookup");
+    const j=await r.json();
+
+    if(j.ok){
+      setReviewers(
+        j.data.filter((x:any)=>x.role==="MANAGER")
+      );
+    }
+  }
+
+  useEffect(()=>{load();loadFormats();loadReviewers()},[direction]);
+
+  const canCreate=["ROOT_ADMIN","STAFF"].includes(user.role);
+
+  function formObject(fd:FormData){
+    const out:any={};
+    fd.forEach((value,key)=>{ out[key]=value; });
+    return out;
+  }
 
   async function create(e:FormEvent<HTMLFormElement>){
     e.preventDefault();setError("");setMessage("");
-    const fd=new FormData(e.currentTarget);const obj=Object.fromEntries(fd.entries()) as any;
+    const fd=new FormData(e.currentTarget);const obj=formObject(fd);
     obj.direction=direction;obj.is_public=obj.is_public==="on";
     const file=fd.get("original_file") as File|null;
     const additionalFiles=fd.getAll("additional_files").filter((x):x is File=>x instanceof File&&x.size>0).slice(0,5);
@@ -113,7 +146,7 @@ export default function LettersClient({direction,user}:Props){
       if(!ur.ok){setError(`Dokumen dibuat, tetapi salah satu lampiran tambahan gagal: ${uj.error}`);break;}
     }
     setCreateOpen(false);
-    setMessage(direction==="INCOMING"?"Surat masuk berhasil diregistrasi.":direction==="INTERNAL"?"Pengajuan internal tersimpan sebagai draft. Buka detail untuk mengajukan ke Manager.":"Draft surat keluar dan nomor berhasil dibuat. Staff dapat mengajukan ke Manager setelah draft siap.");
+    setMessage(direction==="INCOMING"?"Surat masuk berhasil diregistrasi dan dikirim ke Manager yang dipilih.":direction==="INTERNAL"?"Nota Dinas tersimpan sebagai draft. Buka detail untuk mengajukan ke Manager.":"Draft surat keluar dan nomor berhasil dibuat. Buka detail untuk mengajukan ke Manager reviewer.");
     await load();
   }
 
@@ -172,7 +205,7 @@ export default function LettersClient({direction,user}:Props){
     e.preventDefault();
     if(!detail)return;
     const fd=new FormData(e.currentTarget);
-    const body=Object.fromEntries(fd.entries()) as any;
+    const body=formObject(fd);
     body.is_public=body.is_public==="on";
     const r=await fetch(`/api/letters/${detail.letter.id}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
     const j=await r.json();
@@ -187,16 +220,42 @@ export default function LettersClient({direction,user}:Props){
       || (user.role==="STAFF" && detail.letter.status==="RETURNED_STAFF");
   }
 
+  function canDispositionFromDetail(){
+    if(!detail)return false;
+
+    const allowedRole=[
+      "ROOT_ADMIN",
+      "MANAGER",
+      "DIRECTOR_OPS",
+      "PRESIDENT_DIRECTOR"
+    ].includes(user.role);
+
+    if(!allowedRole)return false;
+
+    if(detail.letter.direction==="OUTGOING"){
+      return detail.letter.status==="ISSUED";
+    }
+
+    return ["APPROVED","DISPOSED","IN_PROGRESS","COMPLETED"].includes(detail.letter.status);
+  }
+
   function actionButtons(){
     if(!detail)return null;
     const s=detail.letter.status;const d=detail.letter.direction as Direction;
     const buttons:Array<[string,string,string,boolean?,boolean?]>=[];
 
     if(["DRAFT","RETURNED_STAFF"].includes(s) && (user.role==="ROOT_ADMIN"||detail.letter.created_by===user.id)) {
-      buttons.push(["SUBMIT",d==="INTERNAL"?"Ajukan ke Manager":"Ajukan ke Manager","btn-primary",false,false]);
+      buttons.push(["SUBMIT","Ajukan ke Manager","btn-primary",false,false]);
     }
     const expected=s==="MANAGER_REVIEW"?"MANAGER":s==="DIRECTOR_OPS_REVIEW"?"DIRECTOR_OPS":s==="PRESIDENT_DIRECTOR_REVIEW"?"PRESIDENT_DIRECTOR":null;
-    if(expected&&(user.role==="ROOT_ADMIN"||user.role===expected)){
+    const isAssignedReviewer=
+      user.role==="ROOT_ADMIN" ||
+      (
+        user.role===expected &&
+        (!detail.letter.current_owner_user_id || detail.letter.current_owner_user_id===user.id)
+      );
+
+    if(expected&&isAssignedReviewer){
       if(d==="INTERNAL" && s==="MANAGER_REVIEW"){
         buttons.push(["APPROVE_FINAL","Setujui / Selesai di Manager","btn-success"],["APPROVE","Teruskan ke Dir. Operasional","btn-primary"],["RETURN","Kembalikan ke Staff","btn-secondary",true]);
       }else if(d==="INTERNAL" && s==="DIRECTOR_OPS_REVIEW"){
@@ -207,6 +266,16 @@ export default function LettersClient({direction,user}:Props){
         buttons.push(["APPROVE",s==="PRESIDENT_DIRECTOR_REVIEW"?"Approve Final":"Approve & Teruskan","btn-success"],["RETURN","Kembalikan","btn-secondary",true]);
       }
     }
+    const participated=
+      user.role==="ROOT_ADMIN" ||
+      detail.letter.created_by===user.id ||
+      detail.letter.current_owner_user_id===user.id ||
+      Boolean(detail.actions?.some((a:any)=>a.actor_user_id===user.id));
+
+    if(d==="INTERNAL" && participated && s!=="CANCELLED"){
+      buttons.push(["RESPONSE","Beri Tanggapan","btn-secondary",true,false]);
+    }
+
     if(d==="OUTGOING" && s==="READY_TO_ISSUE" && (user.role==="ROOT_ADMIN"||detail.letter.created_by===user.id)) {
       buttons.push(["ISSUE","Terbitkan Surat","btn-success",false,true]);
     }
@@ -233,9 +302,9 @@ export default function LettersClient({direction,user}:Props){
     <div className="page-head"><div><h2>{titleFor(direction)}</h2><p>{pageDescription}</p></div><div style={{display:"flex",gap:8,flexWrap:"wrap",justifyContent:"flex-end"}}>{direction==="OUTGOING"&&<a className="btn btn-secondary" href="/api/letters/outgoing-excel">↓ Export Excel</a>}{direction==="OUTGOING"&&user.role==="ROOT_ADMIN"&&<button className="btn btn-secondary" onClick={()=>{setImportOpen(true);setImportResult(null);setImportFile(null)}}>↑ Import Excel Lama</button>}{canCreate&&<button className="btn btn-primary" onClick={()=>setCreateOpen(true)}>+ {direction==="INCOMING"?"Registrasi Surat":direction==="INTERNAL"?"Buat Nota Dinas":"Buat Draft Surat"}</button>}</div></div>
 
     {direction==="OUTGOING"&&<div className="notice" style={{marginBottom:13}}>
-      <b>Alur ringkas:</b> Staff buat draft → Manager → Dirops → Dirut → Staff terbitkan. Jika dikembalikan, Staff revisi lalu ajukan lagi. <b>Database SIAP menjadi daftar utama</b>; tombol Export Excel membuat workbook dengan 5 sheet dan susunan yang mengikuti Form Persuratan ARU lama. Root dapat mengimpor workbook lama tanpa menghapus histori nomor.
+      <b>Alur ringkas:</b> Staff pilih Manager reviewer → Manager → Dirops → Dirut → Staff terbitkan. Jika dikembalikan, Staff revisi lalu ajukan lagi. <b>Database SIAP menjadi daftar utama</b>; tombol Export Excel membuat workbook dengan 5 sheet dan susunan yang mengikuti Form Persuratan ARU lama. Root dapat mengimpor workbook lama tanpa menghapus histori nomor.
     </div>}
-    {direction==="INTERNAL"&&<div className="notice" style={{marginBottom:13}}><b>Nota Dinas digunakan untuk komunikasi resmi internal dari Staff ke Manager/atasan.</b><br/>Isi perihal dan ringkasan secara singkat, lalu lampirkan dokumen utama atau data pendukung bila diperlukan. Manager dapat menyetujui, meneruskan ke Dirops/Dirut, atau mengembalikan untuk revisi. Setiap tahap dapat membawa catatan dan lampiran tambahan. <b>Semua dokumen yang tersimpan dapat diunduh kembali dari Detail Nota Dinas.</b> Disposisi tetap digunakan untuk instruksi/tindak lanjut pimpinan kepada PIC, bukan sebagai pengganti Nota Dinas.</div>}
+    {direction==="INTERNAL"&&<div className="notice" style={{marginBottom:13}}><b>Nota Dinas dimulai dari Staff ke Manager yang dipilih.</b><br/>Isi perihal dan ringkasan secara singkat, lalu lampirkan dokumen utama atau data pendukung bila diperlukan. Manager dapat memberi tanggapan, menyelesaikan di levelnya, meneruskan ke Dirops, atau mengembalikan untuk revisi. Setiap tahap dapat membawa catatan dan lampiran tambahan. <b>Semua dokumen yang tersimpan dapat diunduh kembali dari Detail Nota Dinas.</b> Disposisi tetap digunakan untuk instruksi/tindak lanjut pimpinan kepada PIC, bukan sebagai pengganti Nota Dinas.</div>}
 
     {message&&<div className="success" style={{marginBottom:12}}>{message}</div>}{error&&<div className="error" style={{marginBottom:12}}>{error}</div>}
     <div className="toolbar letter-filter-bar">
@@ -243,13 +312,13 @@ export default function LettersClient({direction,user}:Props){
       {direction==="OUTGOING"&&<select className="select filter-select" value={docType} onChange={e=>setDocType(e.target.value)}><option value="">Semua jenis surat</option>{LETTER_TYPE_OPTIONS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>}
       <select className="select filter-select" value={status} onChange={e=>setStatus(e.target.value)}><option value="">Semua status</option><option>DRAFT</option><option>MANAGER_REVIEW</option><option>DIRECTOR_OPS_REVIEW</option><option>PRESIDENT_DIRECTOR_REVIEW</option><option>READY_TO_ISSUE</option><option>APPROVED</option><option>ISSUED</option><option>DISPOSED</option><option>IN_PROGRESS</option><option>COMPLETED</option><option>RETURNED_STAFF</option><option>CANCELLED</option></select>
       <select className="select filter-select filter-year" value={year} onChange={e=>setYear(e.target.value)}><option value="">Semua tahun</option>{yearOptions.map(y=><option key={y} value={y}>{y}</option>)}</select>
-      <button className="btn btn-primary" onClick={load}>Terapkan</button>
+      <button className="btn btn-primary" onClick={() => load()}>Terapkan</button>
       {(q||status||docType||year)&&<button className="btn btn-secondary" onClick={resetFilters}>Reset</button>}
     </div>
-    <div className="card"><div className="table-wrap"><table className="table"><thead><tr>{direction!=="INTERNAL"&&<th>{direction==="INCOMING"?"Nomor Surat":"No."}</th>}<th>Jenis Dokumen</th><th>Perihal</th><th>{direction==="INCOMING"?"Pengirim":"Tujuan"}</th><th>Tanggal</th><th>Status</th><th>Sifat</th><th>Lampiran</th><th></th></tr></thead><tbody>
-      {!loading&&rows.map(r=><tr key={r.id} className={`letter-row ${docTypeClass(r.document_type)}`}>{direction!=="INTERNAL"&&<td className="mono"><b>{direction==="OUTGOING"?(r.display_number||"-"):(r.external_number||"-")}</b></td>}<td><span className={`badge letter-type-badge ${docTypeClass(r.document_type)}`}>{docLabel(r)}</span></td><td><b>{r.subject}</b>{r.legacy_import_key&&<span className="muted" style={{display:"block",fontSize:9.5,marginTop:3}}>Data Excel lama{r.legacy_number_conflict?" • cek nomor historis":""}</span>}</td><td>{direction==="INCOMING"?r.sender:r.recipient}</td><td>{fmtDate(r.letter_date)}</td><td><StatusBadge status={r.status}/></td><td><span className={`badge ${r.confidentiality==="RAHASIA"?"red":r.confidentiality==="PENTING"?"orange":"gray"}`}>{r.confidentiality}</span></td><td>{r.attachment_count}</td><td><button className="btn btn-secondary" onClick={()=>openDetail(r.id)}>Detail</button></td></tr>)}
-      {!loading&&rows.length===0&&<tr><td colSpan={direction==="INTERNAL"?8:9}><div className="empty">Belum ada data.</div></td></tr>}
-      {loading&&<tr><td colSpan={direction==="INTERNAL"?8:9}><div className="empty">Memuat...</div></td></tr>}
+    <div className="card"><div className="table-wrap"><table className="table"><thead><tr>{direction!=="INTERNAL"&&<th>{direction==="INCOMING"?"Nomor Surat":"No."}</th>}<th>Jenis Dokumen</th><th>Perihal</th><th>{direction==="INCOMING"?"Pengirim":"Tujuan"}</th><th>Tanggal</th><th>Status</th><th>Tujuan Saat Ini</th><th>Sifat</th><th>Lampiran</th><th></th></tr></thead><tbody>
+      {!loading&&rows.map(r=><tr key={r.id} className={`letter-row ${docTypeClass(r.document_type)}`}>{direction!=="INTERNAL"&&<td className="mono"><b>{direction==="OUTGOING"?(r.display_number||"-"):(r.external_number||"-")}</b></td>}<td><span className={`badge letter-type-badge ${docTypeClass(r.document_type)}`}>{docLabel(r)}</span></td><td><b>{r.subject}</b>{r.legacy_import_key&&<span className="muted" style={{display:"block",fontSize:9.5,marginTop:3}}>Data Excel lama{r.legacy_number_conflict?" • cek nomor historis":""}</span>}</td><td>{direction==="INCOMING"?r.sender:r.recipient}</td><td>{fmtDate(r.letter_date)}</td><td><StatusBadge status={r.status}/></td><td><b style={{fontSize:11}}>{currentTargetLabel(r)}</b></td><td><span className={`badge ${r.confidentiality==="RAHASIA"?"red":r.confidentiality==="PENTING"?"orange":"gray"}`}>{r.confidentiality}</span></td><td>{r.attachment_count}</td><td><button className="btn btn-secondary" onClick={()=>openDetail(r.id)}>Detail</button></td></tr>)}
+      {!loading&&rows.length===0&&<tr><td colSpan={direction==="INTERNAL"?9:10}><div className="empty">Belum ada data.</div></td></tr>}
+      {loading&&<tr><td colSpan={direction==="INTERNAL"?9:10}><div className="empty">Memuat...</div></td></tr>}
     </tbody></table></div></div>
 
     {importOpen&&direction==="OUTGOING"&&user.role==="ROOT_ADMIN"&&<Modal title="Import Form Persuratan ARU" subtitle="Pindahkan daftar Excel lama ke database SIAP tanpa mengubah nomor historisnya." onClose={()=>!importBusy&&setImportOpen(false)}>
@@ -267,9 +336,54 @@ export default function LettersClient({direction,user}:Props){
         <div className="field"><label>Jenis Dokumen</label>{direction==="OUTGOING"?<select className="select" name="document_type" required value={outType} onChange={e=>setOutType(e.target.value)}><option value="PERJANJIAN_KERJA_SAMA">Perjanjian Kerja Sama</option><option value="SURAT_DIREKSI">Surat Keluar Direksi</option><option value="SURAT_OPERASIONAL">Surat Bagian Operasional</option><option value="PURCHASE_ORDER">Purchase Order (PO)</option><option value="SURAT_UMUM">Surat Keluar Umum</option></select>:direction==="INTERNAL"?<><input type="hidden" name="document_type" value="NOTA_DINAS"/><div className="input" style={{display:"flex",alignItems:"center",background:"var(--surface-2)"}}>Nota Dinas</div></>:<input className="input" name="document_type" defaultValue="SURAT_MASUK_UMUM" required/>}</div>
         {direction==="OUTGOING"&&<div className="field"><label>Format Nomor</label><select className="select" name="number_format_id" required><option value="">Pilih format...</option>{formats.filter((f:any)=>f.document_type===outType).map((f:any)=><option value={f.id} key={f.id}>{f.name}</option>)}</select></div>}
         {direction==="OUTGOING"&&<div className="field"><label>Nomor Dasar Custom <span className="muted">(opsional)</span></label><input className="input" type="number" min="1" step="1" name="custom_number_base" placeholder="Otomatis"/><span className="hint">Contoh 135. Jika 135 sudah terpakai pada jenis/tahun yang sama, sistem memakai 135.1, 135.2, dst.</span></div>}
-        {direction==="INCOMING"&&<><div className="field"><label>Nomor Surat Asal</label><input className="input" name="external_number" required/></div><div className="field"><label>Asal / Pengirim</label><input className="input" name="sender" required/></div></>}
-        {direction==="OUTGOING"&&<div className="field"><label>Tujuan</label><input className="input" name="recipient" required/></div>}
-        {direction==="INTERNAL"&&<div className="field"><label>Tujuan Manager / Unit</label><input className="input" name="recipient" placeholder="Contoh: Manager Keu, SDM & Umum" required/><span className="hint">Nota Dinas pertama masuk tahap review Manager.</span></div>}
+        {direction==="INCOMING"&&<>
+          <div className="field"><label>Nomor Surat Asal</label><input className="input" name="external_number" required/></div>
+          <div className="field"><label>Asal / Pengirim</label><input className="input" name="sender" required/></div>
+          <div className="field full">
+            <label>Tujuan Review Awal</label>
+            <select className="select" name="routing_target_user_id" required>
+              <option value="">Pilih penerima pertama...</option>
+              {reviewers.map((r:any)=>
+                <option key={r.id} value={r.id}>
+                  {r.name}{r.unit_name?` — ${r.unit_name}`:""}
+                </option>
+              )}
+            </select>
+            <span className="hint">
+              Pilih Manager yang menangani surat ini. Setelah Manager approve, alur naik ke Dirops lalu Dirut.
+            </span>
+          </div>
+        </>}
+        {direction==="OUTGOING"&&<>
+          <div className="field"><label>Tujuan Surat</label><input className="input" name="recipient" required/></div>
+          <div className="field">
+            <label>Manager Reviewer</label>
+            <select className="select" name="routing_target_user_id" required>
+              <option value="">Pilih Manager...</option>
+              {reviewers.map((r:any)=>
+                <option key={r.id} value={r.id}>
+                  {r.name}{r.unit_name?` — ${r.unit_name}`:""}
+                </option>
+              )}
+            </select>
+            <span className="hint">Draft diajukan ke Manager ini, lalu Dirops → Dirut.</span>
+          </div>
+        </>}
+        {direction==="INTERNAL"&&
+          <div className="field">
+            <label>Tujuan Review Awal</label>
+            <select className="select" name="routing_target_user_id" required>
+              <option value="">Pilih penerima...</option>
+              {reviewers.map((r:any)=>
+                <option key={r.id} value={r.id}>
+                  {r.name}{r.unit_name?` — ${r.unit_name}`:""}
+                </option>
+              )}
+            </select>
+            <span className="hint">
+              Nota Dinas selalu masuk ke Manager yang dipilih. Manager dapat menyelesaikan di levelnya atau meneruskan ke Dirops.
+            </span>
+          </div>}
         <div className="field"><label>{direction==="INTERNAL"?"Tanggal Nota Dinas":"Tanggal Surat"}</label><input className="input" type="date" name="letter_date" defaultValue={today()} required/>{direction==="OUTGOING"&&<span className="hint">Backdate diperbolehkan. Nomor existing tidak digeser; collision menghasilkan .1, .2, dst.</span>}</div>
         {direction==="INCOMING"&&<div className="field"><label>Tanggal Diterima</label><input className="input" type="date" name="received_date" defaultValue={today()} required/></div>}
         <div className="field full"><label>Perihal</label><input className="input" name="subject" required/></div>
@@ -279,7 +393,7 @@ export default function LettersClient({direction,user}:Props){
         <div className="field full"><label>Catatan</label><textarea className="textarea" name="notes" placeholder={direction==="INTERNAL"?"Keterangan tambahan untuk Manager":"Catatan awal proses"}/></div>
         <div className="field full"><label>{direction==="OUTGOING"?"File Draft / Dokumen Utama (opsional)":direction==="INTERNAL"?"Dokumen Utama / Pengantar (opsional)":"Surat Asli (opsional)"}</label><input className="input" type="file" name="original_file" accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg"/><span className="hint">Maksimal 10 MB. Dokumen original disimpan tanpa kompresi. Lampiran proses/tambahan dikompresi bila efektif.</span></div>
         <div className="field full"><label>Lampiran Tambahan <span className="muted">(opsional, maksimal 5 file)</span></label><input className="input" type="file" name="additional_files" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.txt,.csv"/><span className="hint">Lampiran tambahan maksimal 10 MB per file dan dikompresi otomatis bila hasilnya lebih kecil. Cocok untuk data pendukung, hasil telaah, atau bukti proses.</span></div>
-        <div className="field full" style={{display:"flex",justifyContent:"flex-end",gap:8,flexDirection:"row"}}><button type="button" className="btn btn-secondary" onClick={()=>setCreateOpen(false)}>Batal</button><button className="btn btn-primary">Simpan Draft</button></div>
+        <div className="field full" style={{display:"flex",justifyContent:"flex-end",gap:8,flexDirection:"row"}}><button type="button" className="btn btn-secondary" onClick={()=>setCreateOpen(false)}>Batal</button><button className="btn btn-primary">{direction==="INCOMING"?"Registrasi & Kirim ke Manager":"Simpan Draft"}</button></div>
       </form>
     </Modal>}
 
@@ -288,6 +402,8 @@ export default function LettersClient({direction,user}:Props){
         <div>
           <div className="kpi-list">
             <div className="kpi-row"><span>Status</span><StatusBadge status={detail.letter.status}/></div>
+            <div className="kpi-row"><span>Tujuan Saat Ini</span><b>{detail.letter.owner_name?`${detail.letter.owner_name}${detail.letter.owner_unit?` — ${detail.letter.owner_unit}`:""}`:currentTargetLabel(detail.letter)}</b></div>
+            {detail.letter.routing_target_name&&<div className="kpi-row"><span>Tujuan Awal</span><b>{detail.letter.routing_target_name}{detail.letter.routing_target_unit?` — ${detail.letter.routing_target_unit}`:""}</b></div>}
             <div className="kpi-row"><span>Jenis Dokumen</span><b>{docLabel(detail.letter)}</b></div>
             {direction==="OUTGOING"&&<div className="kpi-row"><span>Nomor Urut</span><b className="mono">{detail.letter.display_number||"-"}</b></div>}
             {direction==="INTERNAL"&&<div className="kpi-row"><span>Tujuan</span><b>{detail.letter.recipient||"-"}</b></div>}
@@ -305,6 +421,7 @@ export default function LettersClient({direction,user}:Props){
           <div style={{marginTop:13}} className="notice">{detail.letter.summary||"Belum ada ringkasan."}</div>
           <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:13}}>
             {canEditDetail()&&<button className="btn btn-secondary" onClick={()=>setEditOpen(true)}>Edit Metadata</button>}
+            {canDispositionFromDetail()&&<a className="btn btn-primary" href={`/dispositions?letter_id=${detail.letter.id}`}>+ Buat Disposisi</a>}
             {actionButtons()}
           </div>
 

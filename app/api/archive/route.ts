@@ -11,7 +11,7 @@ export async function GET(request:Request){
   let access="";
   if(user.role!=="ROOT_ADMIN"){
     access=`AND (
-      l.is_public=1 OR l.created_by=? OR l.current_owner_user_id=? OR l.current_role=?
+      l.is_public=1 OR l.created_by=? OR l.current_owner_user_id=? OR l.\`current_role\`=?
       OR EXISTS(SELECT 1 FROM siap_dispositions d WHERE d.letter_id=l.id AND (d.to_user_id=? OR d.from_user_id=?))
     )`;
     params.push(user.id,user.id,user.role,user.id,user.id);

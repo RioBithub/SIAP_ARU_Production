@@ -136,7 +136,7 @@ export async function GET(request:Request){
   const where=["l.direction='OUTGOING'",`l.document_type IN (${SHEETS.map(()=>"?").join(",")})`];
   const params:any[]=[...SHEETS.map(x=>x.documentType)];
   if(user.role!=="ROOT_ADMIN"){
-    where.push(`(l.is_public=1 OR l.created_by=? OR l.current_owner_user_id=? OR (l.current_owner_user_id IS NULL AND l.current_role=?) OR EXISTS(SELECT 1 FROM siap_letter_actions a WHERE a.letter_id=l.id AND a.actor_user_id=?))`);
+    where.push(`(l.is_public=1 OR l.created_by=? OR l.current_owner_user_id=? OR (l.current_owner_user_id IS NULL AND l.\`current_role\`=?) OR EXISTS(SELECT 1 FROM siap_letter_actions a WHERE a.letter_id=l.id AND a.actor_user_id=?))`);
     params.push(user.id,user.id,user.role,user.id);
   }
   const [rows]=await db.query<RowDataPacket[]>(
@@ -243,14 +243,14 @@ export async function POST(request:Request){
         if(existing[0]){
           letterId=String(existing[0].id);
           await conn.execute(
-            `UPDATE siap_letters SET document_type=?,number_format_id=?,letter_number=?,recipient=?,subject=?,letter_date=?,issued_date=?,status=?,current_role=NULL,is_public=1,is_backdated=?,legacy_number_text=?,legacy_user_input=?,legacy_file_url=?,legacy_sheet_name=?,legacy_row_no=?,updated_by=? WHERE id=?`,
+            `UPDATE siap_letters SET document_type=?,number_format_id=?,letter_number=?,recipient=?,subject=?,letter_date=?,issued_date=?,status=?,\`current_role\`=NULL,is_public=1,is_backdated=?,legacy_number_text=?,legacy_user_input=?,legacy_file_url=?,legacy_sheet_name=?,legacy_row_no=?,updated_by=? WHERE id=?`,
             [src.cfg.documentType,fmt.id,rendered,src.recipient||null,src.subject,src.date,src.date,src.status,src.date<new Date().toISOString().slice(0,10)?1:0,src.rawNumber,src.userInput||null,src.fileText||null,src.sheet,src.rowNo,user.id,letterId]
           );
           updated++;
         }else{
           letterId=crypto.randomUUID();
           await conn.execute(
-            `INSERT INTO siap_letters (id,direction,document_type,number_format_id,letter_number,subject,recipient,letter_date,issued_date,confidentiality,summary,notes,status,current_role,is_public,is_backdated,cancelled_reason,legacy_import_key,legacy_number_text,legacy_user_input,legacy_file_url,legacy_sheet_name,legacy_row_no,legacy_number_conflict,created_by,updated_by)
+            `INSERT INTO siap_letters (id,direction,document_type,number_format_id,letter_number,subject,recipient,letter_date,issued_date,confidentiality,summary,notes,status,\`current_role\`,is_public,is_backdated,cancelled_reason,legacy_import_key,legacy_number_text,legacy_user_input,legacy_file_url,legacy_sheet_name,legacy_row_no,legacy_number_conflict,created_by,updated_by)
              VALUES (?,?,?,?,?,?,?,?,?,'BIASA',NULL,? ,?,NULL,1,?,?,?,?,?,?,?,?,0,?,?)`,
             [letterId,"OUTGOING",src.cfg.documentType,fmt.id,rendered,src.subject,src.recipient||null,src.date,src.date,`Import historis dari ${src.sheet} baris ${src.rowNo}.`,src.status,src.date<new Date().toISOString().slice(0,10)?1:0,src.status==="CANCELLED"?"BATAL pada workbook sumber":null,key,src.rawNumber,src.userInput||null,src.fileText||null,src.sheet,src.rowNo,user.id,user.id]
           );

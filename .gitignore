@@ -5,3 +5,8 @@ node_modules
 storage/*
 !storage/.gitkeep
 npm-debug.log*
+
+# Local/server code backups
+*.bak
+*.before-*
+tsconfig.tsbuildinfo
