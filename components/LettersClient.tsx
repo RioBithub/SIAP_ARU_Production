@@ -18,6 +18,7 @@ const DOC_LABELS:Record<string,string>={
   SURAT_OPERASIONAL:"Bagian Operasional",
   PURCHASE_ORDER:"Purchase Order (PO)",
   SURAT_UMUM:"Surat Keluar Umum",
+  SURAT_PERINTAH_KERJA:"Surat Perintah Kerja (SPK)",
   SURAT_MASUK_UMUM:"Surat Masuk Umum",
   NOTA_DINAS:"Nota Dinas",
   LEMBAR_PENGANTAR:"Lembar Pengantar"
@@ -29,6 +30,7 @@ const DOC_TYPE_CLASS:Record<string,string>={
   SURAT_DIREKSI:"letter-direksi",
   SURAT_OPERASIONAL:"letter-operasional",
   SURAT_UMUM:"letter-umum",
+  SURAT_PERINTAH_KERJA:"letter-umum",
   SURAT_MASUK_UMUM:"letter-masuk",
   NOTA_DINAS:"letter-nota",
   LEMBAR_PENGANTAR:"letter-nota"
@@ -52,12 +54,13 @@ const currentTargetLabel=(r:any)=>{
   return "-";
 };
 
-const LETTER_TYPE_OPTIONS=[
+const FALLBACK_LETTER_TYPE_OPTIONS=[
   ["PERJANJIAN_KERJA_SAMA","Perjanjian Kerja Sama"],
   ["PURCHASE_ORDER","Purchase Order (PO)"],
   ["SURAT_DIREKSI","Surat Keluar Direksi"],
   ["SURAT_OPERASIONAL","Bagian Operasional"],
-  ["SURAT_UMUM","Surat Keluar Umum"]
+  ["SURAT_UMUM","Surat Keluar Umum"],
+  ["SURAT_PERINTAH_KERJA","Surat Perintah Kerja (SPK)"]
 ] as const;
 const humanAction=(a:string)=>({SUBMIT:"Diajukan",APPROVE:"Disetujui & Diteruskan",APPROVE_FINAL:"Disetujui / Selesai",RETURN:"Dikembalikan",ISSUE:"Diterbitkan",CANCEL:"Dibatalkan",COMPLETE:"Diselesaikan",RESPONSE:"Tanggapan",CREATE_OUTGOING:"Draft Dibuat",CREATE_INTERNAL:"Nota Dinas Dibuat",REGISTER_INCOMING:"Surat Diregistrasi",IMPORT_LEGACY_EXCEL:"Diimpor dari Excel Lama"}[a]||a.replace(/_/g," "));
 
@@ -70,6 +73,7 @@ function titleFor(direction:Direction){
 export default function LettersClient({direction,user}:Props){
   const [rows,setRows]=useState<any[]>([]);
   const [formats,setFormats]=useState<any[]>([]);
+  const [documentTypes,setDocumentTypes]=useState<any[]>([]);
   const [reviewers,setReviewers]=useState<any[]>([]);
   const [q,setQ]=useState("");
   const [status,setStatus]=useState("");
@@ -102,7 +106,16 @@ export default function LettersClient({direction,user}:Props){
   }
   async function loadFormats(){
     if(direction!=="OUTGOING")return;
-    const r=await fetch("/api/admin/number-formats");const j=await r.json();if(j.ok)setFormats(j.data.filter((x:any)=>x.is_active));
+    const [formatR,typeR]=await Promise.all([
+      fetch("/api/admin/number-formats"),
+      fetch("/api/admin/document-types?direction=OUTGOING&active=1")
+    ]);
+    const [formatJ,typeJ]=await Promise.all([formatR.json(),typeR.json()]);
+    if(formatR.ok&&formatJ.ok)setFormats(formatJ.data.filter((x:any)=>x.is_active));
+    if(typeR.ok&&typeJ.ok){
+      setDocumentTypes(typeJ.data);
+      if(typeJ.data.length && !typeJ.data.some((x:any)=>x.code===outType)) setOutType(typeJ.data[0].code);
+    }
   }
 
   async function loadReviewers(){
@@ -119,6 +132,9 @@ export default function LettersClient({direction,user}:Props){
   useEffect(()=>{load();loadFormats();loadReviewers()},[direction]);
 
   const canCreate=["ROOT_ADMIN","STAFF"].includes(user.role);
+  const outgoingTypeOptions=(documentTypes.length
+    ? documentTypes.map((x:any)=>[x.code,x.name] as [string,string])
+    : [...FALLBACK_LETTER_TYPE_OPTIONS]);
 
   function formObject(fd:FormData){
     const out:any={};
@@ -309,7 +325,7 @@ export default function LettersClient({direction,user}:Props){
     {message&&<div className="success" style={{marginBottom:12}}>{message}</div>}{error&&<div className="error" style={{marginBottom:12}}>{error}</div>}
     <div className="toolbar letter-filter-bar">
       <div className="search"><span>⌕</span><input value={q} onChange={e=>setQ(e.target.value)} placeholder={direction==="INTERNAL"?"Cari perihal, tujuan, pembuat...":"Cari nomor, perihal, pengirim/tujuan..."} onKeyDown={e=>e.key==="Enter"&&load()}/></div>
-      {direction==="OUTGOING"&&<select className="select filter-select" value={docType} onChange={e=>setDocType(e.target.value)}><option value="">Semua jenis surat</option>{LETTER_TYPE_OPTIONS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>}
+      {direction==="OUTGOING"&&<select className="select filter-select" value={docType} onChange={e=>setDocType(e.target.value)}><option value="">Semua jenis surat</option>{outgoingTypeOptions.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>}
       <select className="select filter-select" value={status} onChange={e=>setStatus(e.target.value)}><option value="">Semua status</option><option>DRAFT</option><option>MANAGER_REVIEW</option><option>DIRECTOR_OPS_REVIEW</option><option>PRESIDENT_DIRECTOR_REVIEW</option><option>READY_TO_ISSUE</option><option>APPROVED</option><option>ISSUED</option><option>DISPOSED</option><option>IN_PROGRESS</option><option>COMPLETED</option><option>RETURNED_STAFF</option><option>CANCELLED</option></select>
       <select className="select filter-select filter-year" value={year} onChange={e=>setYear(e.target.value)}><option value="">Semua tahun</option>{yearOptions.map(y=><option key={y} value={y}>{y}</option>)}</select>
       <button className="btn btn-primary" onClick={() => load()}>Terapkan</button>
@@ -333,7 +349,7 @@ export default function LettersClient({direction,user}:Props){
 
     {createOpen&&<Modal title={direction==="INCOMING"?"Registrasi Surat Masuk":direction==="INTERNAL"?"Buat Nota Dinas":"Buat Draft Surat Keluar"} subtitle={direction==="INTERNAL"?"Nota Dinas digunakan Staff untuk menyampaikan laporan/permohonan ke Manager/atasan.":direction==="OUTGOING"?"Draft disusun Staff. Nomor direservasi per jenis surat dan seluruh proses tercatat di audit log.":"Semua perubahan tercatat di audit log."} onClose={()=>setCreateOpen(false)}>
       <form onSubmit={create} className="form-grid">
-        <div className="field"><label>Jenis Dokumen</label>{direction==="OUTGOING"?<select className="select" name="document_type" required value={outType} onChange={e=>setOutType(e.target.value)}><option value="PERJANJIAN_KERJA_SAMA">Perjanjian Kerja Sama</option><option value="SURAT_DIREKSI">Surat Keluar Direksi</option><option value="SURAT_OPERASIONAL">Surat Bagian Operasional</option><option value="PURCHASE_ORDER">Purchase Order (PO)</option><option value="SURAT_UMUM">Surat Keluar Umum</option></select>:direction==="INTERNAL"?<><input type="hidden" name="document_type" value="NOTA_DINAS"/><div className="input" style={{display:"flex",alignItems:"center",background:"var(--surface-2)"}}>Nota Dinas</div></>:<input className="input" name="document_type" defaultValue="SURAT_MASUK_UMUM" required/>}</div>
+        <div className="field"><label>Jenis Dokumen</label>{direction==="OUTGOING"?<select className="select" name="document_type" required value={outType} onChange={e=>setOutType(e.target.value)}>{outgoingTypeOptions.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>:direction==="INTERNAL"?<><input type="hidden" name="document_type" value="NOTA_DINAS"/><div className="input" style={{display:"flex",alignItems:"center",background:"var(--surface-2)"}}>Nota Dinas</div></>:<input className="input" name="document_type" defaultValue="SURAT_MASUK_UMUM" required/>}</div>
         {direction==="OUTGOING"&&<div className="field"><label>Format Nomor</label><select className="select" name="number_format_id" required><option value="">Pilih format...</option>{formats.filter((f:any)=>f.document_type===outType).map((f:any)=><option value={f.id} key={f.id}>{f.name}</option>)}</select></div>}
         {direction==="OUTGOING"&&<div className="field"><label>Nomor Dasar Custom <span className="muted">(opsional)</span></label><input className="input" type="number" min="1" step="1" name="custom_number_base" placeholder="Otomatis"/><span className="hint">Contoh 135. Jika 135 sudah terpakai pada jenis/tahun yang sama, sistem memakai 135.1, 135.2, dst.</span></div>}
         {direction==="INCOMING"&&<>

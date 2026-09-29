@@ -123,6 +123,13 @@ export async function POST(request: Request) {
 
     const id = crypto.randomUUID();
     const documentType = required(body.document_type,"Jenis dokumen",80);
+    if(direction==="OUTGOING"){
+      const [typeRows]=await db.query<RowDataPacket[]>(
+        "SELECT id FROM siap_document_types WHERE code=? AND direction='OUTGOING' AND is_active=1 LIMIT 1",
+        [documentType]
+      );
+      if(!typeRows[0]) throw new Error("Jenis surat keluar tidak ditemukan / tidak aktif.");
+    }
     const subject = required(body.subject,"Perihal",500);
     const letterDate = dateOnly(body.letter_date,"Tanggal dokumen");
     const manager = await getManagerTarget(body.routing_target_user_id);
