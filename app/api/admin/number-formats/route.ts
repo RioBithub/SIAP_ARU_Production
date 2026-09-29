@@ -19,6 +19,12 @@ export async function POST(request:Request){
   if(user.role!=="ROOT_ADMIN") return NextResponse.json({ok:false,error:"Forbidden"},{status:403});
   try{
     const b=await request.json(); const id=crypto.randomUUID();
+    const documentType=required(b.document_type,"Jenis dokumen",80);
+    const [typeRows]=await db.query<RowDataPacket[]>(
+      "SELECT id FROM siap_document_types WHERE code=? AND direction='OUTGOING' AND is_active=1 LIMIT 1",
+      [documentType]
+    );
+    if(!typeRows[0]) throw new Error("Jenis surat tidak ditemukan / tidak aktif.");
     const pattern=required(b.pattern,"Pattern",255);
     if(!pattern.includes("{seq}")) throw new Error("Pattern wajib memiliki placeholder {seq}.");
     const sequenceStart=Math.max(1,Number(b.sequence_start||1));
@@ -26,7 +32,7 @@ export async function POST(request:Request){
     await db.execute(
       `INSERT INTO siap_number_formats(id,code,name,document_type,pattern,description,sequence_start,is_active,created_by)
        VALUES(?,?,?,?,?,?,?,1,?)`,
-      [id,required(b.code,"Kode",40).toUpperCase(),required(b.name,"Nama",150),required(b.document_type,"Jenis dokumen",80),pattern,str(b.description,500)||null,sequenceStart,user.id]);
+      [id,required(b.code,"Kode",40).toUpperCase(),required(b.name,"Nama",150),documentType,pattern,str(b.description,500)||null,sequenceStart,user.id]);
     await auditLog({userId:user.id,action:"NUMBER_FORMAT_CREATE",entityType:"NUMBER_FORMAT",entityId:id,metadata:{pattern,sequenceStart},request});
     return NextResponse.json({ok:true,data:{id}},{status:201});
   }catch(e){return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Gagal membuat format."},{status:400});}
