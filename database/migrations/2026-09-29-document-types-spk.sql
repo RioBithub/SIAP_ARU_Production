@@ -63,7 +63,9 @@ WHERE NOT EXISTS (SELECT 1 FROM siap_document_types WHERE code='LEMBAR_PENGANTAR
 -- If SPK format was manually created as SURAT_UMUM, attach it to the proper type.
 UPDATE siap_number_formats
 SET document_type='SURAT_PERINTAH_KERJA',
-    name=CASE WHEN code='SPK' THEN 'Surat Perintah Kerja (SPK)' ELSE name END
+    name='Surat Perintah Kerja (SPK)',
+    pattern='{seq}/SPK/ARU-IT/{roman_month}/{year}',
+    description='Format nomor Surat Perintah Kerja; dapat diedit Root Admin.'
 WHERE code='SPK';
 
 -- Create the initial SPK numbering format when it does not exist.
@@ -71,7 +73,7 @@ INSERT INTO siap_number_formats
   (id,code,name,document_type,pattern,description,sequence_start,is_active,created_by)
 SELECT
   UUID(),'SPK','Surat Perintah Kerja (SPK)','SURAT_PERINTAH_KERJA',
-  'SPK/{seq}/AR/{year}',
+  '{seq}/SPK/ARU-IT/{roman_month}/{year}',
   'Format nomor Surat Perintah Kerja; dapat diedit Root Admin.',
   1,1,NULL
 WHERE NOT EXISTS (SELECT 1 FROM siap_number_formats WHERE code='SPK');
