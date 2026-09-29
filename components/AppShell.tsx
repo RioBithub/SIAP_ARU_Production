@@ -29,7 +29,7 @@ export default function AppShell({ user, children }:{user:SessionUser;children:R
     ]},
     {label:"Administrasi",items:[
       {href:"/admin/users",label:"User & Role",icon:"♟",roles:["ROOT_ADMIN"]},
-      {href:"/admin/number-formats",label:"Format Nomor Surat",icon:"#",roles:["ROOT_ADMIN"]},
+      {href:"/admin/number-formats",label:"Jenis & Format Surat",icon:"#",roles:["ROOT_ADMIN"]},
       {href:"/audit",label:"Audit Log",icon:"▤",roles:["ROOT_ADMIN"]},
     ]}
   ];
