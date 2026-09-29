@@ -119,7 +119,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ok:false,error:"Surat keluar disusun oleh Staff Administrasi. Root Admin tetap dapat membuatnya sebagai superuser."},{status:403});
 
     if (direction==="INTERNAL" && !canCreateInternal(user.role))
-      return NextResponse.json({ok:false,error:"Nota Dinas hanya dapat dibuat Staff atau Root Admin."},{status:403});
+      return NextResponse.json({ok:false,error:"Role ini tidak diizinkan membuat Nota Dinas."},{status:403});
 
     const id = crypto.randomUUID();
     const documentType = required(body.document_type,"Jenis dokumen",80);
@@ -192,7 +192,7 @@ export async function POST(request: Request) {
         [
           id,"INTERNAL",documentType,subject,sender,recipient,letterDate,confidentiality,
           str(body.summary,5000)||null,str(body.notes,5000)||null,
-          "DRAFT","STAFF",String(manager.id),isPublic,isBackdated,user.id,user.id
+          "DRAFT",user.role,String(manager.id),isPublic,isBackdated,user.id,user.id
         ]
       );
 
