@@ -17,7 +17,7 @@ const PRESETS:Record<string,{pattern:string;source:string;examplePrefix:string}>
   SURAT_OPERASIONAL:{pattern:"Oprsl/{seq}/AR/{year}",source:"Excel ARU: Oprsl/ No. Surat / AR / tahun",examplePrefix:"Oprsl"},
   PURCHASE_ORDER:{pattern:"PO/{seq}/AR/{year}",source:"Excel ARU: PO/ No. Surat / AR / tahun",examplePrefix:"PO"},
   SURAT_UMUM:{pattern:"UM/{seq}/AR/{year}",source:"Excel ARU: UM/ Nomor Surat / AR / tahun",examplePrefix:"UM"},
-  SURAT_PERINTAH_KERJA:{pattern:"SPK/{seq}/AR/{year}",source:"Format awal SPK: SPK/ Nomor Surat / AR / tahun",examplePrefix:"SPK"}
+  SURAT_PERINTAH_KERJA:{pattern:"{seq}/SPK/ARU-IT/{roman_month}/{year}",source:"SPK ARU: Nomor / SPK / ARU-IT / bulan romawi / tahun",examplePrefix:"SPK"}
 };
 const year=new Date().getFullYear();
 function renderPreview(pattern:string,seq:number){return pattern.replaceAll("{seq}",String(seq||1)).replaceAll("{year}",String(year)).replaceAll("{short_year}",String(year).slice(-2)).replaceAll("{month}","09").replaceAll("{roman_month}","IX").replaceAll("{type}","SURAT");}
