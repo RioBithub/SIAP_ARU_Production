@@ -28,12 +28,13 @@ export async function PATCH(request:Request,{params}:{params:{id:string}}){
     await db.execute(
       `UPDATE siap_document_types SET
        name=COALESCE(NULLIF(?,''),name),
-       description=?,
+       description=CASE WHEN ?=1 THEN ? ELSE description END,
        is_active=COALESCE(?,is_active)
        WHERE id=?`,
       [
         name,
-        b.description===undefined?null:(description||null),
+        b.description===undefined?0:1,
+        description||null,
         typeof b.is_active==="boolean"?(b.is_active?1:0):null,
         params.id
       ]
