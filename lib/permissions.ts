@@ -34,7 +34,7 @@ export function canCreateOutgoing(role: Role) {
 }
 
 export function canCreateInternal(role: Role) {
-  return role === "ROOT_ADMIN" || role === "STAFF";
+  return ["ROOT_ADMIN","STAFF","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR","FINANCE"].includes(role);
 }
 
 export function canCreateDisposition(role: Role) {
