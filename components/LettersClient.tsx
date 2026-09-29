@@ -131,7 +131,9 @@ export default function LettersClient({direction,user}:Props){
 
   useEffect(()=>{load();loadFormats();loadReviewers()},[direction]);
 
-  const canCreate=["ROOT_ADMIN","STAFF"].includes(user.role);
+  const canCreate=direction==="INTERNAL"
+    ? ["ROOT_ADMIN","STAFF","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR","FINANCE"].includes(user.role)
+    : ["ROOT_ADMIN","STAFF"].includes(user.role);
   const outgoingTypeOptions=(documentTypes.length
     ? documentTypes.map((x:any)=>[x.code,x.name] as [string,string])
     : [...FALLBACK_LETTER_TYPE_OPTIONS]);
@@ -308,7 +310,7 @@ export default function LettersClient({direction,user}:Props){
     ?"Registrasi surat eksternal yang diterima perusahaan, review, return, attachment, dan histori."
     :direction==="OUTGOING"
       ?"Staff menyusun draft, Manager review, Dirops review, Dirut ACC final, lalu Staff menerbitkan surat. Setiap tahap dapat menyertakan lampiran."
-      :"Dokumen Staff ke Manager/atasan menggunakan Nota Dinas beserta lampiran. Nota Dinas bukan lembar disposisi.";
+      :"Dokumen internal yang dapat dibuat oleh seluruh role SIAP dan diajukan ke Manager tujuan beserta lampiran. Nota Dinas bukan lembar disposisi.";
 
   const currentYear=new Date().getFullYear();
   const yearOptions=Array.from({length:7},(_,i)=>String(currentYear-i));
@@ -320,7 +322,7 @@ export default function LettersClient({direction,user}:Props){
     {direction==="OUTGOING"&&<div className="notice" style={{marginBottom:13}}>
       <b>Alur ringkas:</b> Staff pilih Manager reviewer → Manager → Dirops → Dirut → Staff terbitkan. Jika dikembalikan, Staff revisi lalu ajukan lagi. <b>Database SIAP menjadi daftar utama</b>; tombol Export Excel membuat workbook dengan 5 sheet dan susunan yang mengikuti Form Persuratan ARU lama. Root dapat mengimpor workbook lama tanpa menghapus histori nomor.
     </div>}
-    {direction==="INTERNAL"&&<div className="notice" style={{marginBottom:13}}><b>Nota Dinas dimulai dari Staff ke Manager yang dipilih.</b><br/>Isi perihal dan ringkasan secara singkat, lalu lampirkan dokumen utama atau data pendukung bila diperlukan. Manager dapat memberi tanggapan, menyelesaikan di levelnya, meneruskan ke Dirops, atau mengembalikan untuk revisi. Setiap tahap dapat membawa catatan dan lampiran tambahan. <b>Semua dokumen yang tersimpan dapat diunduh kembali dari Detail Nota Dinas.</b> Disposisi tetap digunakan untuk instruksi/tindak lanjut pimpinan kepada PIC, bukan sebagai pengganti Nota Dinas.</div>}
+    {direction==="INTERNAL"&&<div className="notice" style={{marginBottom:13}}><b>Nota Dinas dapat dibuat oleh seluruh role SIAP.</b><br/>Pembuat memilih Manager tujuan, mengisi perihal/ringkasan, dan dapat melampirkan dokumen pendukung. Manager dapat memberi tanggapan, menyelesaikan di levelnya, meneruskan ke Dirops, atau mengembalikan ke pembuat untuk revisi. Setiap tahap dapat membawa catatan dan lampiran tambahan. <b>Semua dokumen yang tersimpan dapat diunduh kembali dari Detail Nota Dinas.</b> Disposisi tetap digunakan untuk instruksi/tindak lanjut pimpinan kepada PIC, bukan sebagai pengganti Nota Dinas.</div>}
 
     {message&&<div className="success" style={{marginBottom:12}}>{message}</div>}{error&&<div className="error" style={{marginBottom:12}}>{error}</div>}
     <div className="toolbar letter-filter-bar">
