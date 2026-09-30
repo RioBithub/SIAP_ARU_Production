@@ -87,3 +87,78 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit;
 /* v1.6.5 numbering preview */
 .format-preview{display:grid;grid-template-columns:140px 1fr;gap:7px 12px;border:1px solid #dce8f2;background:#f8fbfe;border-radius:12px;padding:12px}.format-preview span{font-size:9.5px;color:var(--muted);font-weight:800}.format-preview b{font-size:11px;color:var(--navy);font-weight:800}
 @media(max-width:600px){.format-preview{grid-template-columns:1fr}.format-preview span{margin-top:4px}}
+
+
+/* v1.6.6 — tablet dashboard responsive fix */
+/* Tablet landscape / desktop-mode mobile browsers: release horizontal space
+   by converting the persistent sidebar into a drawer. */
+@media (max-width:1400px) and (pointer:coarse){
+  .app-shell{grid-template-columns:1fr!important}
+  .sidebar{
+    position:fixed!important;
+    left:0;top:0;
+    width:270px;height:100vh;
+    transform:translateX(-105%);
+    transition:transform .2s ease;
+    box-shadow:20px 0 60px rgba(0,0,0,.25);
+    z-index:30
+  }
+  .sidebar.open{transform:translateX(0)}
+  .mobile-menu{display:block!important}
+  .main-area{width:100%;min-width:0}
+  .page{width:100%;max-width:none;padding:18px}
+
+  .finance-dashboard-highlight{grid-template-columns:1fr!important}
+  .finance-highlight-kpis,
+  .finance-dashboard-highlight .finance-highlight-kpis{
+    grid-template-columns:repeat(2,minmax(0,1fr))!important
+  }
+  .compact-chart-card{width:100%}
+  .finance-highlight-kpis .stat{min-width:0;overflow:hidden}
+
+  /* FinancePerformanceCard uses an inline two-column grid on desktop.
+     Stack month and YTD inside each card on tablet so nominal values never collide. */
+  .finance-highlight-kpis .stat>div[style*="grid-template-columns"]{
+    grid-template-columns:1fr!important;
+    gap:8px!important
+  }
+  .finance-highlight-kpis .stat>div[style*="grid-template-columns"]>div:first-child{
+    border-right:0!important;
+    border-bottom:1px solid var(--line);
+    padding-right:0!important;
+    padding-bottom:8px
+  }
+  .finance-highlight-kpis .stat-value{
+    font-size:20px!important;
+    line-height:1.12;
+    overflow-wrap:anywhere
+  }
+  .finance-highlight-kpis .stat-sub{line-height:1.35}
+}
+
+/* Fallback for narrow browser viewports that do not report a coarse pointer. */
+@media (max-width:1250px){
+  .app-shell{grid-template-columns:1fr!important}
+  .sidebar{
+    position:fixed!important;
+    left:0;top:0;
+    width:270px;height:100vh;
+    transform:translateX(-105%);
+    transition:transform .2s ease;
+    box-shadow:20px 0 60px rgba(0,0,0,.25);
+    z-index:30
+  }
+  .sidebar.open{transform:translateX(0)}
+  .mobile-menu{display:block!important}
+  .finance-dashboard-highlight{grid-template-columns:1fr!important}
+  .finance-dashboard-highlight .finance-highlight-kpis{
+    grid-template-columns:repeat(2,minmax(0,1fr))!important
+  }
+}
+
+/* Portrait tablet / large phone. */
+@media (max-width:850px){
+  .finance-dashboard-highlight .finance-highlight-kpis{grid-template-columns:1fr!important}
+  .page{padding:14px 12px 24px}
+  .hero h2{font-size:23px}
+}
