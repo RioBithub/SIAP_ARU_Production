@@ -106,6 +106,8 @@ export async function getBankStatement(accountId:string,fromRaw:string,toRaw:str
     totalDebit+=debit;
     totalCredit+=credit;
     running+=credit-debit;
+    const rawNote=r.notes?String(r.notes):"";
+    const visibleNote=/^Import BRI PDF:/i.test(rawNote)?null:(rawNote||null);
     return {
       id:String(r.id),
       transaction_at:String(r.transaction_at_text),
@@ -114,7 +116,7 @@ export async function getBankStatement(accountId:string,fromRaw:string,toRaw:str
       reference_no:r.reference_no?String(r.reference_no):null,
       debit_amount:debit,
       credit_amount:credit,
-      notes:r.notes?String(r.notes):null,
+      notes:visibleNote,
       creator_name:String(r.creator_name||""),
       balance:running
     };
