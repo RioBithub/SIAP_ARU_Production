@@ -63,7 +63,7 @@ export async function POST(request:Request){
       await conn.execute(
         `INSERT INTO siap_bank_documents
          (id,bank_account_id,document_date,period_from,period_to,document_kind,description,original_name,stored_name,storage_path,mime_type,original_size,stored_size,is_compressed,uploaded_by)
-         VALUES(?,?,?,?,?,'REKENING_KORAN_BRI',?,?,?,?,?,?,?,?,?,?)`,
+         VALUES(?,?,?,?,?,'REKENING_KORAN_BRI',?,?,?,?,?,?,?,?,?)`,
         [documentId,account.id,parsed.statement_date,parsed.period_from,parsed.period_to,
          `Import otomatis rekening koran BRI ${parsed.period_from} s.d. ${parsed.period_to}`,
          saved!.originalName,saved!.storedName,saved!.storagePath,saved!.mimeType,saved!.originalSize,saved!.storedSize,saved!.isCompressed?1:0,user.id]
