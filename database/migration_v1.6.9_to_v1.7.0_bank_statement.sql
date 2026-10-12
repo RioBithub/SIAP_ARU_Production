@@ -54,3 +54,26 @@ CREATE TABLE IF NOT EXISTS siap_bank_transactions (
   CONSTRAINT fk_siap_bank_tx_created FOREIGN KEY (created_by) REFERENCES siap_users(id) ON DELETE RESTRICT,
   CONSTRAINT fk_siap_bank_tx_updated FOREIGN KEY (updated_by) REFERENCES siap_users(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS siap_bank_documents (
+  id CHAR(36) PRIMARY KEY,
+  bank_account_id CHAR(36) NOT NULL,
+  document_date DATE NOT NULL,
+  period_from DATE NULL,
+  period_to DATE NULL,
+  document_kind VARCHAR(80) NOT NULL DEFAULT 'LAINNYA',
+  description VARCHAR(500) NULL,
+  original_name VARCHAR(255) NOT NULL,
+  stored_name VARCHAR(255) NOT NULL,
+  storage_path VARCHAR(1000) NOT NULL,
+  mime_type VARCHAR(160) NOT NULL,
+  original_size BIGINT UNSIGNED NOT NULL,
+  stored_size BIGINT UNSIGNED NOT NULL,
+  is_compressed TINYINT(1) NOT NULL DEFAULT 0,
+  uploaded_by CHAR(36) NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_siap_bank_doc_account_date (bank_account_id, document_date),
+  INDEX idx_siap_bank_doc_period (period_from, period_to),
+  CONSTRAINT fk_siap_bank_doc_account FOREIGN KEY (bank_account_id) REFERENCES siap_bank_accounts(id) ON DELETE RESTRICT,
+  CONSTRAINT fk_siap_bank_doc_uploaded FOREIGN KEY (uploaded_by) REFERENCES siap_users(id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
