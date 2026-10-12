@@ -12,20 +12,22 @@
 - **Download Excel** (sheet Rekening Koran + Data Transaksi).
 - **Cetak / Simpan PDF** melalui tampilan print A4.
 - Finance/Root dapat mengoreksi transaksi; pembatalan memakai status `VOIDED`, tidak hard-delete, dan tetap tercatat di Audit Log.
+- Menu **Perbankan → Dokumen Bank** untuk melampirkan dokumen pendukung per rekening.
+- Dokumen memiliki **Tanggal Dokumen**, **Periode Untuk (dari–sampai)**, jenis dokumen, keterangan, nama file, dan informasi uploader sehingga jelas dokumen tersebut berlaku untuk kapan.
+- File dokumen dapat diunduh kembali oleh role yang memiliki akses Perbankan.
 
 ## Hak akses
-- `ROOT_ADMIN`: view + edit.
-- `FINANCE`: view + edit.
+- `ROOT_ADMIN`: view + edit/upload.
+- `FINANCE`: view + edit/upload.
 - `MANAGER`: view-only.
 - `DIRECTOR_OPS`: view-only.
 - `PRESIDENT_DIRECTOR`: view-only.
-- `STAFF`: tidak mendapat menu Rekening Koran.
+- `STAFF`: tidak mendapat menu Rekening Koran/Dokumen Bank.
 
 ## Database
-Existing production wajib menjalankan migration:
+Existing production wajib menjalankan migration `database/migration_v1.6.9_to_v1.7.0_bank_statement.sql`.
 
-```bash
-mysql -u <DB_USER> -p <DB_NAME> < database/migration_v1.6.9_to_v1.7.0_bank_statement.sql
-```
-
-Migration hanya menambah tabel `siap_bank_accounts` dan `siap_bank_transactions`; tidak menghapus data lama.
+Migration hanya menambah tabel berikut dan tidak menghapus data lama:
+- `siap_bank_accounts`
+- `siap_bank_transactions`
+- `siap_bank_documents`
