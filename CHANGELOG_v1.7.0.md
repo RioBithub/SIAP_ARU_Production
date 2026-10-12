@@ -1,7 +1,8 @@
 # v1.7.0 — Rekening Koran Finance
 
 ## Fitur baru
-- Menu **Keuangan → Rekening Koran**.
+- Modul **Perbankan → Rekening Koran** dipisahkan dari dashboard Finance utama agar implementasi dapat dilakukan bertahap.
+- Transaksi Rekening Koran **tidak otomatis mengubah** angka Pendapatan, Biaya, Laba, Anggaran, Piutang, atau Utang pada dashboard Finance.
 - Finance/Root dapat membuat dan mengubah data rekening perusahaan.
 - Finance/Root dapat input transaksi bank dengan tanggal & waktu, uraian, Teller/User ID, nomor referensi, debit/kredit, dan catatan.
 - Saldo berjalan dihitung otomatis dari saldo awal rekening + transaksi aktif.
@@ -15,9 +16,10 @@
 ## Hak akses
 - `ROOT_ADMIN`: view + edit.
 - `FINANCE`: view + edit.
+- `MANAGER`: view-only.
 - `DIRECTOR_OPS`: view-only.
 - `PRESIDENT_DIRECTOR`: view-only.
-- Manager/Staff tidak mendapat menu Rekening Koran.
+- `STAFF`: tidak mendapat menu Rekening Koran.
 
 ## Database
 Existing production wajib menjalankan migration:
