@@ -18,7 +18,7 @@ export function canSeeFinance(role: Role) {
 }
 
 export function canSeeBankStatement(role: Role) {
-  return ["ROOT_ADMIN", "FINANCE", "DIRECTOR_OPS", "PRESIDENT_DIRECTOR"].includes(role);
+  return ["ROOT_ADMIN", "FINANCE", "MANAGER", "DIRECTOR_OPS", "PRESIDENT_DIRECTOR"].includes(role);
 }
 
 export function canEditFinance(role: Role) {
