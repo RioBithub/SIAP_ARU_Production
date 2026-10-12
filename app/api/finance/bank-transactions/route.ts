@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { NextResponse } from "next/server";
+import type { RowDataPacket } from "mysql2";
 import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { auditLog } from "@/lib/audit";
@@ -31,6 +32,10 @@ export async function POST(request:Request){
     const id=crypto.randomUUID();
     const accountId=required(b.bank_account_id,"Rekening",36);
     const transactionAt=dateTime(b.transaction_at);
+    const [accounts]=await db.query<RowDataPacket[]>(`SELECT DATE_FORMAT(opening_balance_date,'%Y-%m-%d') opening_date FROM siap_bank_accounts WHERE id=? AND is_active=1 LIMIT 1`,[accountId]);
+    if(!accounts[0]) throw new Error("Rekening tidak ditemukan atau sudah nonaktif.");
+    const openingDate=String(accounts[0].opening_date);
+    if(transactionAt.slice(0,10)<openingDate) throw new Error(`Tanggal transaksi tidak boleh sebelum tanggal saldo awal (${openingDate}).`);
     const description=required(b.description,"Uraian transaksi",500);
     const {debit,credit}=txAmounts(b.debit_amount,b.credit_amount);
     await db.execute(
