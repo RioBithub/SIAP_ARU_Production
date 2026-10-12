@@ -28,8 +28,11 @@ export type ParsedBriStatement = {
 function ymd(value:string){
   const m=value.trim().match(/^(\d{2})\/(\d{2})\/(\d{2}|\d{4})$/);
   if(!m) throw new Error(`Tanggal BRI tidak valid: ${value}`);
-  const yy=m[3].length===2?`20${m[3]}`:m[3];
-  return `${yy}-${m[2]}-${m[1]}`;
+  const day=m[1]!;
+  const month=m[2]!;
+  const yearPart=m[3]!;
+  const yy=yearPart.length===2?`20${yearPart}`:yearPart;
+  return `${yy}-${month}-${day}`;
 }
 
 function money(value:string){
@@ -67,13 +70,15 @@ function summaryAmounts(text:string){
   const start=lines.findIndex(l=>/Opening Balance/i.test(l)&&/Closing Balance/i.test(l));
   if(start<0) return null;
   for(let i=start+1;i<Math.min(lines.length,start+8);i++){
-    const values=lines[i].match(/[0-9][0-9,]*\.\d{2}/g)||[];
+    const values=lines[i]?.match(/[0-9][0-9,]*\.\d{2}/g)||[];
     if(values.length>=4){
+      const [opening,debit,credit,closing]=values;
+      if(!opening||!debit||!credit||!closing) continue;
       return {
-        opening:money(values[0]),
-        debit:money(values[1]),
-        credit:money(values[2]),
-        closing:money(values[3]),
+        opening:money(opening),
+        debit:money(debit),
+        credit:money(credit),
+        closing:money(closing),
       };
     }
   }
@@ -89,7 +94,7 @@ export function parseBriStatementText(textRaw:string):ParsedBriStatement{
   const accountNumber=capture(text,/No\.\s*Rekening\s*:\s*([0-9]+)/i,"Nomor rekening").replace(/\D/g,"");
   const statementDate=ymd(capture(text,/Tanggal Laporan\s*:\s*(\d{2}\/\d{2}\/\d{2,4})/i,"Tanggal laporan"));
   const periodMatch=text.match(/Periode Transaksi\s*:\s*(\d{2}\/\d{2}\/\d{2,4})\s*-\s*(\d{2}\/\d{2}\/\d{2,4})/i);
-  if(!periodMatch) throw new Error("Periode transaksi tidak terbaca dari PDF BRI.");
+  if(!periodMatch?.[1]||!periodMatch?.[2]) throw new Error("Periode transaksi tidak terbaca dari PDF BRI.");
   const periodFrom=ymd(periodMatch[1]);
   const periodTo=ymd(periodMatch[2]);
   const productName=optionalCapture(text,/Nama Produk\s*:\s*(.+?)\s{2,}/i);
@@ -99,17 +104,17 @@ export function parseBriStatementText(textRaw:string):ParsedBriStatement{
   const transactions:BriStatementTransaction[]=[];
   for(const line of text.split(/\r?\n/)){
     const m=line.match(rowRe);
-    if(!m) continue;
+    if(!m?.[1]||!m?.[2]||!m?.[3]||!m?.[4]||!m?.[5]||!m?.[6]) continue;
     const middle=m[3].trim();
     let description=middle;
     let tellerId:string|null=null;
     const split=middle.match(/^(.*\S)\s{2,}(\S+)$/);
-    if(split){
+    if(split?.[1]&&split?.[2]){
       description=split[1].trim();
       tellerId=split[2].trim();
     }else{
       const fallback=middle.match(/^(.*\S)\s+([A-Z0-9]{4,20})$/i);
-      if(fallback){description=fallback[1].trim();tellerId=fallback[2].trim();}
+      if(fallback?.[1]&&fallback?.[2]){description=fallback[1].trim();tellerId=fallback[2].trim();}
     }
     const base={
       transaction_at:`${ymd(m[1])} ${m[2]}`,
@@ -128,10 +133,12 @@ export function parseBriStatementText(textRaw:string):ParsedBriStatement{
   const warnings:string[]=[];
   const derivedDebit=transactions.reduce((s,t)=>s+t.debit_amount,0);
   const derivedCredit=transactions.reduce((s,t)=>s+t.credit_amount,0);
-  const derivedOpening=transactions.length
-    ? transactions[0].balance_after-transactions[0].credit_amount+transactions[0].debit_amount
+  const firstTx=transactions[0];
+  const lastTx=transactions[transactions.length-1];
+  const derivedOpening=firstTx
+    ? firstTx.balance_after-firstTx.credit_amount+firstTx.debit_amount
     : Number(summary?.opening||0);
-  const derivedClosing=transactions.length?transactions[transactions.length-1].balance_after:Number(summary?.closing||0);
+  const derivedClosing=lastTx?lastTx.balance_after:Number(summary?.closing||0);
 
   const opening=Number(summary?.opening??derivedOpening);
   const closing=Number(summary?.closing??derivedClosing);
