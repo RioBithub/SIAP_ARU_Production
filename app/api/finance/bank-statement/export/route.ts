@@ -58,9 +58,10 @@ export async function GET(request:Request){
     txSheet["!cols"]=[{wch:22},{wch:48},{wch:18},{wch:20},{wch:18},{wch:18},{wch:20},{wch:22}];
     XLSX.utils.book_append_sheet(wb,txSheet,"Data Transaksi");
     const buffer=XLSX.write(wb,{bookType:"xlsx",type:"buffer"});
+    const body=Uint8Array.from(buffer as Uint8Array);
     const safeAccount=a.account_number.replace(/[^A-Za-z0-9_-]/g,"-");
     const filename=`rekening-koran-${safeAccount}-${from}-${to}.xlsx`;
-    return new NextResponse(buffer,{headers:{
+    return new NextResponse(body,{headers:{
       "Content-Type":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       "Content-Disposition":`attachment; filename=\"${filename}\"`,
       "Cache-Control":"no-store"
