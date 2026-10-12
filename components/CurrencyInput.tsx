@@ -62,8 +62,8 @@ function displayValue(raw: string, allowDecimals: boolean) {
 
 /**
  * Input nominal Rupiah dengan pemisah ribuan otomatis.
- * Default tanpa pecahan: 333333232323 -> 333.333.232.323.
- * Jika allowDecimals=true: 4884428023.60 -> 4.884.428.023,60.
+ * Default menerima pecahan bila diperlukan: 4884428023.60 -> 4.884.428.023,60.
+ * Set allowDecimals=false bila field memang hanya menerima Rupiah bulat.
  */
 export default function CurrencyInput({
   value,
@@ -72,7 +72,7 @@ export default function CurrencyInput({
   name,
   className = "input",
   required,
-  allowDecimals = false,
+  allowDecimals = true,
   ...props
 }: Props) {
   const controlled = value !== undefined;
