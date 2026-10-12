@@ -45,8 +45,33 @@ export async function getBankStatement(accountId:string,fromRaw:string,toRaw:str
   );
   const rawAccount=accounts[0];
   if(!rawAccount) throw new Error("Rekening tidak ditemukan atau sudah nonaktif.");
-  const openingDate=String(rawAccount.opening_balance_date_text||rawAccount.opening_balance_date).slice(0,10);
-  if(from<openingDate) throw new Error(`Periode tidak boleh sebelum saldo awal rekening (${openingDate}).`);
+
+  const manualOpeningDate=String(rawAccount.opening_balance_date_text||rawAccount.opening_balance_date).slice(0,10);
+  let anchorDate=manualOpeningDate;
+  let anchorBalance=Number(rawAccount.opening_balance||0);
+  let balanceSource:{type:"MANUAL"|"BRI_IMPORT";import_id?:string;period_from?:string;period_to?:string;statement_date?:string;official_closing_balance?:number}|null={type:"MANUAL"};
+
+  const [anchorRows]=await db.query<RowDataPacket[]>(
+    `SELECT id,DATE_FORMAT(statement_date,'%Y-%m-%d') statement_date_text,
+            DATE_FORMAT(period_from,'%Y-%m-%d') period_from_text,DATE_FORMAT(period_to,'%Y-%m-%d') period_to_text,
+            COALESCE(manual_opening_balance,statement_opening_balance) effective_opening,
+            COALESCE(manual_closing_balance,statement_closing_balance) effective_closing
+     FROM siap_bank_import_batches
+     WHERE bank_account_id=? AND status='ACTIVE' AND period_from<=?
+     ORDER BY period_from DESC,period_to DESC,statement_date DESC,created_at DESC
+     LIMIT 1`,[accountId,from]
+  );
+  if(anchorRows[0]){
+    const a=anchorRows[0];
+    anchorDate=String(a.period_from_text);
+    anchorBalance=Number(a.effective_opening||0);
+    balanceSource={
+      type:"BRI_IMPORT",import_id:String(a.id),period_from:String(a.period_from_text),period_to:String(a.period_to_text),
+      statement_date:String(a.statement_date_text),official_closing_balance:Number(a.effective_closing||0)
+    };
+  }else if(from<manualOpeningDate){
+    throw new Error(`Periode belum memiliki sumber saldo awal. Tanggal saldo manual saat ini ${manualOpeningDate}.`);
+  }
 
   const [beforeRows]=await db.query<RowDataPacket[]>(
     `SELECT COALESCE(SUM(credit_amount-debit_amount),0) net
@@ -54,9 +79,9 @@ export async function getBankStatement(accountId:string,fromRaw:string,toRaw:str
      WHERE bank_account_id=? AND status='ACTIVE'
        AND transaction_at>=CONCAT(?, ' 00:00:00')
        AND transaction_at<CONCAT(?, ' 00:00:00')`,
-    [accountId,openingDate,from]
+    [accountId,anchorDate,from]
   );
-  const openingBalance=Number(rawAccount.opening_balance||0)+Number(beforeRows[0]?.net||0);
+  const openingBalance=anchorBalance+Number(beforeRows[0]?.net||0);
 
   const [txRows]=await db.query<RowDataPacket[]>(
     `SELECT t.id,
@@ -105,8 +130,8 @@ export async function getBankStatement(accountId:string,fromRaw:string,toRaw:str
     branch_name:rawAccount.branch_name?String(rawAccount.branch_name):null,
     unit_name:rawAccount.unit_name?String(rawAccount.unit_name):null,
     company_address:rawAccount.company_address?String(rawAccount.company_address):null,
-    opening_balance:Number(rawAccount.opening_balance||0),
-    opening_balance_date:openingDate,
+    opening_balance:anchorBalance,
+    opening_balance_date:anchorDate,
     is_active:Number(rawAccount.is_active||0)
   };
 
@@ -118,6 +143,7 @@ export async function getBankStatement(accountId:string,fromRaw:string,toRaw:str
     total_credit:totalCredit,
     closing_balance:running,
     rows,
+    balance_source:balanceSource,
     generated_at:new Date().toISOString()
   };
 }
