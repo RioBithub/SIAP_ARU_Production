@@ -19,6 +19,7 @@ export async function POST(request:Request){
   if(!canEditFinance(user.role)) return NextResponse.json({ok:false,error:"Hanya Finance/Root yang dapat import rekening koran."},{status:403});
 
   let saved:null|Awaited<ReturnType<typeof saveUpload>>=null;
+  let committed=false;
   try{
     const fd=await request.formData();
     const file=fd.get("file");
@@ -99,11 +100,12 @@ export async function POST(request:Request){
       );
       return {inserted,duplicates};
     });
+    committed=true;
 
     await auditLog({
       userId:user.id,action:"BANK_BRI_PDF_IMPORT",entityType:"BANK_IMPORT",entityId:batchId,request,
       metadata:{accountId:String(account.id),accountNumber:parsed.account_number,statementDate:parsed.statement_date,periodFrom:parsed.period_from,periodTo:parsed.period_to,inserted:result.inserted,duplicates:result.duplicates,openingBalance:parsed.opening_balance,closingBalance:parsed.closing_balance}
-    });
+    }).catch(error=>console.error("BANK_BRI_PDF_IMPORT audit failed",error));
 
     return NextResponse.json({ok:true,data:{
       id:batchId,account_id:String(account.id),account_number:parsed.account_number,
@@ -114,7 +116,7 @@ export async function POST(request:Request){
       warnings:parsed.warnings
     }},{status:201});
   }catch(e){
-    if(saved) await deleteStoredFile(saved.storagePath).catch(()=>{});
+    if(saved&&!committed) await deleteStoredFile(saved.storagePath).catch(()=>{});
     return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Import PDF BRI gagal."},{status:400});
   }
 }
