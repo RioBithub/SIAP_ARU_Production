@@ -32,10 +32,17 @@ export async function POST(request:Request){
     const id=crypto.randomUUID();
     const accountId=required(b.bank_account_id,"Rekening",36);
     const transactionAt=dateTime(b.transaction_at);
-    const [accounts]=await db.query<RowDataPacket[]>(`SELECT DATE_FORMAT(opening_balance_date,'%Y-%m-%d') opening_date FROM siap_bank_accounts WHERE id=? AND is_active=1 LIMIT 1`,[accountId]);
+    const [accounts]=await db.query<RowDataPacket[]>(
+      `SELECT DATE_FORMAT(
+         CASE WHEN MIN(i.period_from) IS NOT NULL AND MIN(i.period_from)<a.opening_balance_date THEN MIN(i.period_from) ELSE a.opening_balance_date END,
+         '%Y-%m-%d') opening_date
+       FROM siap_bank_accounts a
+       LEFT JOIN siap_bank_import_batches i ON i.bank_account_id=a.id AND i.status='ACTIVE'
+       WHERE a.id=? AND a.is_active=1 GROUP BY a.id,a.opening_balance_date LIMIT 1`,[accountId]
+    );
     if(!accounts[0]) throw new Error("Rekening tidak ditemukan atau sudah nonaktif.");
     const openingDate=String(accounts[0].opening_date);
-    if(transactionAt.slice(0,10)<openingDate) throw new Error(`Tanggal transaksi tidak boleh sebelum tanggal saldo awal (${openingDate}).`);
+    if(transactionAt.slice(0,10)<openingDate) throw new Error(`Tanggal transaksi tidak boleh sebelum periode data rekening (${openingDate}).`);
     const description=required(b.description,"Uraian transaksi",500);
     const {debit,credit}=txAmounts(b.debit_amount,b.credit_amount);
     await db.execute(
