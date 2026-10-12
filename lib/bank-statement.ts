@@ -58,7 +58,7 @@ export async function getBankStatement(accountId:string,fromRaw:string,toRaw:str
             COALESCE(manual_closing_balance,statement_closing_balance) effective_closing
      FROM siap_bank_import_batches
      WHERE bank_account_id=? AND status='ACTIVE' AND period_from<=?
-     ORDER BY period_from DESC,period_to DESC,statement_date DESC,created_at DESC
+     ORDER BY period_to DESC,statement_date DESC,period_from DESC,created_at DESC
      LIMIT 1`,[accountId,from]
   );
   if(anchorRows[0]){
