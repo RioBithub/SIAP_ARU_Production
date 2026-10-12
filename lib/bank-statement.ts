@@ -40,11 +40,12 @@ export async function getBankStatement(accountId:string,fromRaw:string,toRaw:str
   if(from>to) throw new Error("Tanggal awal tidak boleh melewati tanggal akhir.");
 
   const [accounts]=await db.query<RowDataPacket[]>(
-    `SELECT * FROM siap_bank_accounts WHERE id=? AND is_active=1 LIMIT 1`,[accountId]
+    `SELECT *,DATE_FORMAT(opening_balance_date,'%Y-%m-%d') opening_balance_date_text
+     FROM siap_bank_accounts WHERE id=? AND is_active=1 LIMIT 1`,[accountId]
   );
   const rawAccount=accounts[0];
   if(!rawAccount) throw new Error("Rekening tidak ditemukan atau sudah nonaktif.");
-  const openingDate=String(rawAccount.opening_balance_date).slice(0,10);
+  const openingDate=String(rawAccount.opening_balance_date_text||rawAccount.opening_balance_date).slice(0,10);
   if(from<openingDate) throw new Error(`Periode tidak boleh sebelum saldo awal rekening (${openingDate}).`);
 
   const [beforeRows]=await db.query<RowDataPacket[]>(
@@ -58,7 +59,10 @@ export async function getBankStatement(accountId:string,fromRaw:string,toRaw:str
   const openingBalance=Number(rawAccount.opening_balance||0)+Number(beforeRows[0]?.net||0);
 
   const [txRows]=await db.query<RowDataPacket[]>(
-    `SELECT t.*,u.name creator_name
+    `SELECT t.id,
+            DATE_FORMAT(t.transaction_at,'%Y-%m-%d %H:%i:%s') transaction_at_text,
+            t.description,t.teller_id,t.reference_no,t.debit_amount,t.credit_amount,t.notes,t.created_at,
+            u.name creator_name
      FROM siap_bank_transactions t
      JOIN siap_users u ON u.id=t.created_by
      WHERE t.bank_account_id=? AND t.status='ACTIVE'
@@ -79,7 +83,7 @@ export async function getBankStatement(accountId:string,fromRaw:string,toRaw:str
     running+=credit-debit;
     return {
       id:String(r.id),
-      transaction_at:String(r.transaction_at),
+      transaction_at:String(r.transaction_at_text),
       description:String(r.description),
       teller_id:r.teller_id?String(r.teller_id):null,
       reference_no:r.reference_no?String(r.reference_no):null,
