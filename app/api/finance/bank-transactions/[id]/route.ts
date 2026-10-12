@@ -28,6 +28,17 @@ export async function PATCH(request:Request,{params}:{params:{id:string}}){
   try{
     const b=await request.json();
     const transactionAt=dateTime(b.transaction_at);
+    const [currentRows]=await db.query<RowDataPacket[]>(
+      `SELECT t.bank_account_id,t.status,DATE_FORMAT(a.opening_balance_date,'%Y-%m-%d') opening_date
+       FROM siap_bank_transactions t
+       JOIN siap_bank_accounts a ON a.id=t.bank_account_id
+       WHERE t.id=? LIMIT 1`,[params.id]
+    );
+    const current=currentRows[0];
+    if(!current) return NextResponse.json({ok:false,error:"Transaksi tidak ditemukan."},{status:404});
+    if(String(current.status)!=="ACTIVE") throw new Error("Transaksi sudah dibatalkan.");
+    const openingDate=String(current.opening_date);
+    if(transactionAt.slice(0,10)<openingDate) throw new Error(`Tanggal transaksi tidak boleh sebelum tanggal saldo awal (${openingDate}).`);
     const description=required(b.description,"Uraian transaksi",500);
     const {debit,credit}=txAmounts(b.debit_amount,b.credit_amount);
     const [result]=await db.execute<ResultSetHeader>(
@@ -37,7 +48,7 @@ export async function PATCH(request:Request,{params}:{params:{id:string}}){
       [transactionAt,description,str(b.teller_id,120)||null,str(b.reference_no,120)||null,debit,credit,str(b.notes,1000)||null,user.id,params.id]
     );
     if(!result.affectedRows) return NextResponse.json({ok:false,error:"Transaksi tidak ditemukan atau sudah dibatalkan."},{status:404});
-    await auditLog({userId:user.id,action:"BANK_TRANSACTION_UPDATE",entityType:"BANK_TRANSACTION",entityId:params.id,metadata:{transactionAt,debit,credit,description},request});
+    await auditLog({userId:user.id,action:"BANK_TRANSACTION_UPDATE",entityType:"BANK_TRANSACTION",entityId:params.id,metadata:{accountId:String(current.bank_account_id),transactionAt,debit,credit,description},request});
     return NextResponse.json({ok:true});
   }catch(e){
     return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Gagal mengubah transaksi."},{status:400});
@@ -51,7 +62,7 @@ export async function DELETE(request:Request,{params}:{params:{id:string}}){
   try{
     const body=await request.json().catch(()=>({}));
     const reason=required(body.reason,"Alasan pembatalan",1000);
-    const [rows]=await db.query<RowDataPacket[]>(`SELECT bank_account_id,transaction_at,debit_amount,credit_amount,description,status FROM siap_bank_transactions WHERE id=? LIMIT 1`,[params.id]);
+    const [rows]=await db.query<RowDataPacket[]>(`SELECT bank_account_id,DATE_FORMAT(transaction_at,'%Y-%m-%d %H:%i:%s') transaction_at,debit_amount,credit_amount,description,status FROM siap_bank_transactions WHERE id=? LIMIT 1`,[params.id]);
     const tx=rows[0];
     if(!tx) return NextResponse.json({ok:false,error:"Transaksi tidak ditemukan."},{status:404});
     if(String(tx.status)!=="ACTIVE") throw new Error("Transaksi sudah dibatalkan.");
