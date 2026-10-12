@@ -23,10 +23,12 @@ export default function AppShell({ user, children }:{user:SessionUser;children:R
     ]},
     {label:"Keuangan",items:[
       {href:"/finance",label:"Ringkasan & Dokumen",icon:"▥",roles:["ROOT_ADMIN","FINANCE","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR"]},
-      {href:"/finance/bank-statement",label:"Rekening Koran",icon:"▤",roles:["ROOT_ADMIN","FINANCE","DIRECTOR_OPS","PRESIDENT_DIRECTOR"]},
       {href:"/finance/receivables",label:"Piutang",icon:"⇢",roles:["ROOT_ADMIN","FINANCE","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR"]},
       {href:"/finance/payables",label:"Utang",icon:"⇠",roles:["ROOT_ADMIN","FINANCE","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR"]},
       {href:"/finance/aging",label:"Aging & Jatuh Tempo",icon:"⌛",roles:["ROOT_ADMIN","FINANCE","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR"]},
+    ]},
+    {label:"Perbankan",items:[
+      {href:"/finance/bank-statement",label:"Rekening Koran",icon:"▤",roles:["ROOT_ADMIN","FINANCE","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR"]},
     ]},
     {label:"Administrasi",items:[
       {href:"/admin/users",label:"User & Role",icon:"♟",roles:["ROOT_ADMIN"]},
