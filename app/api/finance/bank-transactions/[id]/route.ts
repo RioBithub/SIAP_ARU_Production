@@ -29,16 +29,21 @@ export async function PATCH(request:Request,{params}:{params:{id:string}}){
     const b=await request.json();
     const transactionAt=dateTime(b.transaction_at);
     const [currentRows]=await db.query<RowDataPacket[]>(
-      `SELECT t.bank_account_id,t.status,DATE_FORMAT(a.opening_balance_date,'%Y-%m-%d') opening_date
+      `SELECT t.bank_account_id,t.status,
+              DATE_FORMAT(
+                CASE WHEN MIN(i.period_from) IS NOT NULL AND MIN(i.period_from)<a.opening_balance_date THEN MIN(i.period_from) ELSE a.opening_balance_date END,
+                '%Y-%m-%d') opening_date
        FROM siap_bank_transactions t
        JOIN siap_bank_accounts a ON a.id=t.bank_account_id
-       WHERE t.id=? LIMIT 1`,[params.id]
+       LEFT JOIN siap_bank_import_batches i ON i.bank_account_id=a.id AND i.status='ACTIVE'
+       WHERE t.id=?
+       GROUP BY t.bank_account_id,t.status,a.opening_balance_date LIMIT 1`,[params.id]
     );
     const current=currentRows[0];
     if(!current) return NextResponse.json({ok:false,error:"Transaksi tidak ditemukan."},{status:404});
     if(String(current.status)!=="ACTIVE") throw new Error("Transaksi sudah dibatalkan.");
     const openingDate=String(current.opening_date);
-    if(transactionAt.slice(0,10)<openingDate) throw new Error(`Tanggal transaksi tidak boleh sebelum tanggal saldo awal (${openingDate}).`);
+    if(transactionAt.slice(0,10)<openingDate) throw new Error(`Tanggal transaksi tidak boleh sebelum periode data rekening (${openingDate}).`);
     const description=required(b.description,"Uraian transaksi",500);
     const {debit,credit}=txAmounts(b.debit_amount,b.credit_amount);
     const [result]=await db.execute<ResultSetHeader>(
