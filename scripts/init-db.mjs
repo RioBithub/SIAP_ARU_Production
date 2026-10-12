@@ -37,6 +37,10 @@ await conn.query(schema);
 const financeV161Migration = fs.readFileSync(path.resolve("database/migration_v1.6_to_v1.6.1_finance_daily_ytd_adjustments.sql"), "utf8");
 await conn.query(financeV161Migration);
 
+// v1.7.0 Finance: bank accounts, bank transaction ledger, and printable bank statement.
+const bankStatementV170Migration = fs.readFileSync(path.resolve("database/migration_v1.6.9_to_v1.7.0_bank_statement.sql"), "utf8");
+await conn.query(bankStatementV170Migration);
+
 // Numbering v1.4 migration: per-format starting number and per-format rendered uniqueness.
 const [seqStartColumn] = await conn.query(
   `SELECT COUNT(*) AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME='siap_number_formats' AND COLUMN_NAME='sequence_start'`,
