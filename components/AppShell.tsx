@@ -27,6 +27,10 @@ export default function AppShell({ user, children }:{user:SessionUser;children:R
       {href:"/finance/payables",label:"Utang",icon:"⇠",roles:["ROOT_ADMIN","FINANCE","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR"]},
       {href:"/finance/aging",label:"Aging & Jatuh Tempo",icon:"⌛",roles:["ROOT_ADMIN","FINANCE","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR"]},
     ]},
+    {label:"Perbankan",items:[
+      {href:"/finance/bank-statement",label:"Rekening Koran",icon:"▤",roles:["ROOT_ADMIN","FINANCE","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR"]},
+      {href:"/finance/bank-statement/documents",label:"Dokumen Bank",icon:"▰",roles:["ROOT_ADMIN","FINANCE","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR"]},
+    ]},
     {label:"Administrasi",items:[
       {href:"/admin/users",label:"User & Role",icon:"♟",roles:["ROOT_ADMIN"]},
       {href:"/admin/number-formats",label:"Jenis & Format Surat",icon:"#",roles:["ROOT_ADMIN"]},
