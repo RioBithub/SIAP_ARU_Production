@@ -22,7 +22,7 @@ export async function GET(request:Request){
   try{
     const url=new URL(request.url);
     const accountId=String(url.searchParams.get("account_id")||"").trim();
-    const params:unknown[]=[];
+    const params:any[]=[];
     const where=accountId?"WHERE d.bank_account_id=?":"";
     if(accountId) params.push(accountId);
     const [rows]=await db.query<RowDataPacket[]>(
