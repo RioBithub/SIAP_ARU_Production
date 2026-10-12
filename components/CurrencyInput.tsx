@@ -6,27 +6,64 @@ type Props = Omit<InputHTMLAttributes<HTMLInputElement>, "type" | "value" | "def
   value?: string | number;
   defaultValue?: string | number;
   onValueChange?: (rawValue: string) => void;
+  allowDecimals?: boolean;
 };
 
-function normalize(value: string | number | undefined) {
+function normalizeWhole(value: string | number | undefined) {
   if (value === undefined || value === null) return "";
   const source = String(value).trim();
-  // DECIMAL dari MySQL kadang terbaca seperti "1000.00". Karena nominal SIAP
-  // ditampilkan tanpa pecahan Rupiah, buang bagian desimal sebelum grouping.
   const decimal = source.match(/^(\d+)[.,](\d{1,2})$/);
   const digits = (decimal ? decimal[1] : source).replace(/\D/g, "");
   if (!digits) return "";
   return digits.replace(/^0+(?=\d)/, "");
 }
 
-function groupRupiah(raw: string) {
+function normalizeDecimal(value: string | number | undefined, fromDisplay = false) {
+  if (value === undefined || value === null) return "";
+  const source = String(value).trim().replace(/\s/g, "");
+  if (!source) return "";
+
+  let integer = "";
+  let decimal: string | null = null;
+
+  if (fromDisplay && source.includes(",")) {
+    const idx = source.lastIndexOf(",");
+    integer = source.slice(0, idx).replace(/\D/g, "");
+    decimal = source.slice(idx + 1).replace(/\D/g, "").slice(0, 2);
+  } else if (!fromDisplay && /^\d+\.\d{0,2}$/.test(source)) {
+    const [i, d = ""] = source.split(".");
+    integer = i;
+    decimal = d.slice(0, 2);
+  } else if (fromDisplay && /^\d+\.\d{1,2}$/.test(source) && !/^\d{1,3}(\.\d{3})+$/.test(source)) {
+    const [i, d = ""] = source.split(".");
+    integer = i;
+    decimal = d.slice(0, 2);
+  } else {
+    integer = source.replace(/\D/g, "");
+  }
+
+  integer = integer.replace(/^0+(?=\d)/, "");
+  if (!integer) integer = "0";
+  return decimal === null ? integer : `${integer}.${decimal}`;
+}
+
+function groupInteger(raw: string) {
   if (!raw) return "";
   return raw.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 }
 
+function displayValue(raw: string, allowDecimals: boolean) {
+  if (!raw) return "";
+  if (!allowDecimals) return groupInteger(raw);
+  const hasDecimal = raw.includes(".");
+  const [integer, decimal = ""] = raw.split(".");
+  return `${groupInteger(integer)}${hasDecimal ? `,${decimal}` : ""}`;
+}
+
 /**
- * Input nominal Rupiah yang tetap mengirim angka mentah ke backend.
- * Contoh tampilan: 333.333.232.323 -> nilai form/API: 333333232323.
+ * Input nominal Rupiah dengan pemisah ribuan otomatis.
+ * Default tanpa pecahan: 333333232323 -> 333.333.232.323.
+ * Jika allowDecimals=true: 4884428023.60 -> 4.884.428.023,60.
  */
 export default function CurrencyInput({
   value,
@@ -35,15 +72,17 @@ export default function CurrencyInput({
   name,
   className = "input",
   required,
+  allowDecimals = false,
   ...props
 }: Props) {
   const controlled = value !== undefined;
-  const [internal, setInternal] = useState(() => normalize(defaultValue));
-  const raw = controlled ? normalize(value) : internal;
-  const display = useMemo(() => groupRupiah(raw), [raw]);
+  const normalizeInitial = (v: string | number | undefined) => allowDecimals ? normalizeDecimal(v, false) : normalizeWhole(v);
+  const [internal, setInternal] = useState(() => normalizeInitial(defaultValue));
+  const raw = controlled ? normalizeInitial(value) : internal;
+  const display = useMemo(() => displayValue(raw, allowDecimals), [raw, allowDecimals]);
 
   function update(nextDisplay: string) {
-    const nextRaw = normalize(nextDisplay);
+    const nextRaw = allowDecimals ? normalizeDecimal(nextDisplay, true) : normalizeWhole(nextDisplay);
     if (!controlled) setInternal(nextRaw);
     onValueChange?.(nextRaw);
   }
@@ -54,7 +93,7 @@ export default function CurrencyInput({
         {...props}
         className={className}
         type="text"
-        inputMode="numeric"
+        inputMode={allowDecimals ? "decimal" : "numeric"}
         autoComplete="off"
         value={display}
         required={required}
