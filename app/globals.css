@@ -87,3 +87,219 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit;
 /* v1.6.5 numbering preview */
 .format-preview{display:grid;grid-template-columns:140px 1fr;gap:7px 12px;border:1px solid #dce8f2;background:#f8fbfe;border-radius:12px;padding:12px}.format-preview span{font-size:9.5px;color:var(--muted);font-weight:800}.format-preview b{font-size:11px;color:var(--navy);font-weight:800}
 @media(max-width:600px){.format-preview{grid-template-columns:1fr}.format-preview span{margin-top:4px}}
+
+/* =========================================================
+   SIAP ARU - Tablet responsive fix
+   ========================================================= */
+
+/* Tablet: sidebar berubah menjadi drawer supaya konten tidak terjepit */
+@media (max-width:1100px){
+  .app-shell{
+    grid-template-columns:1fr;
+  }
+
+  .sidebar{
+    position:fixed;
+    left:0;
+    top:0;
+    width:270px;
+    height:100vh;
+    transform:translateX(-105%);
+    transition:.2s;
+    box-shadow:20px 0 60px rgba(0,0,0,.25);
+    z-index:30;
+  }
+
+  .sidebar.open{
+    transform:none;
+  }
+
+  .mobile-menu{
+    display:block;
+  }
+
+  .main-area{
+    width:100%;
+    min-width:0;
+  }
+
+  .page{
+    max-width:100%;
+    padding-left:20px;
+    padding-right:20px;
+  }
+
+  .finance-dashboard-highlight{
+    grid-template-columns:1fr;
+  }
+
+  .finance-dashboard-highlight .finance-highlight-kpis{
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+
+  .finance-highlight-kpis .stat{
+    min-width:0;
+    overflow:hidden;
+  }
+
+  .finance-highlight-kpis .stat-value{
+    font-size:18px !important;
+    line-height:1.15;
+  }
+}
+
+/* Tablet portrait / HP besar */
+@media (max-width:760px){
+  .page{
+    padding-left:13px;
+    padding-right:13px;
+  }
+
+  .finance-dashboard-highlight .finance-highlight-kpis{
+    grid-template-columns:1fr;
+  }
+
+  .finance-highlight-kpis .stat-value{
+    font-size:20px !important;
+  }
+}
+
+
+/* =========================================================
+   SIAP ARU — FINAL TABLET RESPONSIVE FIX
+   Tablet landscape / desktop-mode browser
+   ========================================================= */
+
+/* Tablet/touch landscape */
+@media (max-width:1400px) and (pointer:coarse) {
+
+  .app-shell{
+    grid-template-columns:1fr !important;
+  }
+
+  .sidebar{
+    position:fixed !important;
+    left:0;
+    top:0;
+    width:270px;
+    height:100vh;
+    transform:translateX(-105%);
+    transition:transform .2s ease;
+    box-shadow:20px 0 60px rgba(0,0,0,.25);
+    z-index:30;
+  }
+
+  .sidebar.open{
+    transform:translateX(0);
+  }
+
+  .mobile-menu{
+    display:block !important;
+  }
+
+  .main-area{
+    width:100%;
+    min-width:0;
+  }
+
+  .page{
+    width:100%;
+    max-width:none;
+    padding:18px;
+  }
+
+  /* Finance: KPI di atas, chart di bawah */
+  .finance-dashboard-highlight{
+    grid-template-columns:1fr !important;
+  }
+
+  .finance-highlight-kpis,
+  .finance-dashboard-highlight .finance-highlight-kpis{
+    grid-template-columns:repeat(2,minmax(0,1fr)) !important;
+  }
+
+  .compact-chart-card{
+    width:100%;
+  }
+
+  /* Hindari teks nominal tabrakan */
+  .finance-highlight-kpis .stat{
+    min-width:0;
+    overflow:hidden;
+  }
+
+  .finance-highlight-kpis .stat > div[style*="grid-template-columns"]{
+    grid-template-columns:1fr !important;
+    gap:8px !important;
+  }
+
+  .finance-highlight-kpis .stat > div[style*="grid-template-columns"] > div:first-child{
+    border-right:0 !important;
+    border-bottom:1px solid var(--line);
+    padding-right:0 !important;
+    padding-bottom:8px;
+  }
+
+  .finance-highlight-kpis .stat-value{
+    font-size:20px !important;
+    line-height:1.12;
+    overflow-wrap:anywhere;
+  }
+
+  .finance-highlight-kpis .stat-sub{
+    line-height:1.35;
+  }
+}
+
+/* Fallback untuk layar sempit walaupun browser tidak melaporkan pointer coarse */
+@media (max-width:1250px){
+
+  .app-shell{
+    grid-template-columns:1fr !important;
+  }
+
+  .sidebar{
+    position:fixed !important;
+    left:0;
+    top:0;
+    width:270px;
+    height:100vh;
+    transform:translateX(-105%);
+    transition:transform .2s ease;
+    box-shadow:20px 0 60px rgba(0,0,0,.25);
+    z-index:30;
+  }
+
+  .sidebar.open{
+    transform:translateX(0);
+  }
+
+  .mobile-menu{
+    display:block !important;
+  }
+
+  .finance-dashboard-highlight{
+    grid-template-columns:1fr !important;
+  }
+
+  .finance-dashboard-highlight .finance-highlight-kpis{
+    grid-template-columns:repeat(2,minmax(0,1fr)) !important;
+  }
+}
+
+/* Portrait tablet */
+@media (max-width:850px){
+
+  .finance-dashboard-highlight .finance-highlight-kpis{
+    grid-template-columns:1fr !important;
+  }
+
+  .page{
+    padding:14px 12px 24px;
+  }
+
+  .hero h2{
+    font-size:23px;
+  }
+}
+
