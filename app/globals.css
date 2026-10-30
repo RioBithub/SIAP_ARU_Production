@@ -303,3 +303,20 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit;
   }
 }
 
+
+/* Workflow awareness and linked tasks: keep actions and long file names usable on phones/tablets. */
+.workflow-tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.workflow-awareness{display:flex;gap:12px;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;text-decoration:none}
+.read-receipts,.review-route,.child-tasks{border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:16px;background:var(--surface-2,#f5f8fc);min-width:0}
+.read-receipts-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}
+.read-receipts-head p{font-size:12px;color:var(--muted);margin:5px 0 10px}
+.read-receipts-list{display:grid;gap:8px;margin-top:10px}
+.read-receipts-list>div{display:flex;flex-wrap:wrap;gap:6px 12px;justify-content:space-between;font-size:12px;overflow-wrap:anywhere}
+.read-receipts-list span{color:var(--muted)}
+.review-route ol{display:flex;flex-wrap:wrap;gap:10px 24px;margin:12px 0 0;padding-left:20px}
+.review-route li{padding-left:2px;font-size:12px;min-width:0;overflow-wrap:anywhere}
+.review-route li span{display:block;font-size:11px;color:var(--muted)}
+.child-task{border:1px solid var(--line);background:#fff;border-radius:10px;padding:12px;margin-top:10px;overflow-wrap:anywhere}
+.child-task p{font-size:12px;white-space:pre-wrap;margin:7px 0}
+.child-task .btn{margin-top:8px}
+@media(max-width:600px){.workflow-tabs .btn{flex:1 1 160px}.read-receipts-head>.btn{width:100%}.workflow-awareness{align-items:flex-start;flex-direction:column}.read-receipts-list>div{flex-direction:column}.review-route ol{display:block}.review-route li+li{margin-top:10px}}

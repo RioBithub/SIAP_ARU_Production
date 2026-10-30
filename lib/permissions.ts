@@ -42,5 +42,5 @@ export function canCreateInternal(role: Role) {
 }
 
 export function canCreateDisposition(role: Role) {
-  return ["ROOT_ADMIN", "MANAGER", "DIRECTOR_OPS", "PRESIDENT_DIRECTOR"].includes(role);
+  return ["ROOT_ADMIN", "MANAGER", "DIRECTOR_OPS", "PRESIDENT_DIRECTOR", "FINANCE"].includes(role);
 }

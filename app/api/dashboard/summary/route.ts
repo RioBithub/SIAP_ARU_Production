@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { canSeeFinance } from "@/lib/permissions";
 import { getLedgerPosition } from "@/lib/finance-ledger";
 import { getFinanceYearSnapshot } from "@/lib/finance-summary";
+import { letterAccessPredicate } from "@/lib/letter-access";
 
 export const runtime = "nodejs";
 
@@ -14,16 +15,19 @@ export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ ok:false, error:"Unauthorized" }, { status:401 });
 
+  const access=letterAccessPredicate(user);
   const [letterRows] = await db.query<RowDataPacket[]>(
     `SELECT
       SUM(direction='INCOMING') AS incoming_total,
       SUM(direction='INTERNAL') AS internal_total,
-      SUM(status IN ('MANAGER_REVIEW','DIRECTOR_OPS_REVIEW','PRESIDENT_DIRECTOR_REVIEW')) AS waiting_approval,
+      SUM(status IN ('FINANCE_REVIEW','MANAGER_REVIEW','DIRECTOR_OPS_REVIEW','PRESIDENT_DIRECTOR_REVIEW')) AS waiting_approval,
       SUM(status IN ('DISPOSED','IN_PROGRESS')) AS in_progress,
       SUM(status IN ('COMPLETED','APPROVED','ISSUED')) AS completed
-     FROM siap_letters
-     WHERE MONTH(letter_date)=MONTH(CURDATE()) AND YEAR(letter_date)=YEAR(CURDATE())`
+     FROM siap_letters l
+     WHERE MONTH(letter_date)=MONTH(CURDATE()) AND YEAR(letter_date)=YEAR(CURDATE()) AND ${access.sql}`,access.params
   );
+
+  const [awareness]=await db.query<RowDataPacket[]>(`SELECT COUNT(*) total FROM siap_letters l WHERE l.direction='INCOMING' AND l.status<>'CANCELLED' AND ${access.sql} AND NOT EXISTS(SELECT 1 FROM siap_letter_reads r WHERE r.letter_id=l.id AND r.user_id=?)`,[...access.params,user.id]);
 
   const [dispRows] = await db.query<RowDataPacket[]>(
     `SELECT
@@ -99,7 +103,7 @@ export async function GET() {
   return NextResponse.json({
     ok:true,
     data:{
-      letters: letterRows[0] || {},
+      letters: {...(letterRows[0] || {}),unread_incoming:Number(awareness[0]?.total||0)},
       dispositions: dispRows[0] || {},
       finance
     }

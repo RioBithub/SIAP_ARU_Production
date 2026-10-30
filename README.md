@@ -1,6 +1,12 @@
-# SIAP ARU v1.6
+# SIAP ARU v1.8.0
 
 Sistem Informasi ARU Terintegrasi untuk Persuratan, Pengajuan Internal, Surat Keluar, Disposisi, Keuangan, Piutang, Utang, Arsip, dan Audit Log.
+
+## Pembaruan v1.8.0
+
+Review awal Finance bersifat opsional untuk Surat Masuk dan Nota Dinas dari Staff. Finance dapat memberikan disposisi kepada Staff; tugas lanjutan tetap terhubung dengan tugas asal. Surat Masuk menyediakan tanda sudah dibaca yang terpisah dari ACC. Dokumen utama tetap tanpa kompresi (maksimal 10 MB); lampiran tambahan dikompresi bila efektif, maksimal 5 file dan 50 MB per aksi.
+
+Baca [petunjuk migration dan deployment v1.8.0](README_UPDATE_ONLY_v1.8.0.md) sebelum memperbarui production. Database v1.6 di bawah adalah baseline historis; fitur terkini memerlukan migration bertahap hingga v1.8.0.
 
 ## Fokus utama v1.6 — workflow Surat Keluar
 

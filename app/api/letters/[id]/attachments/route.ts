@@ -5,6 +5,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { saveUpload } from "@/lib/upload";
 import { auditLog } from "@/lib/audit";
+import { mayAccessLetter } from "@/lib/letter-access";
 
 export const runtime="nodejs";
 
@@ -22,21 +23,10 @@ export async function POST(request:Request,{params}:{params:{id:string}}){
 
     if(kind==="ORIGINAL") {
       if(user.role!=="ROOT_ADMIN" && letter.created_by!==user.id) throw new Error("Surat asli hanya dapat diunggah pembuat surat atau Root Admin.");
-    } else if(user.role!=="ROOT_ADMIN") {
-      let allowed = Boolean(letter.is_public) || letter.created_by===user.id || letter.current_owner_user_id===user.id || (!letter.current_owner_user_id && letter.current_role===user.role);
-      if(!allowed){
-        const [access]=await db.query<RowDataPacket[]>(
-          `SELECT 1 FROM siap_dispositions WHERE letter_id=? AND (to_user_id=? OR from_user_id=?) LIMIT 1`,
-          [params.id,user.id,user.id]
-        );
-        const [acted]=await db.query<RowDataPacket[]>(
-          `SELECT 1 FROM siap_letter_actions WHERE letter_id=? AND actor_user_id=? LIMIT 1`,
-          [params.id,user.id]
-        );
-        allowed=Boolean(access[0]||acted[0]);
-      }
-      if(!allowed) throw new Error("Anda tidak memiliki akses menambah lampiran pada surat ini.");
+    } else if (!(await mayAccessLetter(user,params.id,true))) {
+      throw new Error("Anda tidak memiliki akses menambah lampiran pada surat ini.");
     }
+
     const saved=await saveUpload(file,kind);
     const id=crypto.randomUUID();
     await db.execute(

@@ -5,6 +5,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { saveUpload } from "@/lib/upload";
 import { auditLog } from "@/lib/audit";
+import { mayAccessDisposition } from "@/lib/disposition-access";
 
 export const runtime="nodejs";
 
@@ -23,14 +24,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}){
     const d=rows[0];
     if(!d) throw new Error("Disposisi tidak ditemukan.");
 
-    const allowed =
-      user.role==="ROOT_ADMIN" ||
-      String(d.to_user_id)===String(user.id) ||
-      String(d.from_user_id)===String(user.id) ||
-      String(d.current_owner_user_id||"")===String(user.id);
-
-    if(!allowed)
-      throw new Error("Tidak berhak menambah lampiran.");
+    if(!(await mayAccessDisposition(user,params.id,true)))throw new Error("Tidak berhak menambah lampiran.");
 
     const form=await request.formData();
     const file=form.get("file");

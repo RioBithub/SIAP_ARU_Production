@@ -74,10 +74,11 @@ export default function DashboardClient(){
     </>}
 
     <div className="page-head" style={{marginTop:18}}><div><h2>Persuratan & Disposisi</h2><p>Status operasional surat bulan berjalan.</p></div></div>
+    <a href="/letters/incoming?view=awareness" className="notice workflow-awareness"><b>Surat Masuk untuk Diketahui</b><span>{Number(letters.unread_incoming||0)} surat belum Anda tandai sudah dibaca. Membaca tidak mengubah ACC.</span><span>Buka daftar →</span></a>
     <div className="stats stats-five">
       <div className="stat"><div className="stat-label">Surat Masuk Bulan Ini</div><div className="stat-value">{Number(letters.incoming_total||0)}</div><div className="stat-sub">Registrasi tersimpan</div></div>
       <div className="stat"><div className="stat-label">Nota Dinas Bulan Ini</div><div className="stat-value">{Number(letters.internal_total||0)}</div><div className="stat-sub">Dokumen Staff ke manajemen</div></div>
-      <div className="stat"><div className="stat-label">Menunggu Approval</div><div className="stat-value">{Number(letters.waiting_approval||0)}</div><div className="stat-sub">Manager / Direksi</div></div>
+      <div className="stat"><div className="stat-label">Menunggu Approval</div><div className="stat-value">{Number(letters.waiting_approval||0)}</div><div className="stat-sub">Finance / Manager / Direksi</div></div>
       <div className="stat"><div className="stat-label">Disposisi Unseen</div><div className="stat-value">{Number(disp.unseen||0)}</div><div className="stat-sub">Belum dibuka penerima</div></div>
       <div className="stat"><div className="stat-label">Disposisi Aktif</div><div className="stat-value">{Number(disp.active||0)}</div><div className="stat-sub">Sedang ditindaklanjuti</div></div>
     </div>
