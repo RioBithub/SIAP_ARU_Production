@@ -4,6 +4,9 @@ import { FormEvent,useEffect,useMemo,useState } from "react";
 import type { SessionUser } from "@/lib/types";
 import Modal from "@/components/Modal";
 import StatusBadge from "@/components/StatusBadge";
+import { dispositionTargetRoles } from "@/lib/workflow-policy";
+import { assertUploadSelection } from "@/lib/upload-policy";
+import { ROLE_LABELS } from "@/lib/types";
 
 const size=(n:number)=>
   n<1024*1024
@@ -12,6 +15,8 @@ const size=(n:number)=>
 
 const actionLabel=(a:string)=>({
   CREATE:"Disposisi dibuat",
+  ADD_NOTE:"Catatan / Lampiran",
+  RESEND:"Tugas dikirim ulang",
   SEEN:"Dilihat",
   START:"Mulai ditindaklanjuti",
   SUBMIT_RESULT:"Hasil dikirim",
@@ -38,13 +43,6 @@ type ProcessAction={
   tone?:"primary"|"success"|"danger";
 };
 
-function allowedTargetRoles(role:string){
-  if(role==="PRESIDENT_DIRECTOR") return ["DIRECTOR_OPS","MANAGER","FINANCE","STAFF"];
-  if(role==="DIRECTOR_OPS") return ["MANAGER","FINANCE","STAFF"];
-  if(role==="MANAGER") return ["FINANCE","STAFF"];
-  if(role==="ROOT_ADMIN") return ["PRESIDENT_DIRECTOR","DIRECTOR_OPS","MANAGER","FINANCE","STAFF"];
-  return [];
-}
 
 function canDisposeLetter(l:any){
   if(l.direction==="OUTGOING") return l.status==="ISSUED";
@@ -52,6 +50,7 @@ function canDisposeLetter(l:any){
 }
 
 function reviewButtonLabel(d:any){
+  if(d.review_step_index!=null&&d.review_step_total)return Number(d.review_step_index)+1<Number(d.review_step_total)?"Setujui & Teruskan":"Setujui & Selesaikan";
   if(d.status==="REVIEW_MANAGER") return "Setujui & Selesaikan";
   if(d.status==="REVIEW_DIROPS"){
     return d.from_role==="PRESIDENT_DIRECTOR"
@@ -71,6 +70,9 @@ export default function DispositionsClient({user}:{user:SessionUser}){
   const [error,setError]=useState("");
   const [message,setMessage]=useState("");
   const [createFiles,setCreateFiles]=useState<File[]>([]);
+  const [parentTask,setParentTask]=useState<any>(null);
+  const [assigneeId,setAssigneeId]=useState("");
+  const [managerId,setManagerId]=useState("");
   const [createBusy,setCreateBusy]=useState(false);
   const [detail,setDetail]=useState<any>(null);
   const [detailOpen,setDetailOpen]=useState(false);
@@ -80,7 +82,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
   const [q,setQ]=useState("");
   const [status,setStatus]=useState("");
 
-  const canCreate=["ROOT_ADMIN","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR"].includes(user.role);
+  const canCreate=["ROOT_ADMIN","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR","FINANCE"].includes(user.role);
 
   async function load(){
     try{
@@ -110,6 +112,8 @@ export default function DispositionsClient({user}:{user:SessionUser}){
       setOpen(true);
     }
     void load();
+    const taskId=new URLSearchParams(window.location.search).get("task_id");
+    if(taskId)void openDetail(taskId);
   },[]);
 
   const filtered=useMemo(()=>rows.filter(d=>{
@@ -122,60 +126,36 @@ export default function DispositionsClient({user}:{user:SessionUser}){
   }),[rows,q,status]);
 
   const targetUsers=useMemo(()=>{
-    const allowed=allowedTargetRoles(user.role);
+    const allowed=dispositionTargetRoles(user.role);
     return users.filter(u=>u.id!==user.id && allowed.includes(u.role));
   },[users,user.id,user.role]);
 
+  useEffect(()=>{setManagerId(letters.find(l=>l.id===selectedLetterId)?.routing_target_user_id||"")},[selectedLetterId,letters]);
+
+  const needsManager=!parentTask&&(user.role==="FINANCE"||(["PRESIDENT_DIRECTOR","DIRECTOR_OPS"].includes(user.role)&&["FINANCE","STAFF"].includes(users.find(u=>u.id===assigneeId)?.role)));
+
+  function selectFiles(files:File[],kind:"create"|"process"){
+    try{assertUploadSelection(files);if(kind==="create")setCreateFiles(files);else setProcessFiles(files);setError("");}
+    catch(e){if(kind==="create")setCreateFiles(files);else setProcessFiles(files);setError(e instanceof Error?e.message:"Lampiran tidak valid.");}
+  }
+
+  function createChild(d:any){
+    setParentTask(d);setSelectedLetterId(d.letter_id);setAssigneeId("");setCreateFiles([]);setDetailOpen(false);setError("");setOpen(true);
+  }
+
   async function create(e:FormEvent<HTMLFormElement>){
-    e.preventDefault();
-    setCreateBusy(true);
-    setError("");
-
+    e.preventDefault();setError("");
+    const form=new FormData(e.currentTarget);
+    if(parentTask)form.set("parent_id",parentTask.id);
     try{
-      const form=new FormData(e.currentTarget);
-      const payload:Record<string,string>={};
-      form.forEach((value,key)=>{
-        if(typeof value==="string") payload[key]=value;
-      });
-
-      const r=await fetch("/api/dispositions",{
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify(payload)
-      });
-
-      const j=await r.json();
-
-      if(!r.ok){
-        setError(j.error||"Gagal membuat disposisi.");
-        return;
-      }
-
-      let uploaded=0;
-
-      for(const file of createFiles.slice(0,5)){
-        const fd=new FormData();
-        fd.set("file",file);
-
-        const ur=await fetch(`/api/dispositions/${j.data.id}/attachments`,{
-          method:"POST",
-          body:fd
-        });
-
-        if(ur.ok) uploaded++;
-      }
-
-      setOpen(false);
-      setCreateFiles([]);
-      setSelectedLetterId("");
-      setMessage(`Disposisi berhasil dikirim${uploaded?` dengan ${uploaded} lampiran`:""}.`);
-      await load();
-
-    }catch(e){
-      setError(e instanceof Error?e.message:"Gagal membuat disposisi.");
-    }finally{
-      setCreateBusy(false);
-    }
+      assertUploadSelection(createFiles);setCreateBusy(true);
+      createFiles.forEach(file=>form.append("files",file));
+      const r=await fetch("/api/dispositions",{method:"POST",body:form});const j=await r.json();
+      if(!r.ok)throw new Error(j.error||"Gagal membuat disposisi.");
+      setOpen(false);setCreateFiles([]);setSelectedLetterId("");setParentTask(null);setAssigneeId("");
+      setMessage(`Disposisi berhasil dikirim${j.data.attachments?` dengan ${j.data.attachments} lampiran`:""}.`);await load();
+    }catch(e){setError(e instanceof Error?e.message:"Gagal membuat disposisi.");}
+    finally{setCreateBusy(false);}
   }
 
   async function openDetail(id:string){
@@ -220,11 +200,12 @@ export default function DispositionsClient({user}:{user:SessionUser}){
         return;
       }
 
+      assertUploadSelection(processFiles);
       const fd=new FormData();
       fd.set("action",process.action);
       fd.set("note",note);
 
-      processFiles.slice(0,5).forEach(x=>fd.append("files",x));
+      processFiles.forEach(x=>fd.append("files",x));
 
       const r=await fetch(`/api/dispositions/${process.id}/actions`,{
         method:"POST",
@@ -255,50 +236,6 @@ export default function DispositionsClient({user}:{user:SessionUser}){
     }
   }
 
-  async function quickAction(d:any,action:string){
-    const fd=new FormData();
-    fd.set("action",action);
-
-    const r=await fetch(`/api/dispositions/${d.id}/actions`,{
-      method:"POST",
-      body:fd
-    });
-
-    const j=await r.json();
-
-    if(!r.ok){
-      setError(j.error||"Proses gagal.");
-      return;
-    }
-
-    setMessage(action==="SEEN"?"Disposisi ditandai sudah dilihat.":"Tindak lanjut dimulai.");
-    await load();
-    if(detailOpen) await openDetail(d.id);
-  }
-
-  async function uploadGeneral(id:string,files:File[]){
-    for(const file of files.slice(0,5)){
-      const fd=new FormData();
-      fd.set("file",file);
-
-      const r=await fetch(`/api/dispositions/${id}/attachments`,{
-        method:"POST",
-        body:fd
-      });
-
-      const j=await r.json();
-
-      if(!r.ok){
-        setError(j.error||"Upload gagal.");
-        return;
-      }
-    }
-
-    setMessage("Lampiran disposisi berhasil ditambahkan.");
-    await load();
-    if(detailOpen) await openDetail(id);
-  }
-
   function actionButtons(d:any){
     const owns=
       user.role==="ROOT_ADMIN" ||
@@ -310,14 +247,14 @@ export default function DispositionsClient({user}:{user:SessionUser}){
 
     if(d.status==="UNSEEN"){
       out.push(
-        <button key="seen" className="btn btn-secondary" onClick={()=>quickAction(d,"SEEN")}>Seen</button>,
-        <button key="start" className="btn btn-primary" onClick={()=>quickAction(d,"START")}>Mulai</button>
+        <button key="seen" className="btn btn-secondary" onClick={()=>startProcess(d,"SEEN","Tandai Sudah Dibaca",false,"success")}>Sudah Dibaca</button>,
+        <button key="start" className="btn btn-primary" onClick={()=>startProcess(d,"START","Mulai Tindak Lanjut",false,"success")}>Mulai</button>
       );
     }
 
     if(d.status==="SEEN"){
       out.push(
-        <button key="start" className="btn btn-primary" onClick={()=>quickAction(d,"START")}>Mulai</button>
+        <button key="start" className="btn btn-primary" onClick={()=>startProcess(d,"START","Mulai Tindak Lanjut",false,"success")}>Mulai</button>
       );
     }
 
@@ -329,7 +266,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
       );
     }
 
-    if(["REVIEW_MANAGER","REVIEW_DIROPS","REVIEW_DIRUT"].includes(d.status)){
+    if(["REVIEW_FINANCE","REVIEW_MANAGER","REVIEW_DIROPS","REVIEW_DIRUT","REVIEW_ROOT"].includes(d.status)){
       out.push(
         <button key="approve" className="btn btn-success" onClick={()=>startProcess(d,"APPROVE_RESULT",reviewButtonLabel(d),false,"success")}>
           {reviewButtonLabel(d)}
@@ -344,11 +281,13 @@ export default function DispositionsClient({user}:{user:SessionUser}){
        (user.role==="ROOT_ADMIN" || String(d.to_user_id)===String(user.id))){
       out.push(
         <button key="return-task" className="btn btn-secondary" onClick={()=>startProcess(d,"RETURN_TASK","Kembalikan Disposisi",true,"danger")}>
-          Return
+          Kembalikan Tugas
         </button>
       );
     }
 
+    if(d.status==="RETURNED"&&(user.role==="ROOT_ADMIN"||d.from_user_id===user.id))out.push(<button key="resend" className="btn btn-primary" onClick={()=>startProcess(d,"RESEND","Kirim Ulang Tugas",true,"success")}>Kirim Ulang Tugas</button>);
+    if(d.status==="IN_PROGRESS"&&d.to_user_id===user.id&&canCreate)out.push(<button key="delegate" className="btn btn-secondary" onClick={()=>createChild(d)}>Teruskan sebagai Tugas Lanjutan</button>);
     return out;
   }
 
@@ -366,7 +305,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
       </div>
 
       {canCreate&&
-        <button className="btn btn-primary" onClick={()=>{setOpen(true);setCreateFiles([])}}>
+        <button className="btn btn-primary" onClick={()=>{setParentTask(null);setAssigneeId("");setError("");setOpen(true);setCreateFiles([])}}>
           + Buat Disposisi
         </button>
       }
@@ -374,8 +313,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
 
     <div className="notice" style={{marginBottom:13}}>
       <b>Alur:</b> dokumen harus sudah disetujui terlebih dahulu.
-      Dirut dapat memberi tugas langsung ke Dirops/Manager/Staff/Finance.
-      Jika Dirut memberi tugas ke level di bawah Dirops, hasil otomatis naik ke <b>Dirops → Dirut</b>.
+      Dirut, Dirops, dan Manager dapat menugaskan Finance/Staff sesuai kewenangan. Finance dapat menugaskan Staff. Hasil tugas mengikuti jalur review yang ditampilkan; tugas lanjutan harus diselesaikan sebelum hasil tugas asal dikirim.
       Disposisi dari Dirops kembali ke Dirops untuk review; disposisi dari Manager kembali ke Manager.
     </div>
 
@@ -397,9 +335,11 @@ export default function DispositionsClient({user}:{user:SessionUser}){
         <option>UNSEEN</option>
         <option>SEEN</option>
         <option>IN_PROGRESS</option>
+        <option>REVIEW_FINANCE</option>
         <option>REVIEW_MANAGER</option>
         <option>REVIEW_DIROPS</option>
         <option>REVIEW_DIRUT</option>
+        <option>REVIEW_ROOT</option>
         <option>COMPLETED</option>
         <option>RETURNED</option>
       </select>
@@ -467,11 +407,13 @@ export default function DispositionsClient({user}:{user:SessionUser}){
 
     {open&&
       <Modal
-        title="Buat Disposisi"
-        subtitle="Disposisi dibuat dari dokumen yang sudah selesai approval."
+        title={parentTask?"Buat Tugas Lanjutan":"Buat Disposisi"}
+        subtitle={parentTask?"Hasil tugas lanjutan kembali kepada Anda sebelum diteruskan melalui tugas asal.":"Disposisi dibuat dari dokumen yang sudah selesai approval."}
         onClose={()=>!createBusy&&setOpen(false)}
       >
         <form onSubmit={create} className="form-grid">
+          {error&&<div className="error field full">{error}</div>}
+          {parentTask&&<div className="notice field full"><b>Bagian dari tugas:</b> {parentTask.instruction}</div>}
 
           <div className="field full">
             <label>Dokumen</label>
@@ -481,6 +423,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
               required
               value={selectedLetterId}
               onChange={e=>setSelectedLetterId(e.target.value)}
+              disabled={Boolean(parentTask)}
             >
               <option value="">Pilih dokumen...</option>
 
@@ -495,6 +438,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
               )}
             </select>
 
+            {parentTask&&<input type="hidden" name="letter_id" value={selectedLetterId}/>}
             <span className="hint">
               Surat masuk/Nota Dinas: setelah APPROVED. Surat keluar: setelah ISSUED.
             </span>
@@ -502,7 +446,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
 
           <div className="field">
             <label>Diteruskan Kepada</label>
-            <select className="select" name="to_user_id" required>
+            <select className="select" name="to_user_id" required value={assigneeId} onChange={e=>setAssigneeId(e.target.value)}>
               <option value="">Pilih PIC...</option>
               {targetUsers.map(u=>
                 <option key={u.id} value={u.id}>
@@ -512,6 +456,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
             </select>
           </div>
 
+          {needsManager&&<div className="field full"><label>Manager Pemeriksa Hasil</label><select className="select" name="manager_user_id" value={managerId} onChange={e=>setManagerId(e.target.value)} required><option value="">Pilih Manager...</option>{users.filter(u=>u.role==="MANAGER").map(u=><option key={u.id} value={u.id}>{u.name}{u.unit_name?` — ${u.unit_name}`:""}</option>)}</select><span className="hint">Hasil dari Finance/Staff melewati Manager ini sebelum naik ke pemberi tugas atau direksi.</span></div>}
           <div className="field">
             <label>Visibility</label>
             <select className="select" name="visibility" defaultValue="ROUTE">
@@ -552,9 +497,9 @@ export default function DispositionsClient({user}:{user:SessionUser}){
               type="file"
               multiple
               accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.txt,.csv"
-              onChange={e=>setCreateFiles(Array.from(e.target.files||[]).slice(0,5))}
+              onChange={e=>selectFiles(Array.from(e.target.files||[]),"create")}
             />
-            <span className="hint">Maks. 10 MB/file.</span>
+            <span className="hint">Maksimal 5 file, 10 MB/file dan total 50 MB sebelum kompresi. Lampiran dikompresi bila hasilnya lebih kecil.</span>
           </div>
 
           <div className="field full modal-actions">
@@ -581,6 +526,9 @@ export default function DispositionsClient({user}:{user:SessionUser}){
         subtitle={`Dari ${detail.disposition.from_name} → PIC ${detail.disposition.to_name}`}
         onClose={()=>setDetailOpen(false)}
       >
+        {error&&<div className="error" style={{marginBottom:12}}>{error}</div>}
+        {detail.parent&&<div className="notice" style={{marginBottom:12}}><b>Tugas Asal:</b> {detail.parent.instruction}<button className="btn btn-secondary" onClick={()=>void openDetail(detail.parent.id)}>Buka Tugas Asal</button></div>}
+        {detail.reviewers?.length>0&&<section className="review-route"><b>Jalur Pemeriksaan Hasil</b><ol>{detail.reviewers.map((r:any)=><li key={r.step_order}><b>{r.name}</b><span>{ROLE_LABELS[r.reviewer_role as keyof typeof ROLE_LABELS]}</span></li>)}</ol></section>}
         <div className="grid-2">
           <div>
             <div className="kpi-list">
@@ -624,6 +572,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
 
             <div style={{display:"flex",gap:7,flexWrap:"wrap",marginTop:12}}>
               {actionButtons(detail.disposition)}
+              {detail.can_contribute&&<button className="btn btn-secondary" onClick={()=>startProcess(detail.disposition,"ADD_NOTE","Tambah Catatan / Lampiran",false,"success")}>Tambah Catatan / Lampiran</button>}
             </div>
 
             <div className="card" style={{boxShadow:"none",marginTop:14}}>
@@ -641,7 +590,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
                       <b>{a.original_name}</b>
                       <span style={{display:"block"}}>
                         {size(Number(a.original_size))}
-                        {a.is_compressed?" • compressed":""}
+                        {a.is_compressed?" • dikompresi":""}
                         {" • "}{a.uploaded_by_name}
                       </span>
                     </div>
@@ -656,28 +605,14 @@ export default function DispositionsClient({user}:{user:SessionUser}){
                   <div className="empty">Belum ada lampiran umum.</div>
                 }
 
-                {(user.role==="ROOT_ADMIN" ||
-                  detail.disposition.to_user_id===user.id ||
-                  detail.disposition.from_user_id===user.id ||
-                  detail.disposition.current_owner_user_id===user.id)&&
-                  <label className="btn btn-secondary" style={{marginTop:10}}>
-                    + Tambah Lampiran
-                    <input
-                      hidden
-                      type="file"
-                      multiple
-                      onChange={async e=>{
-                        await uploadGeneral(detail.disposition.id,Array.from(e.target.files||[]));
-                        e.currentTarget.value="";
-                      }}
-                    />
-                  </label>
-                }
+                {detail.can_contribute&&<button className="btn btn-secondary" style={{marginTop:10}} onClick={()=>startProcess(detail.disposition,"ADD_NOTE","Tambah Catatan / Lampiran",false,"success")}>+ Tambah Catatan / Lampiran</button>}
+
               </div>
             </div>
           </div>
 
           <div>
+            {detail.children?.length>0&&<section className="child-tasks"><h3>Tugas Lanjutan</h3><p className="muted">Semua tugas lanjutan harus selesai diperiksa sebelum Anda mengirim hasil tugas asal.</p>{detail.children.map((c:any)=><div className="child-task" key={c.id}><b>{c.to_name}</b><p>{c.instruction}</p><StatusBadge status={c.status}/>{c.result_note&&<p>Hasil: {c.result_note}</p>}<button className="btn btn-secondary" onClick={()=>void openDetail(c.id)}>Lihat Tugas & Lampiran</button></div>)}</section>}
             <h3 style={{fontSize:13}}>Riwayat Proses</h3>
             <p className="muted" style={{fontSize:11}}>
               Seluruh Seen, Mulai, Kirim Hasil, Review, Return, catatan, dan lampiran proses tercatat.
@@ -705,7 +640,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
                               <b>{f.original_name}</b>
                               <span style={{display:"block"}}>
                                 {size(Number(f.original_size))}
-                                {f.is_compressed?" • compressed":""}
+                                {f.is_compressed?" • dikompresi":""}
                               </span>
                             </div>
 
@@ -732,6 +667,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
         onClose={()=>!processBusy&&setProcess(null)}
       >
         <form className="form-grid" onSubmit={submitProcess}>
+          {error&&<div className="error field full">{error}</div>}
           <div className="field full">
             <label>
               {process.requiredNote?"Catatan / Hasil (wajib)":"Catatan Proses (opsional)"}
@@ -760,7 +696,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
               type="file"
               multiple
               accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.txt,.csv"
-              onChange={e=>setProcessFiles(Array.from(e.target.files||[]).slice(0,5))}
+              onChange={e=>selectFiles(Array.from(e.target.files||[]),"process")}
             />
           </div>
 

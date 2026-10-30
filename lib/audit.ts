@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { db } from "@/lib/db";
+import type { PoolConnection } from "mysql2/promise";
 
 export async function auditLog(params: {
   userId?: string | null;
@@ -8,13 +9,14 @@ export async function auditLog(params: {
   entityId?: string | null;
   metadata?: Record<string, unknown> | null;
   request?: Request;
+  conn?: PoolConnection;
 }) {
   const { userId = null, action, entityType, entityId = null, metadata = null, request } = params;
   const ip = request?.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
     || request?.headers.get("x-real-ip")
     || null;
   const ua = request?.headers.get("user-agent")?.slice(0, 500) || null;
-  await db.execute(
+  await (params.conn || db).execute(
     `INSERT INTO siap_audit_logs
       (user_id,action,entity_type,entity_id,metadata_json,ip_address,user_agent)
      VALUES (?,?,?,?,?,?,?)`,

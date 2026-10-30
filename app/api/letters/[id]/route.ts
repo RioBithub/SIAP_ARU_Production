@@ -4,27 +4,14 @@ import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { auditLog } from "@/lib/audit";
 import { str } from "@/lib/http";
+import { mayAccessLetter } from "@/lib/letter-access";
 
 export const runtime = "nodejs";
-
-async function mayAccess(userId:string, role:string, letterId:string) {
-  if (role==="ROOT_ADMIN") return true;
-  const [rows] = await db.query<RowDataPacket[]>(
-    `SELECT 1 FROM siap_letters l
-     WHERE l.id=? AND (
-       l.is_public=1 OR l.created_by=? OR l.current_owner_user_id=? OR (l.current_owner_user_id IS NULL AND l.\`current_role\`=?)
-       OR EXISTS(SELECT 1 FROM siap_dispositions d WHERE d.letter_id=l.id AND (d.to_user_id=? OR d.from_user_id=?))
-       OR EXISTS(SELECT 1 FROM siap_letter_actions a WHERE a.letter_id=l.id AND a.actor_user_id=?)
-     ) LIMIT 1`,
-    [letterId,userId,userId,role,userId,userId,userId]
-  );
-  return Boolean(rows[0]);
-}
 
 export async function GET(_:Request,{params}:{params:{id:string}}) {
   const user=await getCurrentUser();
   if(!user) return NextResponse.json({ok:false,error:"Unauthorized"},{status:401});
-  if(!(await mayAccess(user.id,user.role,params.id))) return NextResponse.json({ok:false,error:"Forbidden"},{status:403});
+  if(!(await mayAccessLetter(user,params.id))) return NextResponse.json({ok:false,error:"Forbidden"},{status:403});
   const [letters]=await db.query<RowDataPacket[]>(
     `SELECT l.*,
       u.name creator_name,
@@ -52,8 +39,12 @@ export async function GET(_:Request,{params}:{params:{id:string}}) {
      FROM siap_attachments a
      JOIN siap_users ua ON ua.id=a.uploaded_by
      LEFT JOIN siap_letter_actions la ON la.id=a.letter_action_id
-     WHERE a.letter_id=? ORDER BY a.created_at ASC`,[params.id]);
-  return NextResponse.json({ok:true,data:{letter:letters[0],actions,attachments}});
+     WHERE a.letter_id=? AND a.disposition_id IS NULL ORDER BY a.created_at ASC`,[params.id]);
+  const [readers] = await db.query<RowDataPacket[]>(
+    `SELECT r.user_id,u.name,u.role,DATE_FORMAT(r.first_read_at,'%Y-%m-%dT%H:%i:%sZ') first_read_at
+     FROM siap_letter_reads r JOIN siap_users u ON u.id=r.user_id WHERE r.letter_id=? ORDER BY r.first_read_at ASC`,[params.id]);
+  const canContribute = await mayAccessLetter(user,params.id,true);
+  return NextResponse.json({ok:true,data:{letter:letters[0],actions,attachments,readers,can_contribute:canContribute}});
 }
 
 export async function PATCH(request:Request,{params}:{params:{id:string}}) {
@@ -62,7 +53,7 @@ export async function PATCH(request:Request,{params}:{params:{id:string}}) {
   const [rows]=await db.query<RowDataPacket[]>(`SELECT * FROM siap_letters WHERE id=? LIMIT 1`,[params.id]);
   const letter=rows[0];
   if(!letter) return NextResponse.json({ok:false,error:"Surat tidak ditemukan."},{status:404});
-  const editable = user.role==="ROOT_ADMIN" || (letter.created_by===user.id && ["DRAFT","RETURNED_STAFF"].includes(String(letter.status))) || (user.role==="STAFF" && String(letter.status)==="RETURNED_STAFF");
+  const editable = user.role==="ROOT_ADMIN" || (letter.created_by===user.id && ["DRAFT","RETURNED_STAFF"].includes(String(letter.status)));
   if(!editable) return NextResponse.json({ok:false,error:"Surat tidak dapat diedit pada tahap ini."},{status:403});
   try{
     const b=await request.json();

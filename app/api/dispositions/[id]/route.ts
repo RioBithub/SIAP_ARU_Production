@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { mayAccessDisposition } from "@/lib/disposition-access";
 
 export const runtime="nodejs";
 
@@ -31,43 +32,7 @@ export async function GET(_:Request,{params}:{params:{id:string}}){
   if(!d)
     return NextResponse.json({ok:false,error:"Disposisi tidak ditemukan."},{status:404});
 
-  if(user.role!=="ROOT_ADMIN"){
-    const direct =
-      String(d.from_user_id)===String(user.id) ||
-      String(d.to_user_id)===String(user.id) ||
-      String(d.current_owner_user_id||"")===String(user.id);
-
-    let allowed=direct || String(d.visibility)==="PUBLIC";
-
-    if(!allowed){
-      const [acted]=await db.query<RowDataPacket[]>(
-        `SELECT 1 FROM siap_disposition_actions
-         WHERE disposition_id=? AND actor_user_id=?
-         LIMIT 1`,
-        [params.id,user.id]
-      );
-      allowed=Boolean(acted[0]);
-    }
-
-    if(!allowed && String(d.visibility)==="ROUTE"){
-      const [route]=await db.query<RowDataPacket[]>(
-        `SELECT 1
-         FROM siap_dispositions
-         WHERE letter_id=?
-           AND (
-             from_user_id=?
-             OR to_user_id=?
-             OR current_owner_user_id=?
-           )
-         LIMIT 1`,
-        [d.letter_id,user.id,user.id,user.id]
-      );
-      allowed=Boolean(route[0]);
-    }
-
-    if(!allowed)
-      return NextResponse.json({ok:false,error:"Forbidden"},{status:403});
-  }
+  if(!(await mayAccessDisposition(user,params.id))) return NextResponse.json({ok:false,error:"Forbidden"},{status:403});
 
   const [actions]=await db.query<RowDataPacket[]>(
     `SELECT a.*,u.name AS actor_name,u.role AS actor_role
@@ -89,8 +54,15 @@ export async function GET(_:Request,{params}:{params:{id:string}}){
     [params.id]
   );
 
-  return NextResponse.json({
-    ok:true,
-    data:{disposition:d,actions,attachments}
-  });
+  const [reviewers]=await db.query<RowDataPacket[]>(`SELECT r.step_order,r.user_id,r.reviewer_role,u.name FROM siap_disposition_reviewers r JOIN siap_users u ON u.id=r.user_id WHERE r.disposition_id=? ORDER BY r.step_order`,[params.id]);
+  d.review_step_total=reviewers.length;
+  const [childRows]=await db.query<RowDataPacket[]>(`SELECT c.id,c.instruction,c.status,c.result_note,u.name to_name FROM siap_dispositions c JOIN siap_users u ON u.id=c.to_user_id WHERE c.parent_id=? ORDER BY c.created_at`,[params.id]);
+  const children=[];
+  for(const child of childRows)if(await mayAccessDisposition(user,String(child.id)))children.push(child);
+  let parent=null;
+  if(d.parent_id&&await mayAccessDisposition(user,String(d.parent_id))){
+    const [parents]=await db.query<RowDataPacket[]>("SELECT id,instruction,status FROM siap_dispositions WHERE id=?",[d.parent_id]);parent=parents[0]||null;
+  }
+  const canContribute=await mayAccessDisposition(user,params.id,true);
+  return NextResponse.json({ok:true,data:{disposition:d,actions,attachments,reviewers,children,parent,can_contribute:canContribute}});
 }
