@@ -1,30 +1,19 @@
 import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { getCurrentUser } from "@/lib/auth";
-import { db } from "@/lib/db";
+import { db, withTransaction } from "@/lib/db";
 import { auditLog } from "@/lib/audit";
-import { str } from "@/lib/http";
+import { dateOnly, required, str } from "@/lib/http";
+import { getBusinessDocumentDetails, getBusinessDocumentRow, saveBusinessDocument } from "@/lib/business-document-data";
+import { isBusinessDocument, isInvoice } from "@/lib/business-documents";
+import { letterAccess } from "@/lib/letter-access";
 
 export const runtime = "nodejs";
-
-async function mayAccess(userId:string, role:string, letterId:string) {
-  if (role==="ROOT_ADMIN") return true;
-  const [rows] = await db.query<RowDataPacket[]>(
-    `SELECT 1 FROM siap_letters l
-     WHERE l.id=? AND (
-       l.is_public=1 OR l.created_by=? OR l.current_owner_user_id=? OR (l.current_owner_user_id IS NULL AND l.\`current_role\`=?)
-       OR EXISTS(SELECT 1 FROM siap_dispositions d WHERE d.letter_id=l.id AND (d.to_user_id=? OR d.from_user_id=?))
-       OR EXISTS(SELECT 1 FROM siap_letter_actions a WHERE a.letter_id=l.id AND a.actor_user_id=?)
-     ) LIMIT 1`,
-    [letterId,userId,userId,role,userId,userId,userId]
-  );
-  return Boolean(rows[0]);
-}
 
 export async function GET(_:Request,{params}:{params:{id:string}}) {
   const user=await getCurrentUser();
   if(!user) return NextResponse.json({ok:false,error:"Unauthorized"},{status:401});
-  if(!(await mayAccess(user.id,user.role,params.id))) return NextResponse.json({ok:false,error:"Forbidden"},{status:403});
+  const access = letterAccess(user);
   const [letters]=await db.query<RowDataPacket[]>(
     `SELECT l.*,
       u.name creator_name,
@@ -41,8 +30,12 @@ export async function GET(_:Request,{params}:{params:{id:string}}) {
      LEFT JOIN siap_users rt ON rt.id=l.routing_target_user_id
      LEFT JOIN siap_number_formats nf ON nf.id=l.number_format_id
      LEFT JOIN siap_number_ledger nl ON nl.letter_id=l.id
-     WHERE l.id=? LIMIT 1`,[params.id]);
-  if(!letters[0]) return NextResponse.json({ok:false,error:"Surat tidak ditemukan."},{status:404});
+     WHERE l.id=? AND ${access.clause} LIMIT 1`,[params.id,...access.params]);
+  if (!letters[0]) {
+    return user.role === "ROOT_ADMIN"
+      ? NextResponse.json({ ok: false, error: "Surat tidak ditemukan." }, { status: 404 })
+      : NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
+  }
   const [actions]=await db.query<RowDataPacket[]>(
     `SELECT a.*,u.name actor_name FROM siap_letter_actions a JOIN siap_users u ON u.id=a.actor_user_id
      WHERE a.letter_id=? ORDER BY a.created_at ASC`,[params.id]);
@@ -53,36 +46,70 @@ export async function GET(_:Request,{params}:{params:{id:string}}) {
      JOIN siap_users ua ON ua.id=a.uploaded_by
      LEFT JOIN siap_letter_actions la ON la.id=a.letter_action_id
      WHERE a.letter_id=? ORDER BY a.created_at ASC`,[params.id]);
-  return NextResponse.json({ok:true,data:{letter:letters[0],actions,attachments}});
+  const letter = letters[0];
+  const business = isBusinessDocument(letter.document_type)
+    ? await getBusinessDocumentDetails(user, params.id, letter.document_type)
+    : undefined;
+  return NextResponse.json({ok:true,data:{letter,actions,attachments,business}});
 }
 
-export async function PATCH(request:Request,{params}:{params:{id:string}}) {
-  const user=await getCurrentUser();
-  if(!user) return NextResponse.json({ok:false,error:"Unauthorized"},{status:401});
-  const [rows]=await db.query<RowDataPacket[]>(`SELECT * FROM siap_letters WHERE id=? LIMIT 1`,[params.id]);
-  const letter=rows[0];
-  if(!letter) return NextResponse.json({ok:false,error:"Surat tidak ditemukan."},{status:404});
-  const editable = user.role==="ROOT_ADMIN" || (letter.created_by===user.id && ["DRAFT","RETURNED_STAFF"].includes(String(letter.status))) || (user.role==="STAFF" && String(letter.status)==="RETURNED_STAFF");
-  if(!editable) return NextResponse.json({ok:false,error:"Surat tidak dapat diedit pada tahap ini."},{status:403});
-  try{
-    const b=await request.json();
-    const conf=str(b.confidentiality,20).toUpperCase();
-    const publicValue=typeof b.is_public==="boolean"?(b.is_public?1:0):null;
-    await db.execute(
-      `UPDATE siap_letters SET
-       subject=COALESCE(NULLIF(?,''),subject),
-       sender=COALESCE(NULLIF(?,''),sender),
-       recipient=COALESCE(NULLIF(?,''),recipient),
-       summary=?,
-       notes=?,
-       confidentiality=COALESCE(NULLIF(?,''),confidentiality),
-       is_public=CASE WHEN COALESCE(NULLIF(?,''),confidentiality)='RAHASIA' THEN 0 ELSE COALESCE(?,is_public) END,
-       updated_by=?
-       WHERE id=?`,
-      [str(b.subject,500),str(b.sender,255),str(b.recipient,255),str(b.summary,5000)||null,str(b.notes,5000)||null,
-       conf,conf,publicValue,user.id,params.id]
-    );
-    await auditLog({userId:user.id,action:"LETTER_UPDATE",entityType:"LETTER",entityId:params.id,request});
-    return NextResponse.json({ok:true});
-  }catch(e){return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Update gagal."},{status:400});}
+export async function PATCH(request: Request, { params }: { params: { id: string } }) {
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+
+  try {
+    const body = await request.json();
+    const result = await withTransaction(async conn => {
+      const [rows] = await conn.query<RowDataPacket[]>("SELECT * FROM siap_letters WHERE id=? LIMIT 1 FOR UPDATE", [params.id]);
+      const letter = rows[0];
+      if (!letter) return 404;
+
+      const business = isBusinessDocument(letter.document_type);
+      const managed = business && (isInvoice(letter.document_type) || Boolean(await getBusinessDocumentRow(params.id, conn)));
+      const draft = ["DRAFT", "RETURNED_STAFF"].includes(letter.status);
+      const owner = letter.created_by === user.id;
+      const root = user.role === "ROOT_ADMIN";
+      const editable = managed
+        ? draft && (owner || root)
+        : root || (owner && draft) || (user.role === "STAFF" && letter.status === "RETURNED_STAFF");
+      if (!editable) return 403;
+
+      const conf = str(body.confidentiality, 20).toUpperCase();
+      const publicValue = typeof body.is_public === "boolean" ? Number(body.is_public) : null;
+      const incoming = business && letter.direction === "INCOMING";
+      const externalNumber = incoming && body.external_number !== undefined
+        ? required(body.external_number, "Nomor dokumen asal", 255) : null;
+      const receivedDate = incoming && body.received_date !== undefined
+        ? dateOnly(body.received_date, "Tanggal diterima") : null;
+
+      await conn.execute(
+        `UPDATE siap_letters SET
+         subject=COALESCE(NULLIF(?,''),subject),
+         sender=COALESCE(NULLIF(?,''),sender),
+         recipient=COALESCE(NULLIF(?,''),recipient),
+         external_number=COALESCE(?,external_number),received_date=COALESCE(?,received_date),
+         summary=?,notes=?,
+         confidentiality=COALESCE(NULLIF(?,''),confidentiality),
+         is_public=CASE WHEN COALESCE(NULLIF(?,''),confidentiality)='RAHASIA' THEN 0 ELSE COALESCE(?,is_public) END,
+         updated_by=? WHERE id=?`,
+        [str(body.subject, 500), str(body.sender, 255), str(body.recipient, 255), externalNumber, receivedDate,
+          business && body.summary === undefined ? letter.summary : str(body.summary, 5000) || null,
+          business && body.notes === undefined ? letter.notes : str(body.notes, 5000) || null,
+          conf, conf, publicValue, user.id, params.id],
+      );
+      await saveBusinessDocument(conn, user, {
+        id: params.id, document_type: letter.document_type, direction: letter.direction,
+      }, body.business, false);
+      await auditLog({
+        userId: user.id, action: "LETTER_UPDATE", entityType: "LETTER", entityId: params.id,
+        metadata: business ? { documentType: letter.document_type } : null, request,
+      }, conn);
+      return 200;
+    });
+    if (result === 404) return NextResponse.json({ ok: false, error: "Surat tidak ditemukan." }, { status: 404 });
+    if (result === 403) return NextResponse.json({ ok: false, error: "Surat tidak dapat diedit pada tahap ini." }, { status: 403 });
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "Update gagal." }, { status: 400 });
+  }
 }
