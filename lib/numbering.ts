@@ -109,8 +109,8 @@ export async function reserveOutgoingNumber(params: {
   return { ledgerId, rendered, seqBase, variant, displayNumber: variant > 0 ? `${seqBase}.${variant}` : String(seqBase) };
 }
 
-export async function cancelLedgerForLetter(letterId: string, reason: string) {
-  await db.execute(
+export async function cancelLedgerForLetter(letterId: string, reason: string, conn: Pick<PoolConnection, "execute"> = db) {
+  await conn.execute(
     `UPDATE siap_number_ledger SET status='CANCELLED', cancelled_reason=?
      WHERE letter_id=? AND status<>'CANCELLED'`,
     [reason.slice(0, 1000), letterId]

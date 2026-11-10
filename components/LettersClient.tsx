@@ -4,6 +4,8 @@ import { FormEvent,useEffect,useMemo,useState } from "react";
 import type { SessionUser } from "@/lib/types";
 import Modal from "@/components/Modal";
 import StatusBadge from "@/components/StatusBadge";
+import BusinessDocumentFields, { BusinessDocumentSummary } from "@/components/BusinessDocumentFields";
+import { INVOICE_INCOMING, INVOICE_OUTGOING, SPK_INCOMING, SPK_OUTGOING, isBusinessDocument, isInvoice } from "@/lib/business-documents";
 
 type Direction="INCOMING"|"OUTGOING"|"INTERNAL";
 type Props={direction:Direction;user:SessionUser};
@@ -18,7 +20,10 @@ const DOC_LABELS:Record<string,string>={
   SURAT_OPERASIONAL:"Bagian Operasional",
   PURCHASE_ORDER:"Purchase Order (PO)",
   SURAT_UMUM:"Surat Keluar Umum",
-  SURAT_PERINTAH_KERJA:"Surat Perintah Kerja (SPK)",
+  [SPK_OUTGOING]:"Surat Perintah Kerja (SPK)",
+  [SPK_INCOMING]:"Surat Perintah Kerja (SPK) Masuk",
+  [INVOICE_INCOMING]:"Invoice Masuk",
+  [INVOICE_OUTGOING]:"Invoice Keluar",
   SURAT_MASUK_UMUM:"Surat Masuk Umum",
   NOTA_DINAS:"Nota Dinas",
   LEMBAR_PENGANTAR:"Lembar Pengantar"
@@ -36,6 +41,7 @@ const DOC_TYPE_CLASS:Record<string,string>={
   LEMBAR_PENGANTAR:"letter-nota"
 };
 const docTypeClass=(t:any)=>DOC_TYPE_CLASS[String(t||"")]||"letter-default";
+const outgoingNumber=(r:any)=>isBusinessDocument(r.document_type)?(r.letter_number||r.display_number):r.display_number;
 const currentTargetLabel=(r:any)=>{
   if(r.current_owner_name){
     return `${r.current_owner_name}${r.current_owner_unit?` — ${r.current_owner_unit}`:""}`;
@@ -60,7 +66,13 @@ const FALLBACK_LETTER_TYPE_OPTIONS=[
   ["SURAT_DIREKSI","Surat Keluar Direksi"],
   ["SURAT_OPERASIONAL","Bagian Operasional"],
   ["SURAT_UMUM","Surat Keluar Umum"],
-  ["SURAT_PERINTAH_KERJA","Surat Perintah Kerja (SPK)"]
+  [SPK_OUTGOING,"Surat Perintah Kerja (SPK)"],
+  [INVOICE_OUTGOING,"Invoice Keluar"]
+] as const;
+const INCOMING_TYPE_OPTIONS=[
+  ["SURAT_MASUK_UMUM","Surat Masuk Umum"],
+  [SPK_INCOMING,"Surat Perintah Kerja (SPK) Masuk"],
+  [INVOICE_INCOMING,"Invoice Masuk"],
 ] as const;
 const humanAction=(a:string)=>({SUBMIT:"Diajukan",APPROVE:"Disetujui & Diteruskan",APPROVE_FINAL:"Disetujui / Selesai",RETURN:"Dikembalikan",ISSUE:"Diterbitkan",CANCEL:"Dibatalkan",COMPLETE:"Diselesaikan",RESPONSE:"Tanggapan",CREATE_OUTGOING:"Draft Dibuat",CREATE_INTERNAL:"Nota Dinas Dibuat",REGISTER_INCOMING:"Surat Diregistrasi",IMPORT_LEGACY_EXCEL:"Diimpor dari Excel Lama"}[a]||a.replace(/_/g," "));
 
@@ -86,7 +98,8 @@ export default function LettersClient({direction,user}:Props){
   const [detail,setDetail]=useState<any>(null);
   const [detailOpen,setDetailOpen]=useState(false);
   const [editOpen,setEditOpen]=useState(false);
-  const [outType,setOutType]=useState("SURAT_UMUM");
+  const [createType,setCreateType]=useState(direction==="INCOMING"?"SURAT_MASUK_UMUM":"SURAT_UMUM");
+  const [createBusy,setCreateBusy]=useState(false);
   const [pendingAction,setPendingAction]=useState<PendingAction|null>(null);
   const [actionFiles,setActionFiles]=useState<File[]>([]);
   const [actionBusy,setActionBusy]=useState(false);
@@ -105,16 +118,21 @@ export default function LettersClient({direction,user}:Props){
     setLoading(false);
   }
   async function loadFormats(){
-    if(direction!=="OUTGOING")return;
-    const [formatR,typeR]=await Promise.all([
-      fetch("/api/admin/number-formats"),
-      fetch("/api/admin/document-types?direction=OUTGOING&active=1")
-    ]);
-    const [formatJ,typeJ]=await Promise.all([formatR.json(),typeR.json()]);
-    if(formatR.ok&&formatJ.ok)setFormats(formatJ.data.filter((x:any)=>x.is_active));
-    if(typeR.ok&&typeJ.ok){
-      setDocumentTypes(typeJ.data);
-      if(typeJ.data.length && !typeJ.data.some((x:any)=>x.code===outType)) setOutType(typeJ.data[0].code);
+    if(direction==="INTERNAL")return;
+    const typeRequest = fetch("/api/admin/document-types?direction=" + direction + "&active=1");
+    const formatRequest = direction==="OUTGOING" ? fetch("/api/admin/number-formats") : Promise.resolve(null);
+    const [typeResponse, formatResponse] = await Promise.all([typeRequest, formatRequest]);
+    if (typeResponse.ok) {
+      const result = await typeResponse.json();
+      if (result.ok) {
+        setDocumentTypes(result.data);
+        setCreateType(current => result.data.length && current !== "__CUSTOM__" && !result.data.some((type:any)=>type.code===current)
+          ? result.data[0].code : current);
+      }
+    }
+    if (formatResponse?.ok) {
+      const result = await formatResponse.json();
+      if (result.ok) setFormats(result.data.filter((format:any)=>format.is_active));
     }
   }
 
@@ -129,45 +147,105 @@ export default function LettersClient({direction,user}:Props){
     }
   }
 
-  useEffect(()=>{load();loadFormats();loadReviewers()},[direction]);
+  useEffect(()=>{
+    void load();
+    void loadFormats();
+    void loadReviewers();
+    const linkedId=new URLSearchParams(window.location.search).get("letter_id");
+    if(linkedId) void openDetail(linkedId);
+  },[direction]);
 
   const canCreate=direction==="INTERNAL"
     ? ["ROOT_ADMIN","STAFF","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR","FINANCE"].includes(user.role)
     : ["ROOT_ADMIN","STAFF"].includes(user.role);
-  const outgoingTypeOptions=(documentTypes.length
+  const typeOptions=documentTypes.length
     ? documentTypes.map((x:any)=>[x.code,x.name] as [string,string])
-    : [...FALLBACK_LETTER_TYPE_OPTIONS]);
+    : direction==="INCOMING"?INCOMING_TYPE_OPTIONS:FALLBACK_LETTER_TYPE_OPTIONS;
+  const businessForm=isBusinessDocument(createType);
+  const incomingFileRequired=direction==="INCOMING"&&businessForm;
+  const signedSpkIssue=Boolean(pendingAction?.issue&&detail?.letter.document_type===SPK_OUTGOING&&detail?.business?.managed);
+  const actionFileLimit=signedSpkIssue?4:5;
 
   function formObject(fd:FormData){
     const out:any={};
     fd.forEach((value,key)=>{ out[key]=value; });
+    if(typeof out.business==="string") out.business=JSON.parse(out.business);
     return out;
   }
 
-  async function create(e:FormEvent<HTMLFormElement>){
-    e.preventDefault();setError("");setMessage("");
-    const fd=new FormData(e.currentTarget);const obj=formObject(fd);
-    obj.direction=direction;obj.is_public=obj.is_public==="on";
-    const file=fd.get("original_file") as File|null;
-    const additionalFiles=fd.getAll("additional_files").filter((x):x is File=>x instanceof File&&x.size>0).slice(0,5);
-    delete obj.original_file; delete obj.additional_files;
-    const res=await fetch("/api/letters",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(obj)});
-    const j=await res.json();if(!res.ok){setError(j.error);return}
-    if(file&&file.size>0){
-      const up=new FormData();up.set("file",file);up.set("kind","ORIGINAL");
-      const ur=await fetch(`/api/letters/${j.data.id}/attachments`,{method:"POST",body:up});const uj=await ur.json();
-      if(!ur.ok){setError(`Dokumen dibuat, tetapi upload dokumen utama gagal: ${uj.error}`);}
+  async function create(event: FormEvent<HTMLFormElement>){
+    event.preventDefault();
+    if (createBusy) return;
+    setError("");
+    setMessage("");
+    const form = new FormData(event.currentTarget);
+    const original = form.get("original_file");
+    const file = original && typeof original !== "string" && original.size > 0 ? original : null;
+    const extras = form.getAll("additional_files").filter((value): value is File => typeof value !== "string" && value.size > 0);
+    if (extras.length > 5) {
+      setError("Maksimal 5 lampiran tambahan.");
+      return;
     }
-    for(const extra of additionalFiles){
-      const up=new FormData();up.set("file",extra);up.set("kind","ADDITIONAL");
-      const ur=await fetch(`/api/letters/${j.data.id}/attachments`,{method:"POST",body:up});const uj=await ur.json();
-      if(!ur.ok){setError(`Dokumen dibuat, tetapi salah satu lampiran tambahan gagal: ${uj.error}`);break;}
+    if ([...extras, ...(file ? [file] : [])].some(value => value.size > 10 * 1024 * 1024)) {
+      setError("Ukuran maksimal 10 MB per file.");
+      return;
     }
-    setCreateOpen(false);
-    setMessage(direction==="INCOMING"?"Surat masuk berhasil diregistrasi dan dikirim ke Manager yang dipilih.":direction==="INTERNAL"?"Nota Dinas tersimpan sebagai draft. Buka detail untuk mengajukan ke Manager.":"Draft surat keluar dan nomor berhasil dibuat. Buka detail untuk mengajukan ke Manager reviewer.");
-    await load();
-  }
+    setCreateBusy(true);
+    try {
+      const body = formObject(form);
+      body.direction = direction;
+      body.is_public = body.is_public === "on";
+      delete body.original_file;
+      delete body.additional_files;
 
+      const atomicOriginal = isBusinessDocument(body.document_type) && file;
+      const metadata = JSON.stringify(body);
+      const upload = new FormData();
+      if (atomicOriginal) {
+        upload.set("metadata", metadata);
+        upload.set("original_file", atomicOriginal);
+      }
+      const response = await fetch("/api/letters", atomicOriginal
+        ? { method: "POST", body: upload }
+        : { method: "POST", headers: { "Content-Type": "application/json" }, body: metadata });
+      const result = await response.json();
+      if (!response.ok || !result.ok) {
+        setError(result.error || "Gagal menyimpan dokumen.");
+        return;
+      }
+
+      const failedFiles: string[] = [];
+      const pending = [
+        ...(file && !atomicOriginal ? [{ kind: "ORIGINAL", file }] : []),
+        ...extras.map(value => ({ kind: "ADDITIONAL", file: value })),
+      ];
+      for (const item of pending) {
+        try {
+          const attachment = new FormData();
+          attachment.set("file", item.file);
+          attachment.set("kind", item.kind);
+          const uploaded = await fetch("/api/letters/" + result.data.id + "/attachments", { method: "POST", body: attachment });
+          if (!uploaded.ok) failedFiles.push(item.file.name);
+        } catch {
+          failedFiles.push(item.file.name);
+        }
+      }
+
+      setCreateOpen(false);
+      setMessage(direction==="INCOMING"?"Dokumen masuk diregistrasi dan dikirim ke Manager."
+        :direction==="INTERNAL"?"Nota Dinas tersimpan sebagai draft. Buka detail untuk mengajukan ke Manager."
+        :"Draft dan nomor dokumen tersimpan. Buka detail untuk mengajukan ke Manager reviewer.");
+      await load();
+      if (failedFiles.length) {
+        await openDetail(result.data.id);
+        setError("Dokumen tersimpan. Unggah ulang file berikut dari detail dokumen: " + failedFiles.join(", "));
+      }
+    } catch {
+      setError("Gagal memuat hasil penyimpanan. Cek daftar dokumen sebelum mencoba kembali.");
+    } finally {
+      setCreateBusy(false);
+    }
+  }
 
   async function importExcel(e:FormEvent<HTMLFormElement>){
     e.preventDefault();
@@ -184,11 +262,12 @@ export default function LettersClient({direction,user}:Props){
 
   async function openDetail(id:string){
     const r=await fetch(`/api/letters/${id}`);const j=await r.json();if(!r.ok){setError(j.error);return}
+    if(j.data.letter.direction!==direction){setError("Arah dokumen tidak sesuai dengan halaman ini.");return;}
     setDetail(j.data);setDetailOpen(true);
   }
 
   function startAction(action:string,label:string,requiredComment=false,issue=false){
-    setActionFiles([]);
+    setActionFiles([]);setError("");
     setPendingAction({action,label,requiredComment,issue});
   }
 
@@ -203,25 +282,50 @@ export default function LettersClient({direction,user}:Props){
     fd.set("action",pendingAction.action);
     fd.set("comment",comment);
     if(pendingAction.issue) fd.set("issued_date",String(form.get("issued_date")||today()));
-    actionFiles.slice(0,5).forEach(f=>fd.append("files",f));
-    const r=await fetch(`/api/letters/${detail.letter.id}/actions`,{method:"POST",body:fd});
-    const j=await r.json();
-    setActionBusy(false);
-    if(!r.ok){setError(j.error);return;}
-    const label=pendingAction.label;
-    setPendingAction(null);setDetailOpen(false);setMessage(`${label} berhasil${actionFiles.length?` dengan ${actionFiles.length} lampiran proses`:""}.`);await load();
+    if(signedSpkIssue){
+      const signed = form.get("signed_file");
+      if (!signed || typeof signed === "string" || signed.size === 0) {
+        setError("Unggah dokumen SPK yang sudah ditandatangani.");setActionBusy(false);return;
+      }
+      fd.set("signed_file",signed);
+      fd.set("signature_method",String(form.get("signature_method")||""));
+    }
+    actionFiles.slice(0,actionFileLimit).forEach(f=>fd.append("files",f));
+    try {
+      const response = await fetch("/api/letters/" + detail.letter.id + "/actions", { method: "POST", body: fd });
+      const result = await response.json();
+      if (!response.ok || !result.ok) {
+        setError(result.error || "Proses dokumen gagal.");
+        return;
+      }
+      setPendingAction(null);
+      setDetailOpen(false);
+      setMessage(pendingAction.label + " berhasil.");
+      await load();
+    } catch {
+      setError("Gagal memuat hasil aksi. Buka kembali detail untuk memeriksa status dokumen.");
+    } finally {
+      setActionBusy(false);
+    }
   }
 
   async function upload(kind:"ORIGINAL"|"ADDITIONAL",file:File){
     const fd=new FormData();fd.set("file",file);fd.set("kind",kind);
-    const r=await fetch(`/api/letters/${detail.letter.id}/attachments`,{method:"POST",body:fd});const j=await r.json();
-    if(!r.ok){setError(j.error);return}
-    await openDetail(detail.letter.id);setMessage("Lampiran berhasil diunggah.");
+    setError("");
+    try {
+      const response = await fetch("/api/letters/" + detail.letter.id + "/attachments", { method: "POST", body: fd });
+      const result = await response.json();
+      if(!response.ok){setError(result.error||"Lampiran gagal diunggah.");return;}
+      await openDetail(detail.letter.id);setMessage("Lampiran berhasil diunggah.");
+    } catch {
+      setError("Gagal memuat hasil unggah. Periksa daftar lampiran sebelum mencoba kembali.");
+    }
   }
 
   async function editLetter(e:FormEvent<HTMLFormElement>){
     e.preventDefault();
     if(!detail)return;
+    setError("");
     const fd=new FormData(e.currentTarget);
     const body=formObject(fd);
     body.is_public=body.is_public==="on";
@@ -233,6 +337,10 @@ export default function LettersClient({direction,user}:Props){
 
   function canEditDetail(){
     if(!detail)return false;
+    if(detail.business?.managed||isInvoice(detail.letter.document_type)){
+      return ["DRAFT","RETURNED_STAFF"].includes(detail.letter.status)
+        && (user.role==="ROOT_ADMIN"||detail.letter.created_by===user.id);
+    }
     return user.role==="ROOT_ADMIN"
       || (detail.letter.created_by===user.id && ["DRAFT","RETURNED_STAFF"].includes(detail.letter.status))
       || (user.role==="STAFF" && detail.letter.status==="RETURNED_STAFF");
@@ -295,7 +403,9 @@ export default function LettersClient({direction,user}:Props){
     }
 
     if(d==="OUTGOING" && s==="READY_TO_ISSUE" && (user.role==="ROOT_ADMIN"||detail.letter.created_by===user.id)) {
-      buttons.push(["ISSUE","Terbitkan Surat","btn-success",false,true]);
+      const label=detail.letter.document_type===SPK_OUTGOING?"Terbitkan SPK"
+        :detail.letter.document_type===INVOICE_OUTGOING?"Terbitkan Invoice":"Terbitkan Surat";
+      buttons.push(["ISSUE",label,"btn-success",false,true]);
     }
     if(!["CANCELLED","COMPLETED","ISSUED"].includes(s)&&(user.role==="ROOT_ADMIN"||detail.letter.created_by===user.id)) {
       buttons.push(["CANCEL","Batalkan","btn-danger",true]);
@@ -327,14 +437,14 @@ export default function LettersClient({direction,user}:Props){
     {message&&<div className="success" style={{marginBottom:12}}>{message}</div>}{error&&<div className="error" style={{marginBottom:12}}>{error}</div>}
     <div className="toolbar letter-filter-bar">
       <div className="search"><span>⌕</span><input value={q} onChange={e=>setQ(e.target.value)} placeholder={direction==="INTERNAL"?"Cari perihal, tujuan, pembuat...":"Cari nomor, perihal, pengirim/tujuan..."} onKeyDown={e=>e.key==="Enter"&&load()}/></div>
-      {direction==="OUTGOING"&&<select className="select filter-select" value={docType} onChange={e=>setDocType(e.target.value)}><option value="">Semua jenis surat</option>{outgoingTypeOptions.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>}
+      {direction!=="INTERNAL"&&<select aria-label="Filter jenis dokumen" className="select filter-select" value={docType} onChange={e=>setDocType(e.target.value)}><option value="">Semua jenis dokumen</option>{typeOptions.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>}
       <select className="select filter-select" value={status} onChange={e=>setStatus(e.target.value)}><option value="">Semua status</option><option>DRAFT</option><option>MANAGER_REVIEW</option><option>DIRECTOR_OPS_REVIEW</option><option>PRESIDENT_DIRECTOR_REVIEW</option><option>READY_TO_ISSUE</option><option>APPROVED</option><option>ISSUED</option><option>DISPOSED</option><option>IN_PROGRESS</option><option>COMPLETED</option><option>RETURNED_STAFF</option><option>CANCELLED</option></select>
       <select className="select filter-select filter-year" value={year} onChange={e=>setYear(e.target.value)}><option value="">Semua tahun</option>{yearOptions.map(y=><option key={y} value={y}>{y}</option>)}</select>
       <button className="btn btn-primary" onClick={() => load()}>Terapkan</button>
       {(q||status||docType||year)&&<button className="btn btn-secondary" onClick={resetFilters}>Reset</button>}
     </div>
     <div className="card"><div className="table-wrap"><table className="table"><thead><tr>{direction!=="INTERNAL"&&<th>{direction==="INCOMING"?"Nomor Surat":"No."}</th>}<th>Jenis Dokumen</th><th>Perihal</th><th>{direction==="INCOMING"?"Pengirim":"Tujuan"}</th><th>Tanggal</th><th>Status</th><th>Tujuan Saat Ini</th><th>Sifat</th><th>Lampiran</th><th></th></tr></thead><tbody>
-      {!loading&&rows.map(r=><tr key={r.id} className={`letter-row ${docTypeClass(r.document_type)}`}>{direction!=="INTERNAL"&&<td className="mono"><b>{direction==="OUTGOING"?(r.display_number||"-"):(r.external_number||"-")}</b></td>}<td><span className={`badge letter-type-badge ${docTypeClass(r.document_type)}`}>{docLabel(r)}</span></td><td><b>{r.subject}</b>{r.legacy_import_key&&<span className="muted" style={{display:"block",fontSize:9.5,marginTop:3}}>Data Excel lama{r.legacy_number_conflict?" • cek nomor historis":""}</span>}</td><td>{direction==="INCOMING"?r.sender:r.recipient}</td><td>{fmtDate(r.letter_date)}</td><td><StatusBadge status={r.status}/></td><td><b style={{fontSize:11}}>{currentTargetLabel(r)}</b></td><td><span className={`badge ${r.confidentiality==="RAHASIA"?"red":r.confidentiality==="PENTING"?"orange":"gray"}`}>{r.confidentiality}</span></td><td>{r.attachment_count}</td><td><button className="btn btn-secondary" onClick={()=>openDetail(r.id)}>Detail</button></td></tr>)}
+      {!loading&&rows.map(r=><tr key={r.id} className={`letter-row ${docTypeClass(r.document_type)}`}>{direction!=="INTERNAL"&&<td className="mono"><b>{direction==="OUTGOING"?(outgoingNumber(r)||"-"):(r.external_number||"-")}</b></td>}<td><span className={`badge letter-type-badge ${docTypeClass(r.document_type)}`}>{docLabel(r)}</span></td><td><b>{r.subject}</b>{r.legacy_import_key&&<span className="muted" style={{display:"block",fontSize:9.5,marginTop:3}}>Data Excel lama{r.legacy_number_conflict?" • cek nomor historis":""}</span>}</td><td>{direction==="INCOMING"?r.sender:r.recipient}</td><td>{fmtDate(r.letter_date)}</td><td><StatusBadge status={r.status}/></td><td><b style={{fontSize:11}}>{currentTargetLabel(r)}</b></td><td><span className={`badge ${r.confidentiality==="RAHASIA"?"red":r.confidentiality==="PENTING"?"orange":"gray"}`}>{r.confidentiality}</span></td><td>{r.attachment_count}</td><td><button className="btn btn-secondary" onClick={()=>openDetail(r.id)}>Detail</button></td></tr>)}
       {!loading&&rows.length===0&&<tr><td colSpan={direction==="INTERNAL"?9:10}><div className="empty">Belum ada data.</div></td></tr>}
       {loading&&<tr><td colSpan={direction==="INTERNAL"?9:10}><div className="empty">Memuat...</div></td></tr>}
     </tbody></table></div></div>
@@ -349,10 +459,20 @@ export default function LettersClient({direction,user}:Props){
       </form>
     </Modal>}
 
-    {createOpen&&<Modal title={direction==="INCOMING"?"Registrasi Surat Masuk":direction==="INTERNAL"?"Buat Nota Dinas":"Buat Draft Surat Keluar"} subtitle={direction==="INTERNAL"?"Nota Dinas digunakan Staff untuk menyampaikan laporan/permohonan ke Manager/atasan.":direction==="OUTGOING"?"Draft disusun Staff. Nomor direservasi per jenis surat dan seluruh proses tercatat di audit log.":"Semua perubahan tercatat di audit log."} onClose={()=>setCreateOpen(false)}>
+    {createOpen&&<Modal title={direction==="INCOMING"?"Registrasi Surat Masuk":direction==="INTERNAL"?"Buat Nota Dinas":"Buat Draft Surat Keluar"} subtitle={direction==="INTERNAL"?"Nota Dinas digunakan Staff untuk menyampaikan laporan/permohonan ke Manager/atasan.":direction==="OUTGOING"?"Draft disusun Staff. Nomor direservasi per jenis surat dan seluruh proses tercatat di audit log.":"Semua perubahan tercatat di audit log."} onClose={()=>!createBusy&&setCreateOpen(false)}>
       <form onSubmit={create} className="form-grid">
-        <div className="field"><label>Jenis Dokumen</label>{direction==="OUTGOING"?<select className="select" name="document_type" required value={outType} onChange={e=>setOutType(e.target.value)}>{outgoingTypeOptions.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>:direction==="INTERNAL"?<><input type="hidden" name="document_type" value="NOTA_DINAS"/><div className="input" style={{display:"flex",alignItems:"center",background:"var(--surface-2)"}}>Nota Dinas</div></>:<input className="input" name="document_type" defaultValue="SURAT_MASUK_UMUM" required/>}</div>
-        {direction==="OUTGOING"&&<div className="field"><label>Format Nomor</label><select className="select" name="number_format_id" required><option value="">Pilih format...</option>{formats.filter((f:any)=>f.document_type===outType).map((f:any)=><option value={f.id} key={f.id}>{f.name}</option>)}</select></div>}
+        {error&&<div className="field full error" role="alert">{error}</div>}
+        <div className="field">
+          <label>Jenis Dokumen</label>
+          {direction==="INTERNAL"
+            ? <><input type="hidden" name="document_type" value="NOTA_DINAS"/><div className="input">Nota Dinas</div></>
+            : <select aria-label="Jenis Dokumen" className="select" name={createType==="__CUSTOM__"?undefined:"document_type"} required value={createType} onChange={e=>setCreateType(e.target.value)}>
+                {typeOptions.map(([value,label])=><option key={value} value={value}>{label}</option>)}
+                {direction==="INCOMING"&&<option value="__CUSTOM__">Jenis lainnya</option>}
+              </select>}
+        </div>
+        {direction==="INCOMING"&&createType==="__CUSTOM__"&&<div className="field"><label>Nama jenis dokumen</label><input aria-label="Nama jenis dokumen" className="input" name="document_type" maxLength={80} required/></div>}
+        {direction==="OUTGOING"&&<div className="field"><label>Format Nomor</label><select aria-label="Format Nomor" key={createType} className="select" name="number_format_id" required><option value="">Pilih format...</option>{formats.filter((f:any)=>f.document_type===createType).map((f:any)=><option value={f.id} key={f.id}>{f.name}</option>)}</select></div>}
         {direction==="OUTGOING"&&<div className="field"><label>Nomor Dasar Custom <span className="muted">(opsional)</span></label><input className="input" type="number" min="1" step="1" name="custom_number_base" placeholder="Otomatis"/><span className="hint">Contoh 135. Jika 135 sudah terpakai pada jenis/tahun yang sama, sistem memakai 135.1, 135.2, dst.</span></div>}
         {direction==="INCOMING"&&<>
           <div className="field"><label>Nomor Surat Asal</label><input className="input" name="external_number" required/></div>
@@ -406,16 +526,17 @@ export default function LettersClient({direction,user}:Props){
         {direction==="INCOMING"&&<div className="field"><label>Tanggal Diterima</label><input className="input" type="date" name="received_date" defaultValue={today()} required/></div>}
         <div className="field full"><label>Perihal</label><input className="input" name="subject" required/></div>
         <div className="field"><label>Sifat Dokumen</label><select className="select" name="confidentiality" defaultValue="BIASA"><option>BIASA</option><option>PENTING</option><option>RAHASIA</option></select></div>
-        <div className="field"><label>Visibilitas</label><label style={{display:"flex",alignItems:"center",gap:8,fontWeight:500}}><input type="checkbox" name="is_public" defaultChecked={direction!=="INTERNAL"}/> {direction==="INTERNAL"?"Dapat dilihat lebih luas oleh user persuratan":"Public untuk user yang punya akses persuratan"}</label></div>
+        <div className="field"><label>Visibilitas</label><label style={{display:"flex",alignItems:"center",gap:8,fontWeight:500}}><input type="checkbox" key={businessForm?"private":"regular"} name="is_public" defaultChecked={direction!=="INTERNAL"&&!businessForm}/> {direction==="INTERNAL"?"Dapat dilihat lebih luas oleh user persuratan":"Public untuk user yang punya akses persuratan"}</label></div>
         <div className="field full"><label>{direction==="INTERNAL"?"Isi / Ringkasan Nota Dinas":"Ringkasan / Isi Ringkas"}</label><textarea className="textarea" name="summary"/></div>
         <div className="field full"><label>Catatan</label><textarea className="textarea" name="notes" placeholder={direction==="INTERNAL"?"Keterangan tambahan untuk Manager":"Catatan awal proses"}/></div>
-        <div className="field full"><label>{direction==="OUTGOING"?"File Draft / Dokumen Utama (opsional)":direction==="INTERNAL"?"Dokumen Utama / Pengantar (opsional)":"Surat Asli (opsional)"}</label><input className="input" type="file" name="original_file" accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg"/><span className="hint">Maksimal 10 MB. Dokumen original disimpan tanpa kompresi. Lampiran proses/tambahan dikompresi bila efektif.</span></div>
+        {businessForm&&<BusinessDocumentFields key={createType} documentType={createType} outgoing={direction==="OUTGOING"}/>}
+        <div className="field full"><label>{incomingFileRequired?"Dokumen Asli (wajib)":direction==="OUTGOING"?"File Draft / Dokumen Utama (opsional)":direction==="INTERNAL"?"Dokumen Utama / Pengantar (opsional)":"Surat Asli (opsional)"}</label><input aria-label="Dokumen asli" className="input" type="file" name="original_file" required={incomingFileRequired} accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg"/><span className="hint">Maksimal 10 MB. Dokumen original disimpan tanpa kompresi. Lampiran proses/tambahan dikompresi bila efektif.</span></div>
         <div className="field full"><label>Lampiran Tambahan <span className="muted">(opsional, maksimal 5 file)</span></label><input className="input" type="file" name="additional_files" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.txt,.csv"/><span className="hint">Lampiran tambahan maksimal 10 MB per file dan dikompresi otomatis bila hasilnya lebih kecil. Cocok untuk data pendukung, hasil telaah, atau bukti proses.</span></div>
-        <div className="field full" style={{display:"flex",justifyContent:"flex-end",gap:8,flexDirection:"row"}}><button type="button" className="btn btn-secondary" onClick={()=>setCreateOpen(false)}>Batal</button><button className="btn btn-primary">{direction==="INCOMING"?"Registrasi & Kirim ke Manager":"Simpan Draft"}</button></div>
+        <div className="field full" style={{display:"flex",justifyContent:"flex-end",gap:8,flexDirection:"row"}}><button type="button" className="btn btn-secondary" disabled={createBusy} onClick={()=>setCreateOpen(false)}>Batal</button><button className="btn btn-primary" disabled={createBusy}>{createBusy?"Menyimpan...":direction==="INCOMING"?"Registrasi & Kirim ke Manager":"Simpan Draft"}</button></div>
       </form>
     </Modal>}
 
-    {detailOpen&&detail&&<Modal title={detail.letter.subject} subtitle={direction==="OUTGOING"?`No. ${detail.letter.display_number||"-"} • ${docLabel(detail.letter)}`:direction==="INTERNAL"?`${docLabel(detail.letter)} • kepada ${detail.letter.recipient||"Manager"}`:(detail.letter.external_number||"Detail surat")} onClose={()=>setDetailOpen(false)}>
+    {detailOpen&&detail&&<Modal title={detail.letter.subject} subtitle={direction==="OUTGOING"?`No. ${outgoingNumber(detail.letter)||"-"} • ${docLabel(detail.letter)}`:direction==="INTERNAL"?`${docLabel(detail.letter)} • kepada ${detail.letter.recipient||"Manager"}`:(detail.letter.external_number||"Detail surat")} onClose={()=>setDetailOpen(false)}>
       <div className="grid-2">
         <div>
           <div className="kpi-list">
@@ -423,7 +544,7 @@ export default function LettersClient({direction,user}:Props){
             <div className="kpi-row"><span>Tujuan Saat Ini</span><b>{detail.letter.owner_name?`${detail.letter.owner_name}${detail.letter.owner_unit?` — ${detail.letter.owner_unit}`:""}`:currentTargetLabel(detail.letter)}</b></div>
             {detail.letter.routing_target_name&&<div className="kpi-row"><span>Tujuan Awal</span><b>{detail.letter.routing_target_name}{detail.letter.routing_target_unit?` — ${detail.letter.routing_target_unit}`:""}</b></div>}
             <div className="kpi-row"><span>Jenis Dokumen</span><b>{docLabel(detail.letter)}</b></div>
-            {direction==="OUTGOING"&&<div className="kpi-row"><span>Nomor Urut</span><b className="mono">{detail.letter.display_number||"-"}</b></div>}
+            {direction==="OUTGOING"&&<div className="kpi-row"><span>{detail.business?"Nomor Dokumen":"Nomor Urut"}</span><b className="mono">{outgoingNumber(detail.letter)||"-"}</b></div>}
             {direction==="INTERNAL"&&<div className="kpi-row"><span>Tujuan</span><b>{detail.letter.recipient||"-"}</b></div>}
             <div className="kpi-row"><span>Tanggal</span><b>{fmtDate(detail.letter.letter_date)}</b></div>
             {direction==="OUTGOING"&&detail.letter.issued_date&&<div className="kpi-row"><span>Tanggal Terbit</span><b>{fmtDate(detail.letter.issued_date)}</b></div>}
@@ -437,8 +558,13 @@ export default function LettersClient({direction,user}:Props){
           {direction==="OUTGOING"&&detail.letter.status==="READY_TO_ISSUE"&&<div className="success" style={{marginTop:13}}><b>ACC final selesai.</b> Surat sudah disetujui Direktur Utama dan menunggu Staff menerbitkan. Staff dapat melampirkan file final saat menekan <b>Terbitkan Surat</b>.</div>}
           {direction==="OUTGOING"&&detail.letter.status==="RETURNED_STAFF"&&<div className="error" style={{marginTop:13}}><b>Dikembalikan ke Staff.</b> Baca catatan reviewer pada riwayat, revisi draft, lalu ajukan kembali mulai dari Manager.</div>}
           <div style={{marginTop:13}} className="notice">{detail.letter.summary||"Belum ada ringkasan."}</div>
+          {detail.business&&<BusinessDocumentSummary details={detail.business} documentType={detail.letter.document_type}/>}
           <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:13}}>
-            {canEditDetail()&&<button className="btn btn-secondary" onClick={()=>setEditOpen(true)}>Edit Metadata</button>}
+            {canEditDetail()&&<button className="btn btn-secondary" onClick={()=>{setError("");setEditOpen(true)}}>Edit Metadata</button>}
+            {direction==="OUTGOING"&&detail.business?.invoice&&detail.letter.status!=="CANCELLED"&&
+              <a className="btn btn-secondary" href={"/print/letters/"+detail.letter.id} target="_blank" rel="noreferrer">Pratinjau Invoice ↗</a>}
+            {direction==="OUTGOING"&&detail.letter.document_type===SPK_OUTGOING&&detail.letter.status==="READY_TO_ISSUE"&&
+              <a className="btn btn-secondary" href={"/print/letters/"+detail.letter.id} target="_blank" rel="noreferrer">Cetak SPK untuk TTD ↗</a>}
             {canDispositionFromDetail()&&<a className="btn btn-primary" href={`/dispositions?letter_id=${detail.letter.id}`}>+ Buat Disposisi</a>}
             {actionButtons()}
           </div>
@@ -448,7 +574,21 @@ export default function LettersClient({direction,user}:Props){
             <div className="card-body">
               {generalAttachments.map((a:any)=><div className="kpi-row" key={a.id}><div><b>{a.original_name}</b><span style={{display:"block"}}>{a.attachment_kind} • {size(Number(a.original_size))}{a.is_compressed?" • compressed":""} • {a.uploaded_by_name}</span></div><a className="btn btn-secondary" href={`/api/attachments/${a.id}`} download>↓ Unduh</a></div>)}
               {!generalAttachments.length&&<div className="empty">Belum ada lampiran umum.</div>}
-              <label className="btn btn-secondary" style={{marginTop:10}}>+ Lampiran Tambahan<input hidden type="file" multiple onChange={async e=>{for(const f of Array.from(e.target.files||[]).slice(0,5)) await upload("ADDITIONAL",f);e.currentTarget.value=""}}/></label>
+              {error&&!editOpen&&!pendingAction&&<div className="error" role="alert">{error}</div>}
+              <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:10}}>
+                {(detail.letter.created_by===user.id||user.role==="ROOT_ADMIN")&&
+                  <label className="btn btn-secondary">+ Dokumen Utama<input hidden type="file" aria-label="Unggah dokumen utama" accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg" onChange={async e=>{
+                    const input=e.currentTarget;
+                    const file=input.files?.[0];
+                    if(file) await upload("ORIGINAL",file);
+                    input.value="";
+                  }}/></label>}
+                <label className="btn btn-secondary">+ Lampiran Tambahan<input hidden type="file" aria-label="Unggah lampiran tambahan" multiple onChange={async e=>{
+                  const input=e.currentTarget;
+                  for(const file of Array.from(input.files||[]).slice(0,5)) await upload("ADDITIONAL",file);
+                  input.value="";
+                }}/></label>
+              </div>
             </div>
           </div>
         </div>
@@ -464,23 +604,38 @@ export default function LettersClient({direction,user}:Props){
       </div>
     </Modal>}
 
-    {editOpen&&detail&&<Modal title="Edit Data Dokumen" subtitle="Draft/return dapat diperbaiki Staff. Root Admin selalu dapat melakukan override." onClose={()=>setEditOpen(false)}>
+    {editOpen&&detail&&<Modal title="Edit Data Dokumen" subtitle="Perbarui data dan rujukan dokumen." onClose={()=>setEditOpen(false)}>
       <form className="form-grid" onSubmit={editLetter}>
+        {error&&<div className="field full error" role="alert">{error}</div>}
         <div className="field full"><label>Perihal</label><input className="input" name="subject" defaultValue={detail.letter.subject} required/></div>
         {direction==="INCOMING"?<div className="field"><label>Asal / Pengirim</label><input className="input" name="sender" defaultValue={detail.letter.sender||""}/></div>:<div className="field"><label>Tujuan</label><input className="input" name="recipient" defaultValue={detail.letter.recipient||""}/></div>}
+        {direction==="INCOMING"&&detail.business&&<>
+          <div className="field"><label>Nomor Dokumen Asal</label><input className="input" name="external_number" defaultValue={detail.letter.external_number||""} required/></div>
+          <div className="field"><label>Tanggal Diterima</label><input className="input" type="date" name="received_date" defaultValue={String(detail.letter.received_date||"").slice(0,10)} required/></div>
+        </>}
         <div className="field"><label>Sifat</label><select className="select" name="confidentiality" defaultValue={detail.letter.confidentiality}><option>BIASA</option><option>PENTING</option><option>RAHASIA</option></select></div>
         <div className="field full"><label>Ringkasan</label><textarea className="textarea" name="summary" defaultValue={detail.letter.summary||""}/></div>
         <div className="field full"><label>Catatan</label><textarea className="textarea" name="notes" defaultValue={detail.letter.notes||""}/></div>
         <div className="field full"><label style={{display:"flex",alignItems:"center",gap:8,fontWeight:500}}><input type="checkbox" name="is_public" defaultChecked={Boolean(detail.letter.is_public)}/> Public</label><span className="hint">Dokumen RAHASIA tidak dapat dibuat public. Root Admin tetap dapat melihat seluruh data.</span></div>
+        {detail.business&&<BusinessDocumentFields documentType={detail.letter.document_type} outgoing={direction==="OUTGOING"} initial={detail.business} letterId={detail.letter.id}/>}
         <div className="field full" style={{display:"flex",flexDirection:"row",justifyContent:"flex-end",gap:8}}><button type="button" className="btn btn-secondary" onClick={()=>setEditOpen(false)}>Batal</button><button className="btn btn-primary">Simpan Perubahan</button></div>
       </form>
     </Modal>}
 
     {pendingAction&&detail&&<Modal title={pendingAction.label} subtitle="Catatan dan lampiran pada aksi ini akan tersimpan permanen pada riwayat proses dan Audit Log." onClose={()=>!actionBusy&&setPendingAction(null)}>
       <form className="form-grid" onSubmit={submitAction}>
+        {error&&<div className="field full error" role="alert">{error}</div>}
         {pendingAction.issue&&<div className="field"><label>Tanggal Terbit</label><input className="input" type="date" name="issued_date" defaultValue={today()} required/><span className="hint">Setelah diterbitkan, status surat menjadi ISSUED dan nomor ledger dikunci sebagai terbit.</span></div>}
         <div className="field full"><label>{pendingAction.requiredComment?"Catatan / Alasan (wajib)":"Catatan Proses (opsional)"}</label><textarea className="textarea" name="comment" required={pendingAction.requiredComment} placeholder={pendingAction.action==="RETURN"?"Jelaskan apa yang harus direvisi oleh Staff...":pendingAction.action==="ISSUE"?"Contoh: Surat final telah ditandatangani dan siap dikirim.":"Catatan keputusan / arahan tambahan..."}/></div>
-        <div className="field full"><label>Lampiran Proses <span className="muted">(opsional, maksimal 5 file)</span></label><input className="input" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.txt,.csv" onChange={e=>setActionFiles(Array.from(e.target.files||[]).slice(0,5))}/><span className="hint">Maksimal 10 MB per file. Lampiran proses dikompresi bila hasil kompresi lebih kecil dan tetap dapat di-download dari riwayat.</span>{actionFiles.length>0&&<div className="notice" style={{marginTop:7}}>{actionFiles.map(f=><div key={`${f.name}-${f.size}`}>{f.name} • {size(f.size)}</div>)}</div>}</div>
+        {signedSpkIssue&&<>
+          <div className="field"><label>Metode Tanda Tangan</label><select aria-label="Metode tanda tangan" className="select" name="signature_method" required defaultValue="">
+            <option value="">Pilih metode...</option><option value="DIGITAL">Digital</option><option value="BASAH">Basah</option>
+          </select></div>
+          <div className="field full"><label>SPK Bertanda Tangan</label><input aria-label="SPK bertanda tangan" className="input" type="file" name="signed_file" accept=".pdf,.jpg,.jpeg,.png" required/>
+            <span className="hint">Unggah PDF dari layanan TTD digital atau hasil pindai tanda tangan basah. Maksimal 10 MB.</span>
+          </div>
+        </>}
+        <div className="field full"><label>Lampiran Proses <span className="muted">(opsional, maksimal {actionFileLimit} file)</span></label><input className="input" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.txt,.csv" onChange={e=>setActionFiles(Array.from(e.target.files||[]).slice(0,actionFileLimit))}/><span className="hint">Maksimal 10 MB per file. Lampiran proses dikompresi bila hasil kompresi lebih kecil dan tetap dapat di-download dari riwayat.</span>{actionFiles.length>0&&<div className="notice" style={{marginTop:7}}>{actionFiles.map(f=><div key={`${f.name}-${f.size}`}>{f.name} • {size(f.size)}</div>)}</div>}</div>
         <div className="field full" style={{display:"flex",flexDirection:"row",justifyContent:"flex-end",gap:8}}><button type="button" className="btn btn-secondary" disabled={actionBusy} onClick={()=>setPendingAction(null)}>Batal</button><button className={`btn ${pendingAction.action==="RETURN"||pendingAction.action==="CANCEL"?"btn-danger":"btn-primary"}`} disabled={actionBusy}>{actionBusy?"Memproses...":pendingAction.label}</button></div>
       </form>
     </Modal>}

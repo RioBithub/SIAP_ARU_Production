@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS siap_letters (
   summary TEXT NULL,
   notes TEXT NULL,
   status VARCHAR(50) NOT NULL,
-  current_role VARCHAR(40) NULL,
+  `current_role` VARCHAR(40) NULL,
   current_owner_user_id CHAR(36) NULL,
   is_public TINYINT(1) NOT NULL DEFAULT 1,
   is_backdated TINYINT(1) NOT NULL DEFAULT 0,
