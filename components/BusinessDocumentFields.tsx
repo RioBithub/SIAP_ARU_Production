@@ -17,7 +17,7 @@ function referenceLabel(reference: DocumentReference) {
   return [directionLabel(reference.direction), reference.number, reference.subject].filter(Boolean).join(" · ");
 }
 
-function ReferencePicker({
+export function ReferencePicker({
   kind, letterId, selected, onChange, limit,
 }: {
   kind: ReferenceKind;
@@ -30,7 +30,7 @@ function ReferencePicker({
   const [options, setOptions] = useState<DocumentReference[]>([]);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
-  const label = kind === "spk" ? "SPK rujukan" : "surat pendukung";
+  const label = kind === "spk" ? "SPK rujukan" : kind === "source" ? "surat atau Nota Dinas asal" : "surat pendukung";
 
   useEffect(() => {
     const controller = new AbortController();
@@ -80,7 +80,7 @@ function ReferencePicker({
         disabled={loading || limit === 0 || (kind === "support" && selected.length >= limit)}
         onChange={event => {
           const option = available.find(item => item.id === event.target.value);
-          if (option) onChange(kind === "spk" ? [option] : [...selected, option]);
+          if (option) onChange(kind === "support" ? [...selected, option] : [option]);
         }}
       >
         <option value="">{loading ? "Memuat dokumen..." : available.length ? "Pilih dokumen..." : "Tidak ada dokumen yang cocok"}</option>

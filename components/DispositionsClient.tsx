@@ -4,6 +4,8 @@ import { FormEvent,useEffect,useMemo,useState } from "react";
 import type { SessionUser } from "@/lib/types";
 import Modal from "@/components/Modal";
 import StatusBadge from "@/components/StatusBadge";
+import { RESULT_REQUIREMENTS, type ResultRequirement } from "@/lib/correspondence-workflow";
+import type { DocumentReference } from "@/lib/business-documents";
 
 const size=(n:number)=>
   n<1024*1024
@@ -35,6 +37,7 @@ type ProcessAction={
   action:string;
   label:string;
   requiredNote?:boolean;
+  resultRequirement?:ResultRequirement;
   tone?:"primary"|"success"|"danger";
 };
 
@@ -62,11 +65,52 @@ function reviewButtonLabel(d:any){
   return "Setujui Hasil";
 }
 
+function ResultLetterField({dispositionId,required}:{dispositionId:string;required:boolean}){
+  const [query,setQuery]=useState("");
+  const [letters,setLetters]=useState<DocumentReference[]>([]);
+  const [selected,setSelected]=useState<DocumentReference|null>(null);
+  const [loading,setLoading]=useState(true);
+  const [error,setError]=useState("");
+  useEffect(()=>{
+    const controller=new AbortController();
+    setLoading(true);
+    setError("");
+    const timer=window.setTimeout(()=>{
+      const url="/api/dispositions/"+encodeURIComponent(dispositionId)+"/result-letters?q="+encodeURIComponent(query);
+      void fetch(url,{signal:controller.signal})
+        .then(async response=>{
+          const result=await response.json();
+          if(!response.ok) throw new Error(result.error||"Gagal memuat surat hasil.");
+          setLetters(result.data);
+        })
+        .catch(error=>{if(!controller.signal.aborted){setLetters([]);setError(error.message);}})
+        .finally(()=>{if(!controller.signal.aborted)setLoading(false);});
+    },180);
+    return ()=>{window.clearTimeout(timer);controller.abort();};
+  },[dispositionId,query]);
+  const choices=selected&&!letters.some(letter=>letter.id===selected.id)?[selected,...letters]:letters;
+  return <div className="field full">
+    <label>Cari Surat Keluar terbit
+      <input className="input" placeholder="Nomor atau perihal" maxLength={100} value={query} onChange={e=>setQuery(e.target.value)}
+        onKeyDown={e=>{if(e.key==="Enter")e.preventDefault();}}/>
+    </label>
+    <select aria-label="Surat Keluar hasil" className="select" name="result_letter_id" required={required}
+      value={selected?.id||""} onChange={e=>setSelected(choices.find(letter=>letter.id===e.target.value)||null)}>
+      <option value="">{loading?"Memuat surat...":choices.length?"Pilih surat hasil":"Belum ada surat hasil yang terbit"}</option>
+      {choices.map(letter=><option key={letter.id} value={letter.id}>
+        {[letter.number,letter.subject].filter(Boolean).join(" · ")}
+      </option>)}
+    </select>
+    {error&&<span className="hint" role="alert">{error}</span>}
+  </div>;
+}
+
 export default function DispositionsClient({user}:{user:SessionUser}){
   const [rows,setRows]=useState<any[]>([]);
   const [users,setUsers]=useState<any[]>([]);
   const [letters,setLetters]=useState<any[]>([]);
   const [selectedLetterId,setSelectedLetterId]=useState("");
+  const [parent,setParent]=useState<{id:string;subject:string;result_requirement:ResultRequirement}|null>(null);
   const [open,setOpen]=useState(false);
   const [error,setError]=useState("");
   const [message,setMessage]=useState("");
@@ -104,7 +148,10 @@ export default function DispositionsClient({user}:{user:SessionUser}){
   }
 
   useEffect(()=>{
-    const prefill=new URLSearchParams(window.location.search).get("letter_id")||"";
+    const params=new URLSearchParams(window.location.search);
+    const prefill=params.get("letter_id")||"";
+    const detailId=params.get("disposition_id");
+    if(detailId) void openDetail(detailId);
     if(prefill){
       setSelectedLetterId(prefill);
       setOpen(true);
@@ -168,6 +215,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
       setOpen(false);
       setCreateFiles([]);
       setSelectedLetterId("");
+      setParent(null);
       setMessage(`Disposisi berhasil dikirim${uploaded?` dengan ${uploaded} lampiran`:""}.`);
       await load();
 
@@ -201,7 +249,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
     tone:"primary"|"success"|"danger"="primary"
   ){
     setProcessFiles([]);
-    setProcess({id:d.id,action,label,requiredNote,tone});
+    setProcess({id:d.id,action,label,requiredNote,tone,resultRequirement:d.result_requirement});
   }
 
   async function submitProcess(e:FormEvent<HTMLFormElement>){
@@ -223,6 +271,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
       const fd=new FormData();
       fd.set("action",process.action);
       fd.set("note",note);
+      if(process.action==="SUBMIT_RESULT") fd.set("result_letter_id",String(form.get("result_letter_id")||""));
 
       processFiles.slice(0,5).forEach(x=>fd.append("files",x));
 
@@ -329,7 +378,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
       );
     }
 
-    if(["REVIEW_MANAGER","REVIEW_DIROPS","REVIEW_DIRUT"].includes(d.status)){
+    if(["REVIEW_MANAGER","REVIEW_DIROPS","REVIEW_DIRUT","REVIEW_ROOT"].includes(d.status)){
       out.push(
         <button key="approve" className="btn btn-success" onClick={()=>startProcess(d,"APPROVE_RESULT",reviewButtonLabel(d),false,"success")}>
           {reviewButtonLabel(d)}
@@ -366,7 +415,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
       </div>
 
       {canCreate&&
-        <button className="btn btn-primary" onClick={()=>{setOpen(true);setCreateFiles([])}}>
+        <button className="btn btn-primary" onClick={()=>{setParent(null);setSelectedLetterId("");setOpen(true);setCreateFiles([])}}>
           + Buat Disposisi
         </button>
       }
@@ -400,6 +449,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
         <option>REVIEW_MANAGER</option>
         <option>REVIEW_DIROPS</option>
         <option>REVIEW_DIRUT</option>
+        <option value="REVIEW_ROOT">Review Root Admin</option>
         <option>COMPLETED</option>
         <option>RETURNED</option>
       </select>
@@ -472,6 +522,11 @@ export default function DispositionsClient({user}:{user:SessionUser}){
         onClose={()=>!createBusy&&setOpen(false)}
       >
         <form onSubmit={create} className="form-grid">
+          {parent&&<div className="field full notice">
+            <b>Delegasi dari</b> {parent.subject}
+            <input type="hidden" name="parent_id" value={parent.id}/>
+            <input type="hidden" name="letter_id" value={selectedLetterId}/>
+          </div>}
 
           <div className="field full">
             <label>Dokumen</label>
@@ -480,6 +535,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
               name="letter_id"
               required
               value={selectedLetterId}
+              disabled={Boolean(parent)}
               onChange={e=>setSelectedLetterId(e.target.value)}
             >
               <option value="">Pilih dokumen...</option>
@@ -535,6 +591,12 @@ export default function DispositionsClient({user}:{user:SessionUser}){
             <input className="input" type="date" name="due_date"/>
           </div>
 
+          <div className="field">
+            <label>Hasil yang Diminta</label>
+            <select aria-label="Hasil yang diminta" className="select" name="result_requirement" defaultValue={parent?.result_requirement||"SUMMARY"}>
+              {Object.entries(RESULT_REQUIREMENTS).map(([value,label])=><option key={value} value={value}>{label}</option>)}
+            </select>
+          </div>
           <div className="field full">
             <label>Instruksi / Catatan Disposisi</label>
             <textarea
@@ -600,6 +662,10 @@ export default function DispositionsClient({user}:{user:SessionUser}){
               </div>
 
               <div className="kpi-row">
+                <span>Hasil yang Diminta</span>
+                <b>{RESULT_REQUIREMENTS[(detail.disposition.result_requirement||"SUMMARY") as ResultRequirement]}</b>
+              </div>
+              <div className="kpi-row">
                 <span>Prioritas</span>
                 <b>{detail.disposition.priority}</b>
               </div>
@@ -624,6 +690,17 @@ export default function DispositionsClient({user}:{user:SessionUser}){
 
             <div style={{display:"flex",gap:7,flexWrap:"wrap",marginTop:12}}>
               {actionButtons(detail.disposition)}
+              {detail.disposition.status==="IN_PROGRESS"&&(detail.disposition.to_user_id===user.id||user.role==="ROOT_ADMIN")&&<>
+                {["STAFF","FINANCE","ROOT_ADMIN"].includes(user.role)&&
+                  <a className="btn btn-secondary" href={"/letters/outgoing?source_disposition_id="+encodeURIComponent(detail.disposition.id)}>Buat Draf Surat Hasil</a>}
+                {canCreate&&<button className="btn btn-secondary" onClick={()=>{
+                  setParent(detail.disposition);
+                  setSelectedLetterId(detail.disposition.letter_id);
+                  setCreateFiles([]);
+                  setDetailOpen(false);
+                  setOpen(true);
+                }}>Delegasikan ke PIC</button>}
+              </>}
             </div>
 
             <div className="card" style={{boxShadow:"none",marginTop:14}}>
@@ -697,6 +774,10 @@ export default function DispositionsClient({user}:{user:SessionUser}){
                       {a.note?` • ${a.note}`:""}
                     </p>
 
+                    {a.result_letter&&
+                      <a className="btn btn-secondary" href={"/letters/outgoing?letter_id="+encodeURIComponent(a.result_letter.id)}>
+                        Surat hasil · {a.result_letter.number||a.result_letter.subject}
+                      </a>}
                     {af.length>0&&
                       <div className="disposition-files">
                         {af.map((f:any)=>
@@ -753,12 +834,17 @@ export default function DispositionsClient({user}:{user:SessionUser}){
             />
           </div>
 
+          {process.action==="SUBMIT_RESULT"&&
+            <ResultLetterField dispositionId={process.id} required={process.resultRequirement==="OUTGOING_LETTER"}/>}
           <div className="field full">
-            <label>Lampiran Proses <span className="muted">(opsional, maksimal 5 file)</span></label>
+            <label>Lampiran Proses <span className="muted">
+              ({process.action==="SUBMIT_RESULT"&&process.resultRequirement==="ATTACHMENT"?"wajib":"opsional"}, maksimal 5 file)
+            </span></label>
             <input
               className="input"
               type="file"
               multiple
+              required={process.action==="SUBMIT_RESULT"&&process.resultRequirement==="ATTACHMENT"}
               accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.txt,.csv"
               onChange={e=>setProcessFiles(Array.from(e.target.files||[]).slice(0,5))}
             />

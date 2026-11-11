@@ -21,7 +21,8 @@ export async function findLetterReferences(
     where.push("l.direction IN ('INCOMING','OUTGOING') AND l.document_type IN (?,?)");
     params.push(SPK_INCOMING, SPK_OUTGOING);
   }
-  if (!options.includeCancelled) where.push("l.status <> 'CANCELLED'");
+  if (options.kind === "source") where.push("l.direction IN ('INCOMING','INTERNAL')");
+  if (!options.includeCancelled) where.push("l.status NOT IN ('CANCELLED','REJECTED')");
   if (options.exclude) {
     where.push("l.id<>?");
     params.push(options.exclude);
@@ -39,7 +40,7 @@ export async function findLetterReferences(
   const [rows] = await conn.query<(RowDataPacket & DocumentReference)[]>(
     `SELECT l.id,l.direction,COALESCE(l.letter_number,l.external_number) AS number,l.subject,l.status
     FROM siap_letters l WHERE ${where.join(" AND ")}
-    ORDER BY l.letter_date DESC,l.created_at DESC,l.id LIMIT 30`,
+    ORDER BY l.letter_date DESC,l.created_at DESC,l.id ${options.ids ? "" : "LIMIT 30"}`,
     params,
   );
   return rows;

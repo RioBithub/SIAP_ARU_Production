@@ -30,7 +30,7 @@ export function canManageUsers(role: Role) {
 }
 
 export function canRegisterIncoming(role: Role) {
-  return role === "ROOT_ADMIN" || role === "STAFF";
+  return role === "ROOT_ADMIN" || role === "STAFF" || role === "SECRETARIAT";
 }
 
 export function canCreateOutgoing(role: Role) {
@@ -38,7 +38,7 @@ export function canCreateOutgoing(role: Role) {
 }
 
 export function canCreateInternal(role: Role) {
-  return ["ROOT_ADMIN","STAFF","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR","FINANCE"].includes(role);
+  return ["ROOT_ADMIN","STAFF","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR","FINANCE","SECRETARIAT"].includes(role);
 }
 
 export function canCreateDisposition(role: Role) {

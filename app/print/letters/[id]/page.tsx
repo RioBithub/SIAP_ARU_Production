@@ -20,7 +20,8 @@ export default async function PrintDocumentPage({ params }: { params: { id: stri
   const letter = await getAccessibleLetter(user, params.id);
   if (!letter || letter.direction !== "OUTGOING" || ![SPK_OUTGOING, INVOICE_OUTGOING].includes(letter.document_type)) notFound();
   const spk = letter.document_type === SPK_OUTGOING;
-  if (spk ? letter.status !== "READY_TO_ISSUE" : letter.status === "CANCELLED") notFound();
+  const signable = letter.status === (letter.uses_secretariat ? "WAITING_SIGNATURE" : "READY_TO_ISSUE");
+  if (spk ? !signable : ["CANCELLED", "REJECTED"].includes(letter.status)) notFound();
 
   const details = await getBusinessDocumentDetails(user, letter.id, letter.document_type);
   const invoice = details.invoice;
@@ -28,7 +29,8 @@ export default async function PrintDocumentPage({ params }: { params: { id: stri
 
   const issued = letter.status === "ISSUED" || (letter.status === "COMPLETED" && Boolean(letter.issued_date));
   const documentTitle = spk ? "Surat Perintah Kerja" : "Invoice";
-  const documentStatus = spk ? "Disetujui · untuk tanda tangan" : issued ? "Terbit" : "Draf · belum diterbitkan";
+  const documentStatus = issued ? "Terbit"
+    : spk || (letter.uses_secretariat && signable) ? "Disetujui · untuk tanda tangan" : "Draf · belum diterbitkan";
   const amount = invoice && formatInvoiceAmount(invoice.total);
 
   return (

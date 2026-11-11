@@ -2,9 +2,10 @@
 import { FormEvent,useEffect,useState } from "react";
 import Modal from "@/components/Modal";
 import StatusBadge from "@/components/StatusBadge";
+import { ROLE_LABELS, type Role } from "@/lib/types";
 import { useAppDialog } from "@/components/AppDialogProvider";
 
-const roles=["ROOT_ADMIN","STAFF","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR","FINANCE"];
+const roles = Object.keys(ROLE_LABELS) as Role[];
 export default function AdminUsersClient(){
   const dialog=useAppDialog();
   const [rows,setRows]=useState<any[]>([]);const [open,setOpen]=useState(false);const [error,setError]=useState("");const [message,setMessage]=useState("");

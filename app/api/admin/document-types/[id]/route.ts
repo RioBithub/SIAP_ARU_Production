@@ -23,19 +23,25 @@ export async function PATCH(request:Request,{params}:{params:{id:string}}){
       throw new Error("Jenis bawaan sistem tidak dapat dinonaktifkan.");
     }
 
+    if (b.secretariat_review_required !== undefined &&
+        (typeof b.secretariat_review_required !== "boolean" || current.direction !== "OUTGOING")) {
+      throw new Error("Cek Sekretariat hanya dapat diatur untuk jenis Surat Keluar.");
+    }
     const name=str(b.name,150);
     const description=str(b.description,500);
     await db.execute(
       `UPDATE siap_document_types SET
        name=COALESCE(NULLIF(?,''),name),
        description=CASE WHEN ?=1 THEN ? ELSE description END,
-       is_active=COALESCE(?,is_active)
+       is_active=COALESCE(?,is_active),
+       secretariat_review_required=COALESCE(?,secretariat_review_required)
        WHERE id=?`,
       [
         name,
         b.description===undefined?0:1,
         description||null,
         typeof b.is_active==="boolean"?(b.is_active?1:0):null,
+        typeof b.secretariat_review_required === "boolean" ? Number(b.secretariat_review_required) : null,
         params.id
       ]
     );
@@ -45,7 +51,7 @@ export async function PATCH(request:Request,{params}:{params:{id:string}}){
       action:"DOCUMENT_TYPE_UPDATE",
       entityType:"DOCUMENT_TYPE",
       entityId:params.id,
-      metadata:{name:name||undefined,is_active:b.is_active},
+      metadata:{name:name||undefined,is_active:b.is_active,secretariat_review_required:b.secretariat_review_required},
       request
     });
     return NextResponse.json({ok:true});
