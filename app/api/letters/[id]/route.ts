@@ -4,9 +4,11 @@ import { getCurrentUser } from "@/lib/auth";
 import { db, withTransaction } from "@/lib/db";
 import { auditLog } from "@/lib/audit";
 import { dateOnly, required, str } from "@/lib/http";
-import { getBusinessDocumentDetails, getBusinessDocumentRow, saveBusinessDocument } from "@/lib/business-document-data";
+import { findLetterReferences, getBusinessDocumentDetails, getBusinessDocumentRow, saveBusinessDocument } from "@/lib/business-document-data";
 import { isBusinessDocument, isInvoice } from "@/lib/business-documents";
 import { letterAccess } from "@/lib/letter-access";
+import { canHandleSecretariat } from "@/lib/correspondence-workflow";
+import { outgoingSources } from "@/lib/correspondence-data";
 
 export const runtime = "nodejs";
 
@@ -45,12 +47,25 @@ export async function GET(_:Request,{params}:{params:{id:string}}) {
      FROM siap_attachments a
      JOIN siap_users ua ON ua.id=a.uploaded_by
      LEFT JOIN siap_letter_actions la ON la.id=a.letter_action_id
-     WHERE a.letter_id=? ORDER BY a.created_at ASC`,[params.id]);
-  const letter = letters[0];
+     WHERE a.letter_id=? AND a.disposition_id IS NULL ORDER BY a.created_at ASC`,[params.id]);
+  const { source_letter_id: sourceLetterId, source_disposition_id: sourceDispositionId, ...letter } = letters[0];
   const business = isBusinessDocument(letter.document_type)
     ? await getBusinessDocumentDetails(user, params.id, letter.document_type)
     : undefined;
-  return NextResponse.json({ok:true,data:{letter,actions,attachments,business}});
+  const [sourceLetter] = sourceLetterId
+    ? await findLetterReferences(user, { kind: "support", ids: [sourceLetterId], includeCancelled: true })
+    : [];
+  let sourceDisposition: { id: string } | undefined;
+  if (sourceDispositionId) {
+    const [rows] = await db.query<RowDataPacket[]>(
+      `SELECT id FROM siap_dispositions WHERE id=?
+       AND (?='ROOT_ADMIN' OR ? IN (from_user_id,to_user_id,current_owner_user_id)) LIMIT 1`,
+      [sourceDispositionId, user.role, user.id],
+    );
+    if (rows[0]) sourceDisposition = { id: rows[0].id };
+  }
+  return NextResponse.json({ok:true,data:{letter,actions,attachments,business,
+    sourceLetter, sourceDisposition, hasSourceDisposition: Boolean(sourceDispositionId), hasSourceLetter: Boolean(sourceLetterId)}});
 }
 
 export async function PATCH(request: Request, { params }: { params: { id: string } }) {
@@ -69,14 +84,18 @@ export async function PATCH(request: Request, { params }: { params: { id: string
       const draft = ["DRAFT", "RETURNED_STAFF"].includes(letter.status);
       const owner = letter.created_by === user.id;
       const root = user.role === "ROOT_ADMIN";
-      const editable = managed
-        ? draft && (owner || root)
+      const intake = letter.uses_secretariat && letter.direction === "INCOMING" && letter.status === "SECRETARIAT_INTAKE";
+      const editable = intake ? owner || canHandleSecretariat(user.role)
+        : managed || letter.uses_secretariat ? draft && (owner || root)
         : root || (owner && draft) || (user.role === "STAFF" && letter.status === "RETURNED_STAFF");
       if (!editable) return 403;
 
       const conf = str(body.confidentiality, 20).toUpperCase();
       const publicValue = typeof body.is_public === "boolean" ? Number(body.is_public) : null;
-      const incoming = business && letter.direction === "INCOMING";
+      const incoming = (business || intake) && letter.direction === "INCOMING";
+      const updateSource = letter.direction === "OUTGOING" && draft && (owner || root)
+        && !letter.source_disposition_id && body.source_letter_id !== undefined;
+      const source = updateSource ? await outgoingSources(conn, user, str(body.source_letter_id, 36), "") : null;
       const externalNumber = incoming && body.external_number !== undefined
         ? required(body.external_number, "Nomor dokumen asal", 255) : null;
       const receivedDate = incoming && body.received_date !== undefined
@@ -88,13 +107,15 @@ export async function PATCH(request: Request, { params }: { params: { id: string
          sender=COALESCE(NULLIF(?,''),sender),
          recipient=COALESCE(NULLIF(?,''),recipient),
          external_number=COALESCE(?,external_number),received_date=COALESCE(?,received_date),
+         source_letter_id=CASE WHEN ? THEN ? ELSE source_letter_id END,
          summary=?,notes=?,
          confidentiality=COALESCE(NULLIF(?,''),confidentiality),
          is_public=CASE WHEN COALESCE(NULLIF(?,''),confidentiality)='RAHASIA' THEN 0 ELSE COALESCE(?,is_public) END,
          updated_by=? WHERE id=?`,
         [str(body.subject, 500), str(body.sender, 255), str(body.recipient, 255), externalNumber, receivedDate,
-          business && body.summary === undefined ? letter.summary : str(body.summary, 5000) || null,
-          business && body.notes === undefined ? letter.notes : str(body.notes, 5000) || null,
+          Number(updateSource), source?.sourceLetterId ?? null,
+          body.summary === undefined ? letter.summary : str(body.summary, 5000) || null,
+          body.notes === undefined ? letter.notes : str(body.notes, 5000) || null,
           conf, conf, publicValue, user.id, params.id],
       );
       await saveBusinessDocument(conn, user, {

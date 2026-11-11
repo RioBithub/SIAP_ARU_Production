@@ -2,10 +2,13 @@ import crypto from "crypto";
 import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { getCurrentUser } from "@/lib/auth";
-import { db } from "@/lib/db";
+import { db, withTransaction } from "@/lib/db";
 import { canCreateDisposition } from "@/lib/permissions";
 import { auditLog } from "@/lib/audit";
-import { dateOnly, required } from "@/lib/http";
+import { dateOnly, required, str } from "@/lib/http";
+import { letterAccess } from "@/lib/letter-access";
+import { dispositionAccess } from "@/lib/disposition-access";
+import { resultRequirement } from "@/lib/correspondence-workflow";
 
 export const runtime="nodejs";
 
@@ -27,37 +30,7 @@ export async function GET() {
   if(!user)
     return NextResponse.json({ok:false,error:"Unauthorized"},{status:401});
 
-  const params:unknown[]=[];
-  let visibility="";
-
-  if(user.role!=="ROOT_ADMIN"){
-    visibility=`WHERE
-      d.visibility='PUBLIC'
-      OR d.to_user_id=?
-      OR d.from_user_id=?
-      OR d.current_owner_user_id=?
-      OR EXISTS(
-        SELECT 1 FROM siap_disposition_actions da
-        WHERE da.disposition_id=d.id AND da.actor_user_id=?
-      )
-      OR (
-        d.visibility='ROUTE'
-        AND EXISTS(
-          SELECT 1 FROM siap_dispositions x
-          WHERE x.letter_id=d.letter_id
-            AND (
-              x.to_user_id=?
-              OR x.from_user_id=?
-              OR x.current_owner_user_id=?
-            )
-        )
-      )`;
-
-    params.push(
-      user.id,user.id,user.id,user.id,
-      user.id,user.id,user.id
-    );
-  }
+  const access = dispositionAccess(user);
 
   const [rows]=await db.query<RowDataPacket[]>(
     `SELECT d.*,
@@ -71,10 +44,10 @@ export async function GET() {
      JOIN siap_users fu ON fu.id=d.from_user_id
      JOIN siap_users tu ON tu.id=d.to_user_id
      LEFT JOIN siap_users cu ON cu.id=d.current_owner_user_id
-     ${visibility}
+     WHERE ${access.clause}
      ORDER BY d.created_at DESC
      LIMIT 300`,
-    params
+    access.params
   );
 
   return NextResponse.json({ok:true,data:rows});
@@ -108,76 +81,94 @@ export async function POST(request:Request) {
 
     const due=b.due_date ? dateOnly(b.due_date,"Target selesai") : null;
 
-    const [letters]=await db.query<RowDataPacket[]>(
-      `SELECT id,status,direction FROM siap_letters WHERE id=? LIMIT 1`,
-      [letterId]
-    );
-
-    const letter=letters[0];
-    if(!letter) throw new Error("Dokumen tidak ditemukan.");
-
-    const letterStatus=String(letter.status);
-    const direction=String(letter.direction);
-
-    if(!letterCanBeDisposed(direction,letterStatus))
-      throw new Error(
-        direction==="OUTGOING"
-          ? "Surat keluar baru dapat didisposisikan setelah diterbitkan."
-          : "Dokumen baru dapat didisposisikan setelah proses approval selesai."
+    const parentId = str(b.parent_id, 36) || null;
+    const requirement = resultRequirement(b.result_requirement);
+    const data = await withTransaction(async conn => {
+      const access = letterAccess(user);
+      const [letters]=await conn.query<RowDataPacket[]>(
+        `SELECT l.id,l.status,l.direction FROM siap_letters l WHERE l.id=? AND ${access.clause} LIMIT 1 FOR UPDATE`,
+        [letterId, ...access.params],
       );
 
-    const [targets]=await db.query<RowDataPacket[]>(
-      `SELECT id,name,role,unit_name
-       FROM siap_users
-       WHERE id=? AND is_active=1
-       LIMIT 1`,
-      [toUserId]
-    );
+      const letter=letters[0];
+      if(!letter) throw new Error("Dokumen tidak ditemukan.");
 
-    const target=targets[0];
-    if(!target) throw new Error("Penerima disposisi tidak ditemukan atau tidak aktif.");
+      const letterStatus=String(letter.status);
+      const direction=String(letter.direction);
 
-    if(user.role!=="ROOT_ADMIN" && !allowedTargetRoles(user.role).includes(String(target.role)))
-      throw new Error("Penerima tidak sesuai jalur delegasi disposisi.");
+      if(!letterCanBeDisposed(direction,letterStatus))
+        throw new Error(
+          direction==="OUTGOING"
+            ? "Surat keluar baru dapat didisposisikan setelah diterbitkan."
+            : "Dokumen baru dapat didisposisikan setelah proses approval selesai."
+        );
 
-    const id=crypto.randomUUID();
-    const actionId=crypto.randomUUID();
+      if (parentId) {
+        const [parents] = await conn.query<RowDataPacket[]>(
+          "SELECT letter_id,to_user_id,status FROM siap_dispositions WHERE id=? LIMIT 1 FOR UPDATE",
+          [parentId],
+        );
+        const parent = parents[0];
+        if (!parent || parent.letter_id !== letterId || parent.status !== "IN_PROGRESS" ||
+            (user.role !== "ROOT_ADMIN" && parent.to_user_id !== user.id)) {
+          throw new Error("Delegasi hanya dapat dibuat untuk disposisi asal yang sedang Anda kerjakan.");
+        }
+      }
 
-    await db.execute(
-      `INSERT INTO siap_dispositions
-       (id,letter_id,parent_id,from_user_id,to_user_id,current_owner_user_id,
-        visibility,instruction,status,priority,due_date)
-       VALUES (?,?,?,?,?,?,?,?,'UNSEEN',?,?)`,
-      [
-        id,letterId,null,user.id,toUserId,toUserId,
-        visibility,instruction,priority,due
-      ]
-    );
-
-    await db.execute(
-      `INSERT INTO siap_disposition_actions
-       (id,disposition_id,actor_user_id,action,from_status,to_status,note)
-       VALUES (?,?,?,?,?,?,?)`,
-      [actionId,id,user.id,"CREATE",null,"UNSEEN",instruction]
-    );
-
-    if(direction!=="OUTGOING" && ["APPROVED","COMPLETED"].includes(letterStatus)){
-      await db.execute(
-        `UPDATE siap_letters SET status='DISPOSED',updated_by=? WHERE id=?`,
-        [user.id,letterId]
+      const [targets]=await conn.query<RowDataPacket[]>(
+        `SELECT id,name,role,unit_name
+         FROM siap_users
+         WHERE id=? AND is_active=1
+         LIMIT 1`,
+        [toUserId]
       );
-    }
 
-    await auditLog({
-      userId:user.id,
-      action:"DISPOSITION_CREATE",
-      entityType:"DISPOSITION",
-      entityId:id,
-      metadata:{letterId,toUser:toUserId,visibility,priority,due},
-      request
+      const target=targets[0];
+      if(!target) throw new Error("Penerima disposisi tidak ditemukan atau tidak aktif.");
+
+      if(user.role!=="ROOT_ADMIN" && !allowedTargetRoles(user.role).includes(String(target.role)))
+        throw new Error("Penerima tidak sesuai jalur delegasi disposisi.");
+
+      const id=crypto.randomUUID();
+      const actionId=crypto.randomUUID();
+
+      await conn.execute(
+        `INSERT INTO siap_dispositions
+         (id,letter_id,parent_id,from_user_id,to_user_id,current_owner_user_id,
+          visibility,instruction,status,priority,due_date,result_requirement)
+         VALUES (?,?,?,?,?,?,?,?,'UNSEEN',?,?,?)`,
+        [
+          id,letterId,parentId,user.id,toUserId,toUserId,
+          visibility,instruction,priority,due,requirement
+        ]
+      );
+
+      await conn.execute(
+        `INSERT INTO siap_disposition_actions
+         (id,disposition_id,actor_user_id,action,from_status,to_status,note)
+         VALUES (?,?,?,?,?,?,?)`,
+        [actionId,id,user.id,"CREATE",null,"UNSEEN",instruction]
+      );
+
+      if(direction!=="OUTGOING" && ["APPROVED","COMPLETED"].includes(letterStatus)){
+        await conn.execute(
+          `UPDATE siap_letters SET status='DISPOSED',updated_by=? WHERE id=?`,
+          [user.id,letterId]
+        );
+      }
+
+      await auditLog({
+        userId:user.id,
+        action:"DISPOSITION_CREATE",
+        entityType:"DISPOSITION",
+        entityId:id,
+        metadata:{letterId,toUser:toUserId,visibility,priority,due,parentId,resultRequirement:requirement},
+        request
+      }, conn);
+      return { id };
     });
 
-    return NextResponse.json({ok:true,data:{id}},{status:201});
+    return NextResponse.json({ok:true,data},{status:201});
 
   }catch(e){
     return NextResponse.json({

@@ -8,12 +8,13 @@ export async function GET(request: Request) {
 
   const params = new URL(request.url).searchParams;
   const kind = params.get("kind");
-  if (kind !== "spk" && kind !== "support") {
+  if (kind !== "spk" && kind !== "support" && kind !== "source") {
     return NextResponse.json({ ok: false, error: "Jenis rujukan tidak valid." }, { status: 400 });
   }
 
   const data = await findLetterReferences(user, {
     kind,
+    ids: params.has("id") ? [params.get("id")!.slice(0, 36)] : undefined,
     query: params.get("q")?.trim(),
     exclude: params.get("exclude")?.slice(0, 36),
   });

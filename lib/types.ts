@@ -4,7 +4,8 @@ export type Role =
   | "MANAGER"
   | "DIRECTOR_OPS"
   | "PRESIDENT_DIRECTOR"
-  | "FINANCE";
+  | "FINANCE"
+  | "SECRETARIAT";
 
 export type SessionUser = {
   id: string;
@@ -21,6 +22,7 @@ export const ROLE_LABELS: Record<Role, string> = {
   DIRECTOR_OPS: "Direktur Operasional",
   PRESIDENT_DIRECTOR: "Direktur Utama",
   FINANCE: "Finance",
+  SECRETARIAT: "Sekretariat",
 };
 
 export const FINANCE_VIEW_ROLES: Role[] = [

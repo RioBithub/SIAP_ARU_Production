@@ -4,6 +4,8 @@ import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { readStoredFile, safeFilename } from "@/lib/upload";
 import { auditLog } from "@/lib/audit";
+import { getAccessibleLetter } from "@/lib/letter-access";
+import { dispositionAccess } from "@/lib/disposition-access";
 
 export const runtime="nodejs";
 
@@ -14,12 +16,7 @@ export async function GET(request:Request,{params}:{params:{id:string}}){
     return NextResponse.json({ok:false,error:"Unauthorized"},{status:401});
 
   const [rows]=await db.query<RowDataPacket[]>(
-    `SELECT a.*,
-      l.is_public,l.created_by,l.current_owner_user_id,l.\`current_role\`
-     FROM siap_attachments a
-     LEFT JOIN siap_letters l ON l.id=a.letter_id
-     WHERE a.id=?
-     LIMIT 1`,
+    "SELECT * FROM siap_attachments WHERE id=? LIMIT 1",
     [params.id]
   );
 
@@ -28,39 +25,18 @@ export async function GET(request:Request,{params}:{params:{id:string}}){
     return NextResponse.json({ok:false,error:"File tidak ditemukan."},{status:404});
 
   if(user.role!=="ROOT_ADMIN"){
-    let allowed =
-      Boolean(a.is_public) ||
-      String(a.created_by||"")===String(user.id) ||
-      String(a.current_owner_user_id||"")===String(user.id) ||
-      (!a.current_owner_user_id && String(a.current_role||"")===String(user.role));
-
-    if(!allowed && a.letter_id){
-      const [disp]=await db.query<RowDataPacket[]>(
-        `SELECT 1
-         FROM siap_dispositions d
-         WHERE d.letter_id=?
-           AND (
-             d.to_user_id=?
-             OR d.from_user_id=?
-             OR d.current_owner_user_id=?
-           )
-         LIMIT 1`,
-        [a.letter_id,user.id,user.id,user.id]
+    let allowed = false;
+    if (a.disposition_id) {
+      const access = dispositionAccess(user);
+      const [rows] = await db.query<RowDataPacket[]>(
+        `SELECT 1 FROM siap_dispositions d WHERE d.id=? AND ${access.clause} LIMIT 1`,
+        [a.disposition_id, ...access.params],
       );
-
-      const [acted]=await db.query<RowDataPacket[]>(
-        `SELECT 1
-         FROM siap_letter_actions
-         WHERE letter_id=? AND actor_user_id=?
-         LIMIT 1`,
-        [a.letter_id,user.id]
-      );
-
-      allowed=Boolean(disp[0]||acted[0]);
+      allowed = rows.length > 0;
+    } else if (a.letter_id) {
+      allowed = Boolean(await getAccessibleLetter(user, a.letter_id));
     }
-
-    if(!allowed)
-      return NextResponse.json({ok:false,error:"Forbidden"},{status:403});
+    if(!allowed) return NextResponse.json({ok:false,error:"Forbidden"},{status:403});
   }
 
   try{

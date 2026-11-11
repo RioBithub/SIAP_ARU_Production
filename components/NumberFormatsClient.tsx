@@ -64,6 +64,19 @@ export default function NumberFormatsClient(){
     const j=await r.json();if(!r.ok){setError(j.error||"Gagal mengubah status jenis surat.");return}await load();
   }
 
+  async function setSecretariatReview(id: string, required: boolean) {
+    setError("");
+    const response = await fetch("/api/admin/document-types/" + id, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ secretariat_review_required: required }),
+    });
+    const result = await response.json();
+    if (!response.ok) { setError(result.error || "Pengaturan cek Sekretariat gagal disimpan."); return; }
+    setMessage("Pengaturan cek Sekretariat disimpan untuk surat baru.");
+    await load();
+  }
+
   async function create(e:FormEvent<HTMLFormElement>){
     e.preventDefault();setError("");
     const fd=new FormData(e.currentTarget);const body=Object.fromEntries(fd.entries());
@@ -97,8 +110,11 @@ export default function NumberFormatsClient(){
 
     <section className="card" style={{marginBottom:16}}>
       <div className="card-head"><div><h3>Jenis Surat Keluar</h3><p>Daftar kategori dokumen. Jenis bawaan sistem dilindungi; jenis tambahan dapat dinonaktifkan tanpa menghapus histori.</p></div></div>
-      <div className="table-wrap"><table className="table"><thead><tr><th>Kode Jenis</th><th>Nama</th><th>Deskripsi</th><th>Status</th><th>Aksi</th></tr></thead><tbody>
-        {documentTypes.map((t:any)=><tr key={t.id}><td className="mono"><b>{t.code}</b></td><td><b>{t.name}</b>{t.is_system?<span className="muted" style={{display:"block",fontSize:9.5}}>Jenis bawaan sistem</span>:null}</td><td>{t.description||"-"}</td><td><span className={`badge ${t.is_active?"green":"gray"}`}>{t.is_active?"ACTIVE":"INACTIVE"}</span></td><td>{t.is_system?<span className="muted">Dilindungi</span>:<button className="btn btn-secondary" onClick={()=>toggleType(t)}>{t.is_active?"Nonaktifkan":"Aktifkan"}</button>}</td></tr>)}
+      <div className="table-wrap"><table className="table"><thead><tr><th>Kode Jenis</th><th>Nama</th><th>Deskripsi</th><th>Status</th><th>Cek Sekretariat</th><th>Aksi</th></tr></thead><tbody>
+        {documentTypes.map((t:any)=><tr key={t.id}><td className="mono"><b>{t.code}</b></td><td><b>{t.name}</b>{t.is_system?<span className="muted" style={{display:"block",fontSize:9.5}}>Jenis bawaan sistem</span>:null}</td><td>{t.description||"-"}</td><td><span className={`badge ${t.is_active?"green":"gray"}`}>{t.is_active?"ACTIVE":"INACTIVE"}</span></td><td><label className="document-checkbox">
+          <input type="checkbox" checked={Boolean(t.secretariat_review_required)}
+            onChange={e=>void setSecretariatReview(t.id,e.currentTarget.checked)}/> Sebelum ACC
+        </label></td><td>{t.is_system?<span className="muted">Dilindungi</span>:<button className="btn btn-secondary" onClick={()=>toggleType(t)}>{t.is_active?"Nonaktifkan":"Aktifkan"}</button>}</td></tr>)}
       </tbody></table></div>
     </section>
 

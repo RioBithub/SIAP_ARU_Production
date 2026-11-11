@@ -18,7 +18,7 @@ export async function GET() {
     `SELECT
       SUM(direction='INCOMING') AS incoming_total,
       SUM(direction='INTERNAL') AS internal_total,
-      SUM(status IN ('MANAGER_REVIEW','DIRECTOR_OPS_REVIEW','PRESIDENT_DIRECTOR_REVIEW')) AS waiting_approval,
+      SUM(status IN ('MANAGER_REVIEW','DIRECTOR_OPS_REVIEW','SECRETARIAT_REVIEW','PRESIDENT_DIRECTOR_REVIEW')) AS waiting_approval,
       SUM(status IN ('DISPOSED','IN_PROGRESS')) AS in_progress,
       SUM(status IN ('COMPLETED','APPROVED','ISSUED')) AS completed
      FROM siap_letters

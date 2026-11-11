@@ -15,7 +15,7 @@ export function isBusinessDocument(documentType: string) {
   return isSpk(documentType) || isInvoice(documentType);
 }
 
-export type ReferenceKind = "spk" | "support";
+export type ReferenceKind = "spk" | "support" | "source";
 export type SignatureMethod = "DIGITAL" | "BASAH";
 
 export type DocumentReference = {

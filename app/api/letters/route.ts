@@ -10,24 +10,12 @@ import { reserveOutgoingNumber } from "@/lib/numbering";
 import { INVOICE_INCOMING, SPK_INCOMING, isBusinessDocument } from "@/lib/business-documents";
 import { saveBusinessDocument } from "@/lib/business-document-data";
 import { letterAccess } from "@/lib/letter-access";
+import { activeReviewer, hasActiveSecretariat, outgoingSources } from "@/lib/correspondence-data";
+import { REVIEW_ROLES, REVIEW_STATUS, canHandleSecretariat } from "@/lib/correspondence-workflow";
 import { discardUncommittedFiles, insertLetterAttachment, type StoredLetterFile } from "@/lib/letter-uploads";
 import { saveUpload } from "@/lib/upload";
 
 export const runtime = "nodejs";
-
-async function getManagerTarget(value:unknown){
-  const targetId=required(value,"Manager tujuan",36);
-  const [rows]=await db.query<RowDataPacket[]>(
-    `SELECT id,name,email,role,unit_name
-     FROM siap_users
-     WHERE id=? AND is_active=1 AND role='MANAGER'
-     LIMIT 1`,
-    [targetId]
-  );
-  const target=rows[0];
-  if(!target) throw new Error("Manager tujuan tidak ditemukan atau tidak aktif.");
-  return target;
-}
 
 export async function GET(request: Request) {
   const user = await getCurrentUser();
@@ -45,7 +33,12 @@ export async function GET(request: Request) {
   const params:unknown[] = [];
 
   if (direction) { where.push("l.direction=?"); params.push(direction); }
-  if (status) { where.push("l.status=?"); params.push(status); }
+  if (status === "SENT") where.push("l.status='ISSUED' AND l.sent_date IS NOT NULL");
+  else if (status) { where.push("l.status=?"); params.push(status); }
+  if (url.searchParams.get("queue") === "secretariat") {
+    if (!canHandleSecretariat(user.role)) return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
+    where.push("l.uses_secretariat=1 AND l.`current_role`='SECRETARIAT'");
+  }
   if (documentType) { where.push("l.document_type=?"); params.push(documentType); }
   if (year && /^\d{4}$/.test(year)) { where.push("YEAR(l.letter_date)=?"); params.push(Number(year)); }
 
@@ -75,7 +68,7 @@ export async function GET(request: Request) {
         CASE WHEN nl.seq_base IS NULL THEN NULL
              WHEN nl.variant>0 THEN CONCAT(nl.seq_base,'.',nl.variant)
              ELSE CAST(nl.seq_base AS CHAR) END) AS display_number,
-      (SELECT COUNT(*) FROM siap_attachments a WHERE a.letter_id=l.id) AS attachment_count
+      (SELECT COUNT(*) FROM siap_attachments a WHERE a.letter_id=l.id AND a.disposition_id IS NULL) AS attachment_count
      FROM siap_letters l
      JOIN siap_users u ON u.id=l.created_by
      LEFT JOIN siap_users uo ON uo.id=l.current_owner_user_id
@@ -88,7 +81,8 @@ export async function GET(request: Request) {
     params
   );
 
-  return NextResponse.json({ ok:true,data:rows });
+  const data = rows.map(({ source_letter_id, source_disposition_id, ...letter }) => letter);
+  return NextResponse.json({ ok:true,data });
 }
 
 export async function POST(request: Request) {
@@ -104,10 +98,14 @@ export async function POST(request: Request) {
     const direction = required(body.direction, "Arah dokumen", 20).toUpperCase();
     if (!["INCOMING", "OUTGOING", "INTERNAL"].includes(direction)) throw new Error("Arah dokumen tidak valid.");
 
-    if (direction === "INCOMING" && !canRegisterIncoming(user.role)) {
-      return NextResponse.json({ ok: false, error: "Hanya Staff atau Root Admin yang dapat meregistrasi surat masuk." }, { status: 403 });
+    const usesSecretariat = direction !== "INTERNAL" && await hasActiveSecretariat();
+    if (direction === "INCOMING" && !canRegisterIncoming(user.role) &&
+        !(usesSecretariat && REVIEW_ROLES.some(role => role === user.role))) {
+      return NextResponse.json({ ok: false, error: "Akun ini tidak dapat menyerahkan Surat Masuk." }, { status: 403 });
     }
-    if (direction === "OUTGOING" && !canCreateOutgoing(user.role)) {
+    const needsRegistration = direction === "INCOMING" && usesSecretariat && !canHandleSecretariat(user.role);
+    const assignedFinance = user.role === "FINANCE" && Boolean(str(body.source_disposition_id, 36));
+    if (direction === "OUTGOING" && !canCreateOutgoing(user.role) && !assignedFinance) {
       return NextResponse.json({ ok: false, error: "Surat keluar disusun oleh Staff Administrasi atau Root Admin." }, { status: 403 });
     }
     if (direction === "INTERNAL" && !canCreateInternal(user.role)) {
@@ -118,12 +116,14 @@ export async function POST(request: Request) {
     const business = isBusinessDocument(documentType);
     const businessDirection = documentType === SPK_INCOMING || documentType === INVOICE_INCOMING ? "INCOMING" : "OUTGOING";
     if (business && direction !== businessDirection) throw new Error("Jenis dokumen tidak sesuai dengan arahnya.");
+    let requiresSecretariatReview = false;
     if (direction === "OUTGOING" || business) {
       const [types] = await db.query<RowDataPacket[]>(
-        "SELECT id FROM siap_document_types WHERE code=? AND direction=? AND is_active=1 LIMIT 1",
+        "SELECT id,secretariat_review_required FROM siap_document_types WHERE code=? AND direction=? AND is_active=1 LIMIT 1",
         [documentType, direction],
       );
       if (!types[0]) throw new Error("Jenis dokumen tidak ditemukan atau tidak aktif.");
+      requiresSecretariatReview = direction === "OUTGOING" && usesSecretariat && Boolean(types[0].secretariat_review_required);
     }
     if (direction === "INTERNAL" && documentType !== "NOTA_DINAS") {
       throw new Error("Dokumen internal Staff ke atasan harus Nota Dinas.");
@@ -135,8 +135,9 @@ export async function POST(request: Request) {
     const id = crypto.randomUUID();
     const subject = required(body.subject, "Perihal", 500);
     const letterDate = dateOnly(body.letter_date, "Tanggal dokumen");
-    const manager = await getManagerTarget(body.routing_target_user_id);
-    const managerLabel = [manager.name, manager.unit_name].filter(Boolean).join(" — ");
+    const target = await activeReviewer(db, required(body.routing_target_user_id, "Tujuan review", 36),
+      direction === "INCOMING" && usesSecretariat ? REVIEW_ROLES : ["MANAGER"]);
+    const targetLabel = [target.name, target.unit_name].filter(Boolean).join(" — ");
     const today = new Date().toISOString().slice(0, 10);
     const isBackdated = letterDate < today;
     const summary = str(body.summary, 5000) || null;
@@ -146,14 +147,16 @@ export async function POST(request: Request) {
     const isPublic = confidentiality === "RAHASIA" ? 0
       : direction === "INTERNAL" || business ? Number(body.is_public === true)
       : Number(body.is_public !== false);
-    const status = direction === "INCOMING" ? "MANAGER_REVIEW" : "DRAFT";
-    const role = direction === "INCOMING" ? "MANAGER" : direction === "OUTGOING" ? "STAFF" : user.role;
+    const status = needsRegistration ? "SECRETARIAT_INTAKE"
+      : direction === "INCOMING" ? REVIEW_STATUS[target.role] : "DRAFT";
+    const role = needsRegistration ? "SECRETARIAT" : direction === "INCOMING" ? target.role
+      : user.role;
 
     const externalNumber = direction === "INCOMING" ? required(body.external_number, "Nomor dokumen asal", 255) : null;
     const sender = direction === "INCOMING" ? required(body.sender, "Asal/pengirim", 255)
       : direction === "INTERNAL" ? user.unit_name || user.name : null;
     const recipient = direction === "OUTGOING" ? required(body.recipient, "Tujuan dokumen", 255)
-      : direction === "INTERNAL" ? managerLabel : null;
+      : direction === "INTERNAL" ? targetLabel : str(body.recipient, 255) || null;
     const receivedDate = direction === "INCOMING" ? dateOnly(body.received_date || today, "Tanggal diterima") : null;
     const formatId = direction === "OUTGOING" ? required(body.number_format_id, "Format nomor", 36) : null;
     const issuedDate = direction === "OUTGOING" && body.issued_date ? dateOnly(body.issued_date, "Tanggal terbit") : null;
@@ -165,15 +168,21 @@ export async function POST(request: Request) {
 
     if (file && typeof file !== "string" && file.size > 0) original = await saveUpload(file, "ORIGINAL");
     const data = await withTransaction(async conn => {
+      const { sourceLetterId, sourceDispositionId } = direction === "OUTGOING"
+        ? await outgoingSources(conn, user, str(body.source_letter_id, 36), str(body.source_disposition_id, 36))
+        : { sourceLetterId: null, sourceDispositionId: null };
       await conn.execute(
         `INSERT INTO siap_letters
          (id,direction,document_type,number_format_id,external_number,subject,sender,recipient,
           letter_date,received_date,issued_date,confidentiality,summary,notes,status,\`current_role\`,
-          current_owner_user_id,routing_target_user_id,is_public,is_backdated,created_by,updated_by)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          current_owner_user_id,routing_target_user_id,is_public,is_backdated,created_by,updated_by,
+          uses_secretariat,secretariat_review_required,source_letter_id,source_disposition_id)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [id, direction, documentType, formatId, externalNumber, subject, sender, recipient, letterDate,
           receivedDate, issuedDate, confidentiality, summary, notes, status, role,
-          direction === "INCOMING" ? manager.id : business ? user.id : null, manager.id, isPublic, isBackdated, user.id, user.id],
+          needsRegistration ? null : direction === "INCOMING" ? target.id : direction === "OUTGOING" || business ? user.id : null,
+          target.id, isPublic, isBackdated, user.id, user.id, Number(usesSecretariat),
+          Number(requiresSecretariatReview), sourceLetterId, sourceDispositionId],
       );
 
       let number: string | null = null;
@@ -187,10 +196,11 @@ export async function POST(request: Request) {
       await saveBusinessDocument(conn, user, { id, document_type: documentType, direction }, body.business, true);
       if (original) await insertLetterAttachment(conn, id, user.id, original, "ORIGINAL");
 
-      const action = direction === "INCOMING" ? "REGISTER_INCOMING" : direction === "INTERNAL" ? "CREATE_INTERNAL" : "CREATE_OUTGOING";
+      const action = needsRegistration ? "RECEIVE_INCOMING"
+        : direction === "INCOMING" ? "REGISTER_INCOMING" : direction === "INTERNAL" ? "CREATE_INTERNAL" : "CREATE_OUTGOING";
       const comment = [
         number ? "Nomor direservasi: " + number : null,
-        "Manager tujuan: " + managerLabel,
+        "Tujuan review: " + targetLabel,
         direction !== "OUTGOING" ? notes : null,
       ].filter(Boolean).join(" • ");
       await conn.execute(
@@ -200,7 +210,8 @@ export async function POST(request: Request) {
       );
       await auditLog({
         userId: user.id, action: "LETTER_CREATE", entityType: "LETTER", entityId: id,
-        metadata: { direction, documentType, subject, managerTargetId: String(manager.id), isBackdated, customNumberBase: customBase },
+        metadata: { direction, documentType, subject, routingTargetId: target.id, isBackdated,
+          customNumberBase: customBase, usesSecretariat, sourceLetterId, sourceDispositionId },
         request,
       }, conn);
       const [rows] = await conn.query<RowDataPacket[]>("SELECT * FROM siap_letters WHERE id=? LIMIT 1", [id]);

@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { dispositionAccess } from "@/lib/disposition-access";
+import { findLetterReferences } from "@/lib/business-document-data";
 
 export const runtime="nodejs";
 
@@ -11,6 +13,7 @@ export async function GET(_:Request,{params}:{params:{id:string}}){
   if(!user)
     return NextResponse.json({ok:false,error:"Unauthorized"},{status:401});
 
+  const access = dispositionAccess(user);
   const [rows]=await db.query<RowDataPacket[]>(
     `SELECT d.*,
       l.subject,l.letter_number,l.external_number,l.direction,l.document_type,
@@ -22,52 +25,14 @@ export async function GET(_:Request,{params}:{params:{id:string}}){
      JOIN siap_users fu ON fu.id=d.from_user_id
      JOIN siap_users tu ON tu.id=d.to_user_id
      LEFT JOIN siap_users cu ON cu.id=d.current_owner_user_id
-     WHERE d.id=?
+     WHERE d.id=? AND ${access.clause}
      LIMIT 1`,
-    [params.id]
+    [params.id, ...access.params]
   );
 
   const d=rows[0];
   if(!d)
     return NextResponse.json({ok:false,error:"Disposisi tidak ditemukan."},{status:404});
-
-  if(user.role!=="ROOT_ADMIN"){
-    const direct =
-      String(d.from_user_id)===String(user.id) ||
-      String(d.to_user_id)===String(user.id) ||
-      String(d.current_owner_user_id||"")===String(user.id);
-
-    let allowed=direct || String(d.visibility)==="PUBLIC";
-
-    if(!allowed){
-      const [acted]=await db.query<RowDataPacket[]>(
-        `SELECT 1 FROM siap_disposition_actions
-         WHERE disposition_id=? AND actor_user_id=?
-         LIMIT 1`,
-        [params.id,user.id]
-      );
-      allowed=Boolean(acted[0]);
-    }
-
-    if(!allowed && String(d.visibility)==="ROUTE"){
-      const [route]=await db.query<RowDataPacket[]>(
-        `SELECT 1
-         FROM siap_dispositions
-         WHERE letter_id=?
-           AND (
-             from_user_id=?
-             OR to_user_id=?
-             OR current_owner_user_id=?
-           )
-         LIMIT 1`,
-        [d.letter_id,user.id,user.id,user.id]
-      );
-      allowed=Boolean(route[0]);
-    }
-
-    if(!allowed)
-      return NextResponse.json({ok:false,error:"Forbidden"},{status:403});
-  }
 
   const [actions]=await db.query<RowDataPacket[]>(
     `SELECT a.*,u.name AS actor_name,u.role AS actor_role
@@ -89,8 +54,16 @@ export async function GET(_:Request,{params}:{params:{id:string}}){
     [params.id]
   );
 
+  const resultIds = [...new Set(actions.flatMap(action => action.result_letter_id ? [String(action.result_letter_id)] : []))];
+  const results = resultIds.length ? await findLetterReferences(user, {
+    kind: "support", ids: resultIds, includeCancelled: true,
+  }) : [];
+  const resultById = new Map(results.map(letter => [letter.id, letter]));
+  const history = actions.map(({ result_letter_id, ...action }) => ({
+    ...action, result_letter: result_letter_id ? resultById.get(result_letter_id) : undefined,
+  }));
   return NextResponse.json({
     ok:true,
-    data:{disposition:d,actions,attachments}
+    data:{disposition:d,actions:history,attachments}
   });
 }
