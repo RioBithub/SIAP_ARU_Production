@@ -11,7 +11,9 @@ export async function PATCH(request:Request,{params}:{params:{id:string}}){
   if(!canEditFinance(user.role))return NextResponse.json({ok:false,error:"Forbidden"},{status:403});
   try{
     const b=await request.json();
-    const [rows]=await db.query<RowDataPacket[]>(`SELECT * FROM siap_receivables WHERE id=? LIMIT 1`,[params.id]);
+    const [rows]=await db.query<RowDataPacket[]>(`SELECT *,DATE_FORMAT(invoice_date,'%Y-%m-%d') AS invoice_date_text,
+              DATE_FORMAT(due_date,'%Y-%m-%d') AS due_date_text
+       FROM siap_receivables WHERE id=? LIMIT 1`,[params.id]);
     const row=rows[0];if(!row)throw new Error("Data tidak ditemukan.");
     const total=b.amount===undefined?Number(row.amount):amount(b.amount,"Total");
     const paid=b.paid_amount===undefined?Number(row.paid_amount):amount(b.paid_amount,"Sudah dibayar");
@@ -19,8 +21,8 @@ export async function PATCH(request:Request,{params}:{params:{id:string}}){
     const status=paid>=total?"PAID":paid>0?"PARTIAL":"OPEN";
     const counterparty=b.counterparty===undefined?String(row.counterparty):required(b.counterparty,"Pihak",255);
     const invoiceNo=b.invoice_no===undefined?String(row.invoice_no):required(b.invoice_no,"Nomor invoice",120);
-    const invoiceDate=b.invoice_date===undefined?String(row.invoice_date).slice(0,10):dateOnly(b.invoice_date,"Tanggal invoice");
-    const dueDate=b.due_date===undefined?String(row.due_date).slice(0,10):dateOnly(b.due_date,"Jatuh tempo");
+    const invoiceDate=b.invoice_date===undefined?String(row.invoice_date_text):dateOnly(b.invoice_date,"Tanggal invoice");
+    const dueDate=b.due_date===undefined?String(row.due_date_text):dateOnly(b.due_date,"Jatuh tempo");
     const notes=b.notes===undefined?String(row.notes||""):str(b.notes,1000);
     await db.execute(
       `UPDATE siap_receivables SET counterparty=?,invoice_no=?,invoice_date=?,due_date=?,amount=?,paid_amount=?,status=?,notes=?,updated_by=? WHERE id=?`,

@@ -7,7 +7,8 @@ export function letterAccess(user: SessionUser) {
   return {
     clause: `(
       l.is_public=1 OR l.created_by=? OR l.current_owner_user_id=?
-      OR (l.current_owner_user_id IS NULL AND l.\`current_role\`=?)
+      OR (l.current_owner_user_id IS NULL AND l.\`current_role\`=?
+        AND l.status NOT IN ('DRAFT', 'RETURNED_STAFF'))
       OR EXISTS (SELECT 1 FROM siap_dispositions d WHERE d.letter_id=l.id
         AND (d.to_user_id=? OR d.from_user_id=? OR d.current_owner_user_id=?))
       OR EXISTS (

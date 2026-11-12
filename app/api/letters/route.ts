@@ -180,7 +180,7 @@ export async function POST(request: Request) {
          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [id, direction, documentType, formatId, externalNumber, subject, sender, recipient, letterDate,
           receivedDate, issuedDate, confidentiality, summary, notes, status, role,
-          needsRegistration ? null : direction === "INCOMING" ? target.id : direction === "OUTGOING" || business ? user.id : null,
+          needsRegistration ? null : direction === "INCOMING" ? target.id : user.id,
           target.id, isPublic, isBackdated, user.id, user.id, Number(usesSecretariat),
           Number(requiresSecretariatReview), sourceLetterId, sourceDispositionId],
       );

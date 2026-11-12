@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { canEditFinance, canSeeFinance } from "@/lib/permissions";
 import { saveUpload } from "@/lib/upload";
 import { auditLog } from "@/lib/audit";
+import { publishedFinanceAttachment } from "@/lib/finance-summary";
 import { ledgerMeta, normalizeKind } from "@/lib/finance-ledger";
 import { assertEditableFinanceMonth, parseFinanceMonth } from "@/lib/finance-period";
 
@@ -59,7 +60,8 @@ export async function GET(request:Request){
     const [rows]=await db.query<RowDataPacket[]>(
       `SELECT a.id,a.attachment_kind,a.original_name,a.mime_type,a.original_size,a.stored_size,a.is_compressed,a.created_at,u.name AS uploader_name
        FROM siap_finance_attachments a JOIN siap_users u ON u.id=a.uploaded_by
-       WHERE a.${column}=? ORDER BY a.created_at DESC`,[entityId]);
+       WHERE a.${column}=? AND (?=1 OR ${publishedFinanceAttachment})
+       ORDER BY a.created_at DESC`,[entityId, Number(canEditFinance(user.role))]);
     return NextResponse.json({ok:true,data:rows});
   }catch(e){return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Gagal memuat lampiran."},{status:400});}
 }

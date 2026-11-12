@@ -5,13 +5,18 @@ import { db } from "@/lib/db";
 import { canEditFinance, canSeeFinance } from "@/lib/permissions";
 import { deleteStoredFile, readStoredFile, safeFilename } from "@/lib/upload";
 import { auditLog } from "@/lib/audit";
+import { publishedFinanceAttachment } from "@/lib/finance-summary";
 
 export const runtime="nodejs";
 
 export async function GET(request:Request,{params}:{params:{id:string}}){
   const user=await getCurrentUser(); if(!user)return NextResponse.json({ok:false,error:"Unauthorized"},{status:401});
   if(!canSeeFinance(user.role))return NextResponse.json({ok:false,error:"Forbidden"},{status:403});
-  const [rows]=await db.query<RowDataPacket[]>(`SELECT * FROM siap_finance_attachments WHERE id=? LIMIT 1`,[params.id]);
+  const [rows]=await db.query<RowDataPacket[]>(
+    `SELECT a.* FROM siap_finance_attachments a
+     WHERE a.id=? AND (?=1 OR ${publishedFinanceAttachment}) LIMIT 1`,
+    [params.id, Number(canEditFinance(user.role))]
+  );
   const a=rows[0]; if(!a)return NextResponse.json({ok:false,error:"Lampiran tidak ditemukan."},{status:404});
   try{
     const data=await readStoredFile(String(a.storage_path),Boolean(a.is_compressed));
