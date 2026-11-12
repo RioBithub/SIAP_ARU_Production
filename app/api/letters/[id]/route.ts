@@ -87,7 +87,7 @@ export async function PATCH(request: Request, { params }: { params: { id: string
       const intake = letter.uses_secretariat && letter.direction === "INCOMING" && letter.status === "SECRETARIAT_INTAKE";
       const editable = intake ? owner || canHandleSecretariat(user.role)
         : managed || letter.uses_secretariat ? draft && (owner || root)
-        : root || (owner && draft) || (user.role === "STAFF" && letter.status === "RETURNED_STAFF");
+        : root || (owner && draft);
       if (!editable) return 403;
 
       const conf = str(body.confidentiality, 20).toUpperCase();

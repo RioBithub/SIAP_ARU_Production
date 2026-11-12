@@ -3,6 +3,16 @@ import { db } from "@/lib/db";
 
 export type FinanceCalculationMode = "MANUAL" | "AUTO_MONTHLY" | "HYBRID";
 
+export const publishedFinanceAttachment = `(
+  (a.summary_id IS NULL AND a.adjustment_id IS NULL)
+  OR EXISTS (
+    SELECT 1 FROM siap_finance_monthly_summaries s
+    WHERE s.publish_status='PUBLISHED' AND s.id=COALESCE(a.summary_id, (
+      SELECT adj.summary_id FROM siap_finance_adjustments adj WHERE adj.id=a.adjustment_id
+    ))
+  )
+)`;
+
 export type FinanceYearSnapshot = {
   configured: boolean;
   year: number;

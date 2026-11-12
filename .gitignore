@@ -10,3 +10,5 @@ npm-debug.log*
 *.bak
 *.before-*
 tsconfig.tsbuildinfo
+
+.sqa/

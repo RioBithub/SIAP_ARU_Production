@@ -36,7 +36,8 @@ export async function POST(request:Request,{params}:{params:{id:string}}){
         }
       } else if (user.role !== "ROOT_ADMIN") {
         let allowed = Boolean(letter.is_public) || letter.created_by === user.id ||
-          letter.current_owner_user_id === user.id || (!letter.current_owner_user_id && letter.current_role === user.role);
+          letter.current_owner_user_id === user.id || (!letter.current_owner_user_id && letter.current_role === user.role &&
+            !["DRAFT", "RETURNED_STAFF"].includes(letter.status));
         if (!allowed) {
           const [participants] = await conn.query<RowDataPacket[]>(
             `SELECT 1 FROM siap_dispositions WHERE letter_id=? AND (to_user_id=? OR from_user_id=?)

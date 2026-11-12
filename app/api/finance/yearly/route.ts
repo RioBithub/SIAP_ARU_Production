@@ -38,14 +38,15 @@ export async function GET(request: Request) {
   if (!canSeeFinance(user.role)) return NextResponse.json({ ok:false,error:"Forbidden" }, { status:403 });
   try {
     const year = normalizeYear(new URL(request.url).searchParams.get("year"));
+    const editor = canEditFinance(user.role);
     const [rows] = await db.query<RowDataPacket[]>(
       `SELECT y.*,u.name AS updated_by_name
        FROM siap_finance_yearly_summaries y
        LEFT JOIN siap_users u ON u.id=y.updated_by
-       WHERE y.summary_year=? LIMIT 1`, [year]
+       WHERE y.summary_year=? AND (?=1 OR y.publish_status='PUBLISHED') LIMIT 1`, [year, Number(editor)]
     );
     const raw = rows[0] || null;
-    const computed = await getFinanceYearSnapshot(year, false);
+    const computed = await getFinanceYearSnapshot(year, !editor);
     return NextResponse.json({ ok:true,data:{ raw: raw ? {
       id:raw.id,
       summary_year:Number(raw.summary_year),
