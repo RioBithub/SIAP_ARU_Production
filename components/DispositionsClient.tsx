@@ -4,8 +4,10 @@ import { FormEvent,useEffect,useMemo,useState } from "react";
 import type { SessionUser } from "@/lib/types";
 import Modal from "@/components/Modal";
 import StatusBadge from "@/components/StatusBadge";
-import { RESULT_REQUIREMENTS, type ResultRequirement } from "@/lib/correspondence-workflow";
-import type { DocumentReference } from "@/lib/business-documents";
+import { RESULT_REQUIREMENTS, reviewRole, type ResultRequirement } from "@/lib/correspondence-workflow";
+import { INVOICE_INCOMING, formatInvoiceAmount, type DocumentReference } from "@/lib/business-documents";
+import { dispositionTargetRoles, jakartaDate, staffCanVerify, staffUnit, TASK_PURPOSES, TERMINAL_TASK_STATES,
+  unitManagerScope, type TaskPurpose } from "@/lib/v11-workflow";
 
 const size=(n:number)=>
   n<1024*1024
@@ -19,7 +21,8 @@ const actionLabel=(a:string)=>({
   SUBMIT_RESULT:"Hasil dikirim",
   APPROVE_RESULT:"Hasil disetujui",
   RETURN_RESULT:"Hasil dikembalikan",
-  RETURN_TASK:"Disposisi dikembalikan"
+  RETURN_TASK:"Disposisi dikembalikan",
+  CANCEL_TASK:"Disposisi dibatalkan"
 }[a]||a.replace(/_/g," "));
 
 const docClass=(t:any)=>({
@@ -38,21 +41,9 @@ type ProcessAction={
   label:string;
   requiredNote?:boolean;
   resultRequirement?:ResultRequirement;
+  purpose?:TaskPurpose;
   tone?:"primary"|"success"|"danger";
 };
-
-function allowedTargetRoles(role:string){
-  if(role==="PRESIDENT_DIRECTOR") return ["DIRECTOR_OPS","MANAGER","FINANCE","STAFF"];
-  if(role==="DIRECTOR_OPS") return ["MANAGER","FINANCE","STAFF"];
-  if(role==="MANAGER") return ["FINANCE","STAFF"];
-  if(role==="ROOT_ADMIN") return ["PRESIDENT_DIRECTOR","DIRECTOR_OPS","MANAGER","FINANCE","STAFF"];
-  return [];
-}
-
-function canDisposeLetter(l:any){
-  if(l.direction==="OUTGOING") return l.status==="ISSUED";
-  return ["APPROVED","DISPOSED","IN_PROGRESS","COMPLETED"].includes(l.status);
-}
 
 function reviewButtonLabel(d:any){
   if(d.status==="REVIEW_MANAGER") return "Setujui & Selesaikan";
@@ -108,6 +99,8 @@ function ResultLetterField({dispositionId,required}:{dispositionId:string;requir
 export default function DispositionsClient({user}:{user:SessionUser}){
   const [rows,setRows]=useState<any[]>([]);
   const [users,setUsers]=useState<any[]>([]);
+  const [v11Enabled,setV11Enabled]=useState(false);
+  const [purpose,setPurpose]=useState<TaskPurpose>("GENERAL");
   const [letters,setLetters]=useState<any[]>([]);
   const [selectedLetterId,setSelectedLetterId]=useState("");
   const [parent,setParent]=useState<{id:string;subject:string;result_requirement:ResultRequirement}|null>(null);
@@ -139,7 +132,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
       const [d,u,l]=await Promise.all([dr.json(),ur.json(),lr.json()]);
 
       if(d.ok) setRows(d.data); else setError(d.error||"Gagal memuat disposisi.");
-      if(u.ok) setUsers(u.data);
+      if(u.ok) { setUsers(u.data); setV11Enabled(Boolean(u.v11Enabled)); }
       if(l.ok) setLetters(l.data);
 
     }catch(e){
@@ -154,6 +147,8 @@ export default function DispositionsClient({user}:{user:SessionUser}){
     if(detailId) void openDetail(detailId);
     if(prefill){
       setSelectedLetterId(prefill);
+      const wanted=params.get("purpose");
+      if(wanted==="INVOICE_VERIFY"||wanted==="INVOICE_PAYMENT") setPurpose(wanted);
       setOpen(true);
     }
     void load();
@@ -168,10 +163,28 @@ export default function DispositionsClient({user}:{user:SessionUser}){
     return (!q||hay.includes(q.toLowerCase()))&&(!status||d.status===status);
   }),[rows,q,status]);
 
-  const targetUsers=useMemo(()=>{
-    const allowed=allowedTargetRoles(user.role);
-    return users.filter(u=>u.id!==user.id && allowed.includes(u.role));
-  },[users,user.id,user.role]);
+  const selectedLetter=letters.find(letter=>letter.id===selectedLetterId);
+  const strict=Boolean(v11Enabled||selectedLetter?.v11_kind);
+  const scope=users.find(account=>account.id===user.id)?.v11_scope;
+  const invoice=selectedLetter?.v11_kind&&selectedLetter.document_type===INVOICE_INCOMING;
+  function canDisposeLetter(letter:any) {
+    if(letter.direction==="OUTGOING") return letter.status==="ISSUED";
+    if(letter.v11_kind) {
+      return letter.status==="APPROVED" || (letter.direction==="INCOMING" && Boolean(reviewRole(letter.status)) &&
+        (letter.current_owner_user_id===user.id||Boolean(parent&&letter.id===selectedLetterId)));
+    }
+    return ["APPROVED","DISPOSED","IN_PROGRESS","COMPLETED"].includes(letter.status);
+  }
+  const allowed=dispositionTargetRoles(user.role, strict);
+  const targetUsers=users.filter(account=>{
+    if(account.id===user.id||!allowed.includes(account.role)) return false;
+    if(strict&&account.role==="MANAGER"&&!account.v11_scope) return false;
+    const accountScope=account.role==="FINANCE"?"KSU":unitManagerScope(staffUnit(account.unit_name));
+    if(strict&&user.role==="MANAGER"&&accountScope&&accountScope!==scope) return false;
+    if(purpose==="INVOICE_VERIFY") return account.role==="STAFF"&&staffCanVerify(selectedLetter?.v11_unit,account.unit_name);
+    if(purpose==="INVOICE_PAYMENT") return account.role==="FINANCE";
+    return !invoice||account.role!=="FINANCE";
+  });
 
   async function create(e:FormEvent<HTMLFormElement>){
     e.preventDefault();
@@ -216,6 +229,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
       setCreateFiles([]);
       setSelectedLetterId("");
       setParent(null);
+      setPurpose("GENERAL");
       setMessage(`Disposisi berhasil dikirim${uploaded?` dengan ${uploaded} lampiran`:""}.`);
       await load();
 
@@ -249,7 +263,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
     tone:"primary"|"success"|"danger"="primary"
   ){
     setProcessFiles([]);
-    setProcess({id:d.id,action,label,requiredNote,tone,resultRequirement:d.result_requirement});
+    setProcess({id:d.id,action,label,requiredNote,tone,resultRequirement:d.result_requirement,purpose:d.purpose});
   }
 
   async function submitProcess(e:FormEvent<HTMLFormElement>){
@@ -273,6 +287,10 @@ export default function DispositionsClient({user}:{user:SessionUser}){
       fd.set("note",note);
       if(process.action==="SUBMIT_RESULT") fd.set("result_letter_id",String(form.get("result_letter_id")||""));
 
+      if(process.action==="SUBMIT_RESULT"&&process.purpose==="INVOICE_PAYMENT") {
+        for(const key of ["payment_amount","payment_date","payment_payee","payment_account","payment_reference","bookkeeping_note"])
+          fd.set(key,String(form.get(key)||""));
+      }
       processFiles.slice(0,5).forEach(x=>fd.append("files",x));
 
       const r=await fetch(`/api/dispositions/${process.id}/actions`,{
@@ -353,9 +371,11 @@ export default function DispositionsClient({user}:{user:SessionUser}){
       user.role==="ROOT_ADMIN" ||
       String(d.current_owner_user_id||d.to_user_id)===String(user.id);
 
-    if(!owns) return null;
-
+    const canCancel=Boolean(d.purpose)&&!TERMINAL_TASK_STATES.includes(d.status)&&(user.role==="ROOT_ADMIN"||d.from_user_id===user.id);
     const out:any[]=[];
+    if(canCancel) out.push(<button key="cancel" className="btn btn-danger"
+      onClick={()=>startProcess(d,"CANCEL_TASK","Batalkan Tugas",true,"danger")}>Batalkan Tugas</button>);
+    if(!owns) return out;
 
     if(d.status==="UNSEEN"){
       out.push(
@@ -415,7 +435,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
       </div>
 
       {canCreate&&
-        <button className="btn btn-primary" onClick={()=>{setParent(null);setSelectedLetterId("");setOpen(true);setCreateFiles([])}}>
+        <button className="btn btn-primary" onClick={()=>{setParent(null);setSelectedLetterId("");setPurpose("GENERAL");setOpen(true);setCreateFiles([])}}>
           + Buat Disposisi
         </button>
       }
@@ -518,7 +538,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
     {open&&
       <Modal
         title="Buat Disposisi"
-        subtitle="Disposisi dibuat dari dokumen yang sudah selesai approval."
+        subtitle="Pilih dokumen dan penanggung jawab sesuai tahap review."
         onClose={()=>!createBusy&&setOpen(false)}
       >
         <form onSubmit={create} className="form-grid">
@@ -536,7 +556,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
               required
               value={selectedLetterId}
               disabled={Boolean(parent)}
-              onChange={e=>setSelectedLetterId(e.target.value)}
+              onChange={e=>{setSelectedLetterId(e.target.value);setPurpose("GENERAL");}}
             >
               <option value="">Pilih dokumen...</option>
 
@@ -552,13 +572,23 @@ export default function DispositionsClient({user}:{user:SessionUser}){
             </select>
 
             <span className="hint">
-              Surat masuk/Nota Dinas: setelah APPROVED. Surat keluar: setelah ISSUED.
+              Reviewer aktif dapat memberi tugas saat Surat Masuk V11 masih diperiksa.
             </span>
           </div>
 
+          {invoice&&<label className="field">
+            <span>Tujuan Tugas</span>
+            <select className="select" name="purpose" value={purpose} onChange={e=>setPurpose(e.target.value as TaskPurpose)}>
+              <option value="GENERAL">{TASK_PURPOSES.GENERAL}</option>
+              {user.role==="MANAGER"&&selectedLetter.status==="MANAGER_REVIEW"&&selectedLetter.current_owner_user_id===user.id&&
+                <option value="INVOICE_VERIFY">{TASK_PURPOSES.INVOICE_VERIFY}</option>}
+              {!parent&&scope==="KSU"&&selectedLetter.status==="APPROVED"&&
+                <option value="INVOICE_PAYMENT">{TASK_PURPOSES.INVOICE_PAYMENT}</option>}
+            </select>
+          </label>}
           <div className="field">
             <label>Diteruskan Kepada</label>
-            <select className="select" name="to_user_id" required>
+            <select aria-label="Diteruskan kepada" key={purpose} className="select" name="to_user_id" required>
               <option value="">Pilih PIC...</option>
               {targetUsers.map(u=>
                 <option key={u.id} value={u.id}>
@@ -593,9 +623,10 @@ export default function DispositionsClient({user}:{user:SessionUser}){
 
           <div className="field">
             <label>Hasil yang Diminta</label>
+            {purpose!=="GENERAL" ? <span className="input">Ringkasan dan bukti PDF atau gambar</span> :
             <select aria-label="Hasil yang diminta" className="select" name="result_requirement" defaultValue={parent?.result_requirement||"SUMMARY"}>
               {Object.entries(RESULT_REQUIREMENTS).map(([value,label])=><option key={value} value={value}>{label}</option>)}
-            </select>
+            </select>}
           </div>
           <div className="field full">
             <label>Instruksi / Catatan Disposisi</label>
@@ -664,6 +695,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
               <div className="kpi-row">
                 <span>Hasil yang Diminta</span>
                 <b>{RESULT_REQUIREMENTS[(detail.disposition.result_requirement||"SUMMARY") as ResultRequirement]}</b>
+                {detail.disposition.purpose&&<span>{TASK_PURPOSES[detail.disposition.purpose as TaskPurpose]}</span>}
               </div>
               <div className="kpi-row">
                 <span>Prioritas</span>
@@ -695,6 +727,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
                   <a className="btn btn-secondary" href={"/letters/outgoing?source_disposition_id="+encodeURIComponent(detail.disposition.id)}>Buat Draf Surat Hasil</a>}
                 {canCreate&&<button className="btn btn-secondary" onClick={()=>{
                   setParent(detail.disposition);
+                  setPurpose("GENERAL");
                   setSelectedLetterId(detail.disposition.letter_id);
                   setCreateFiles([]);
                   setDetailOpen(false);
@@ -813,6 +846,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
         onClose={()=>!processBusy&&setProcess(null)}
       >
         <form className="form-grid" onSubmit={submitProcess}>
+          {error&&<div className="field full error" role="alert">{error}</div>}
           <div className="field full">
             <label>
               {process.requiredNote?"Catatan / Hasil (wajib)":"Catatan Proses (opsional)"}
@@ -834,7 +868,16 @@ export default function DispositionsClient({user}:{user:SessionUser}){
             />
           </div>
 
-          {process.action==="SUBMIT_RESULT"&&
+          {process.action==="SUBMIT_RESULT"&&process.purpose==="INVOICE_PAYMENT"&&<>
+            <label className="field"><span>Nominal Bayar (Rp)</span><input className="input" name="payment_amount" inputMode="decimal" required/></label>
+            <label className="field"><span>Tanggal Bayar</span><input className="input" type="date" name="payment_date" max={jakartaDate()} required/></label>
+            <label className="field"><span>Nama Penerima</span><input className="input" name="payment_payee" required/></label>
+            <label className="field"><span>Rekening Tujuan</span><input className="input" name="payment_account" required/></label>
+            <label className="field"><span>Referensi Transfer / BPK</span><input className="input" name="payment_reference" required/></label>
+            <label className="field full"><span>Catatan Pembukuan</span><textarea className="textarea" name="bookkeeping_note" required/></label>
+            <p className="field full muted">Catat pembayaran yang sudah dilakukan melalui kanal resmi. Lampirkan buktinya sebelum mengirim hasil.</p>
+          </>}
+          {process.action==="SUBMIT_RESULT"&&(!process.purpose||process.purpose==="GENERAL")&&
             <ResultLetterField dispositionId={process.id} required={process.resultRequirement==="OUTGOING_LETTER"}/>}
           <div className="field full">
             <label>Lampiran Proses <span className="muted">
@@ -850,6 +893,14 @@ export default function DispositionsClient({user}:{user:SessionUser}){
             />
           </div>
 
+          {detail?.payments?.length>0&&["APPROVE_RESULT","RETURN_RESULT"].includes(process.action)&&
+            <div className="field full notice">
+              {detail.payments.filter((item:any)=>item.status==="PENDING").map((item:any)=><div key={item.id}>
+                <b>{formatInvoiceAmount(item.amount)} · {String(item.payment_date).slice(0,10)}</b>
+                <div>{item.payee} · {item.recipient_account} · {item.reference}</div>
+                <div>{item.bookkeeping_note}</div><a href={"/api/attachments/"+item.evidence_id} download>Bukti pembayaran</a>
+              </div>)}
+            </div>}
           <div className="field full modal-actions">
             <button
               type="button"

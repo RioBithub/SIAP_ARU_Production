@@ -4,6 +4,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { canSeeFinance } from "@/lib/permissions";
 import { getLedgerPosition } from "@/lib/finance-ledger";
+import { jakartaDate } from "@/lib/v11-workflow";
 import { getFinanceYearSnapshot } from "@/lib/finance-summary";
 
 export const runtime = "nodejs";
@@ -29,11 +30,19 @@ export async function GET() {
     `SELECT
       SUM(status='UNSEEN') AS unseen,
       SUM(status='IN_PROGRESS') AS active,
+      SUM(due_date<? AND status NOT IN ('RETURNED','CANCELLED','COMPLETED')) AS overdue,
       SUM(status='COMPLETED' AND YEARWEEK(completed_at,1)=YEARWEEK(CURDATE(),1)) AS completed_week
      FROM siap_dispositions
-     WHERE to_user_id=? OR ?='ROOT_ADMIN'`,
-    [user.id, user.role]
+     WHERE to_user_id=? OR current_owner_user_id=? OR ?='ROOT_ADMIN'`,
+    [jakartaDate(), user.id, user.id, user.role]
   );
+  const [followups]=await db.query<RowDataPacket[]>(
+    `SELECT d.id,l.subject,d.status,d.due_date,u.name AS owner_name
+     FROM siap_dispositions d JOIN siap_letters l ON l.id=d.letter_id
+     LEFT JOIN siap_users u ON u.id=d.current_owner_user_id
+     WHERE d.status NOT IN ('RETURNED','CANCELLED','COMPLETED')
+       AND (? IN (d.from_user_id,d.to_user_id,d.current_owner_user_id) OR ?='ROOT_ADMIN')
+     ORDER BY d.due_date IS NULL,d.due_date,d.created_at DESC LIMIT 8`,[user.id,user.role]);
 
   let finance = null;
   if (canSeeFinance(user.role)) {
@@ -101,6 +110,7 @@ export async function GET() {
     data:{
       letters: letterRows[0] || {},
       dispositions: dispRows[0] || {},
+      followups,
       finance
     }
   });

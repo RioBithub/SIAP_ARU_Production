@@ -8,12 +8,15 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "db:init": "node scripts/init-db.mjs",
-    "db:seed": "node scripts/seed.mjs"
+    "db:seed": "node scripts/seed.mjs",
+    "v11:bootstrap": "node scripts/v11/bootstrap.mjs",
+    "v11:uat": "node tests/v11/uat.mjs",
+    "v11:start": "node scripts/v11/start.mjs"
   },
   "dependencies": {
     "bcryptjs": "2.4.3",
-    "mysql2": "3.11.3",
-    "next": "14.2.32",
+    "mysql2": "3.24.6",
+    "next": "14.2.35",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "xlsx": "0.18.5"
@@ -23,6 +26,7 @@
     "@types/node": "22.10.2",
     "@types/react": "18.3.18",
     "@types/react-dom": "18.3.5",
+    "playwright": "1.62.1",
     "typescript": "5.7.2"
   }
 }

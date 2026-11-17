@@ -1,0 +1,51 @@
+﻿ID,Prioritas,Modul,Skenario,Langkah,Hasil_Yang_Diharapkan,Status_Work,Bukti
+UAT-001,P0,Akses dan integritas,Staging pakai DB/storage sendiri,Cek hostname DB/env/storage & buat data test,"Data hanya muncul di staging, no prod writes",PASS,"Koneksi loopback, marker DB, unggahan SIMULASI di direktori staging terpisah."
+UAT-002,P0,Akses dan integritas,Role nonauth API,Tanpa cookie coba create/approve,401; tidak ada perubahan DB,PASS,POST create/approve tanpa cookie: 401.
+UAT-003,P0,Role,Hanya 2 manager dalam pilihan routing baru,Buka surat masuk dan outgoing selector,"Manager Operasional + Manager Keuangan, SDM & Umum; histori Manager Gedung aman",PASS,Dua Manager resmi; riwayat Manager Gedung tetap diakses dan akun tetap aktif.
+UAT-004,P0,Role,Manager lintas unit,Manager Ops mengirim task ke Staff Keu,Ditolak jika bukan jalur pengecualian yang sah,PASS,POST disposisi lintas Manager ditolak.
+UAT-005,P0,Surat Masuk,Staff input invoice fisik,"Isi nomor vendor, invoice, tanggal dan jam terima",Simpan stage intake sekretariat,PASS,Invoice asli dan waktu WIB masuk antrean Sekretariat.
+UAT-006,P0,Sekretariat,Bukti penerimaan wajib,Sekretariat submit tanpa bukti serah terima,Backend menolak tanpa evidence,PASS,Bukti terima kosong ditolak; status tidak bergeser.
+UAT-007,P0,Sekretariat,Tanggal jam dan pengantar/penerima,Isi metadata lengkap dan unggah file,Tersimpan akurat + audit + file terproteksi,PASS,"Tanggal, jam, pengantar, penerima dan audit sesuai; bukti terlindungi."
+UAT-008,P0,Sekretariat,Routing ke Manager dulu,Registrasi Surat Masuk pilih Dirut langsung,Ditolak untuk surat masuk baru,PASS,Sekretariat tidak dapat melompat ke Dirut.
+UAT-009,P0,Sekretariat,Routing ke Manager Ops,"Dokumen unit Ops, Sek pilih Manager Ops",Manager Ops menerima antrian,PASS,Manager Operasional adalah reviewer pertama.
+UAT-010,P0,Sekretariat,Routing ke Manager Keu SDM Umum,"Dokumen unit Keu/SDM, Sek pilih mgr gabungan","Manager tepat, bukan Ops",PASS,"Unit SDM wajib melalui Manager Keuangan, SDM & Umum."
+UAT-011,P0,SPK,Invoice dengan SPK terdaftar,Pilih dokumen SPK terkait,"Reference valid, no duplikasi",PASS,Invoice merujuk satu SPK terdaftar lewat skema business documents yang sama.
+UAT-012,P0,SPK,Invoice tanpa SPK,Pilih tidak pakai SPK jika sesuai,Bisa lanjut; tidak diwajibkan SPK secara global,PASS,Invoice tanpa kewajiban SPK berhasil diregistrasi.
+UAT-013,P0,Invoice,Belum diverifikasi,Manager klik approve invoice tanpa tugas hasil,Ditolak pada backend,PASS,Eskalasi dan ACC final ditolak sebelum verifikasi.
+UAT-014,P0,Invoice,Verifikasi operasional,Manager Ops → Staff Ops → lapor bukti → Manager ACC,Invoice baru bisa diputuskan setelah ACC,PASS,Staff verifikasi bukti dan Manager ACC; status dokumen masih review.
+UAT-015,P0,Invoice,Finance memverifikasi pekerjaan,Coba tugaskan verifikasi substansi ke Finance,Ditolak kebijakan untuk invoice Ops,PASS,Finance ditolak sebagai verifikator maupun penerima umum invoice.
+UAT-016,P0,Invoice,Revisi invoice material,Ubah nominal/SPK setelah verifikasi telah DONE,Verifikasi lama invalid; wajib ulang,PASS,"Nominal/SPK baru menaikkan revisi, bukti lama tetap tersimpan dan tidak berlaku."
+UAT-017,P0,Invoice,Kembali untuk revisi hasil,Manager return report verifikasi dengan alasan,"Status kembali ke pelaksana, reason terekam",PASS,"Return hasil kembali ke Staff, alasan tercatat, hasil kedua diterima."
+UAT-018,P0,Invoice,Invoice approve bukan paid,Dokumen disetujui tanpa bukti bayar,Status bayar tetap unpaid/in process,PASS,ACC Direksi memindahkan approval saja; nominal bayar masih nol.
+UAT-019,P0,Finance,Manager Keu menugaskan Finance,Invoice approved → buat instruksi bayar,Finance menerima tugas pembayaran,PASS,Instruksi pembayaran KSU diterima Finance dengan akses privat.
+UAT-020,P0,Finance,Finance catat pembayaran,Isi nominal tanggal rekening referensi bukti,Tersimpan terhubung invoice/payables audit,PASS,Bukti dan pencatatan tersimpan pending; tautan buku utang tersedia.
+UAT-021,P0,Finance,Pembayaran parsial,Catat sebagian bayar,"Sisa outstanding benar, belum fully paid",PASS,"Rp40.000 di-ACC, sisa Rp70.000; buku utang menolak perubahan langsung."
+UAT-022,P0,Finance,Double payment,Coba submit transaksi sama dua kali,Idempotent/dedupe atau verifikasi cegah duplikasi,PASS,Referensi berulang dan lebih bayar ditolak; dua submit paralel menghasilkan satu pelunasan pending.
+UAT-023,P0,Finance,Closing premature,Tutup invoice sebelum Finance ACC,Backend menolak,PASS,Closing ditolak sebelum ACC dan saat tugas aktif. Lunas setelah ACC dan tugas terminal.
+UAT-024,P1,Persekot,Invoice biasa tanpa SPB,Ajukan invoice tanpa persekot tanpa SPB,Diterima sesuai aturan,PASS,Invoice biasa diterima tanpa SPB.
+UAT-025,P1,Persekot,Persekot tanpa SPB,Ajukan pengajuan persekot tanpa file SPB,Backend menolak,PASS,Centang SPB tanpa PDF tidak cukup untuk pengajuan.
+UAT-026,P1,Persekot,Checklist persekot,Lampirkan SPB PDF dan item relevan,"Bukti tersimpan, audit, lanjut approval",PASS,PDF SPB dan checklist opsional tersimpan; Nota Dinas dapat dilanjutkan.
+UAT-027,P0,Disposisi,Tidak langsung Dirut ke Staff,Dirut buat task ke Staff Ops,Ditolak; lewat Manager/Dirops,PASS,Dirut tidak bisa membuat tugas Staff langsung.
+UAT-028,P0,Disposisi,Berjenjang 3-4 role,"Dirut→Dirops→Manager→Staff, hasil balik",Semua child linked parent; ACC naik urut,PASS,Dirut → Dirops → Manager → Staff; hasil di-ACC oleh pemberi tiap tugas.
+UAT-029,P0,Disposisi,Induk dengan anak aktif,Parent kirim hasil sebelum anak done,Ditolak,PASS,Induk tidak dapat mengirim hasil atau dibatalkan saat anak aktif.
+UAT-030,P0,Disposisi,Dua anak task,Manager menugaskan 2 Staff; 1 belum DONE,Parent tidak bisa tutup sampai semua anak selesai,PASS,Dua anak. Satu selesai belum cukup; parent selesai setelah kedua hasil di-ACC.
+UAT-031,P1,Disposisi,Tugas dari Surat Masuk saat review,Reviewer aktif buat disposition sebelum approve,"Disposisi ada, status surat tetap REVIEW",PASS,Reviewer membuat tugas ketika review tanpa persetujuan otomatis.
+UAT-032,P0,Disposisi,User bukan reviewer membuat dispo,Akun lain mencoba endpoint POST,403; tidak ada bypass,PASS,Pengguna yang bukan reviewer tidak dapat membuat tugas review.
+UAT-033,P0,Surat Keluar,Persetujuan berjenjang,Staff→Manager dipilih→Dirops→Dirut,"Tidak dapat skip, status dan owner tepat",PASS,Draf → Manager terpilih → Dirops → Dirut → antrean Sekretariat.
+UAT-034,P0,Surat Keluar,Return dan resubmit,Dirops return dengan alasan → Staff edit → submit,Kembali ke Manager tahap awal,PASS,Return Dirops membawa alasan ke penyusun; pengajuan ulang dimulai di Manager.
+UAT-035,P0,Sekretariat,Finalisasi nomor tanpa collision,Terbitkan 2 surat bersamaan,Number ledger tidak ganda,PASS,Reservasi custom paralel memakai variant berbeda; finalisasi memakai nomor yang sama.
+UAT-036,P0,Sekretariat,PDF final Mekari manual,Upload signed PDF final yang sesuai,File protected; provenance manual tersimpan,PASS,Surat terbit dengan provenance unggah PDF Mekari manual.
+UAT-037,P0,Sekretariat,File digital invalid,Upload .exe atau non PDF untuk DIGITAL,Ditolak backend,PASS,Backend menolak ekstensi .exe dan isi non-PDF dengan ekstensi .pdf.
+UAT-038,P0,Sekretariat,Bukti pengiriman,Terbitkan lalu catat tanggal dan bukti kirim,Status ISSUED/SENT sesuai domain; audit,PASS,"Status ISSUED dan tanggal kirim terpisah, dengan kanal, penerima dan bukti."
+UAT-039,P0,Surat Keluar,Surat hasil disposisi yang salah,Tautkan outgoing bukan dari tugas asal,Ditolak,PASS,Surat terbit di luar disposisi ditolak. Surat hasil yang terkait diterima.
+UAT-040,P0,Nota Dinas,Nota Manager langsung ke Dirut,Manager membuat Nota Internal ke Dirut,Diizinkan sesuai ketentuan,PASS,Nota Dinas pengusul Manager dapat langsung ke Dirut.
+UAT-041,P0,Audit,Attachment salah user,Akun nonberhak akses download attachment,403; file tidak bocor,PASS,Bukti penerimaan dan bukti bayar menolak user di luar ACL.
+UAT-042,P1,Audit,Tracing,Tinjau histori penerimaan→review→dispo→payment,Actor/timestamp/file/status lengkap,PASS,"Riwayat penerimaan, review, disposisi dan bukti bayar memuat actor, waktu dan transisi."
+UAT-043,P1,Mekari,HMAC sandbox valid/invalid,GET docs dengan signature baru dan salah,200 valid bila punya scope; 401 invalid; tak expose secret,SKIP,Sandbox eksternal: kredensial/scope belum tersedia. Tes lokal HMAC full path + query lulus.
+UAT-044,P1,Mekari,Webhook duplicate,Kirim callback sama dua kali,Idempotent; single transition,PASS,"Mock: token salah 403, dua webhook hanya satu event, status belum berubah tanpa polling."
+UAT-045,P1,Mekari,Status completed dan PDF,Selesaikan demo signing di sandbox,Final PDF diunduh dan tercatat; signed berbeda manual,SKIP,"Signing eksternal belum dijalankan. Mock lulus: polling, PDF terproteksi, idempoten, provenance dan penerbitan."
+UAT-046,P0,Regression,Modul Finance dan Rekening Koran existing,Jalankan smoke suite,Tidak ada perubahan angka/bug,PASS,"Utang manual, saldo Rekening Koran, impor BRI fiktif dan deduplikasi lulus."
+UAT-047,P0,Regression,Penerbitan dan ledger existing,"Jalankan nomor lama, custom/backdate",Behavior lama aman kecuali perubahan disetujui,PASS,Custom/backdate tetap memakai ledger bawaan; nomor terbit unik.
+UAT-048,P0,Build,Build/Typecheck,npm ci && npm run typecheck && npm run build,Keluar code 0 tanpa warning blocking,PASS,"npm ci, npm run typecheck, npm run build masing-masing exit 0."
+UAT-049,P0,Migration,Migration additive di staging,"Snapshot, apply, reapply, rollback plan",Tidak ada data hilang; idempotent,PASS,Migrasi dua kali; baris lama identik; backup berhasil dipulihkan dan cocok pada 35 tabel.
+UAT-050,P1,Responsive,Mobile 390px,Praktik form receipt & task,"Tanpa overflow horizontal, tombol terbaca",PASS,"Chromium 390 px dan 1440 px: registrasi, dua Manager, pembuatan tugas, form hasil dan invoice lunas."

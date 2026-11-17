@@ -18,10 +18,15 @@ export function letterAccess(user: SessionUser) {
             OR EXISTS (SELECT 1 FROM siap_disposition_actions review
               WHERE review.disposition_id=d.id AND review.actor_user_id=?))
       )
+      OR (l.direction='INCOMING' AND l.document_type='INVOICE_MASUK'
+        AND l.status IN ('APPROVED','COMPLETED') AND EXISTS (
+          SELECT 1 FROM siap_v11_letters v JOIN siap_v11_managers m ON m.scope='KSU'
+          WHERE v.letter_id=l.id AND m.user_id=? AND ?='MANAGER'
+        ))
       OR EXISTS (SELECT 1 FROM siap_letter_actions a WHERE a.letter_id=l.id AND a.actor_user_id=?)
     )`,
     params: [user.id, user.id, user.role, user.id, user.id, user.id,
-      user.id, user.id, user.id, user.id, user.id],
+      user.id, user.id, user.id, user.id, user.id, user.role, user.id],
   };
 }
 

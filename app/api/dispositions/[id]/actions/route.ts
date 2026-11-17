@@ -2,12 +2,14 @@ import crypto from "crypto";
 import { NextResponse } from "next/server";
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { getCurrentUser } from "@/lib/auth";
-import { withTransaction } from "@/lib/db";
+import { db, withTransaction } from "@/lib/db";
 import { auditLog } from "@/lib/audit";
 import { str } from "@/lib/http";
 import { saveUpload } from "@/lib/upload";
 import { discardUncommittedFiles, type StoredLetterFile } from "@/lib/letter-uploads";
 import { findDispositionResultLetters } from "@/lib/correspondence-data";
+import { saveProof, v11Letter } from "@/lib/v11-data";
+import { decidePayment, recordPayment } from "@/lib/v11-finance";
 
 export const runtime="nodejs";
 
@@ -32,7 +34,8 @@ async function parseRequest(request:Request){
       action:String(form.get("action")||"").toUpperCase(),
       note:str(form.get("note"),5000),
       resultLetterId:str(form.get("result_letter_id"),36),
-      files:form.getAll("files").filter((x):x is File=>x instanceof File && x.size>0)
+      fields: Object.fromEntries(form.entries()) as Record<string, unknown>,
+      files:form.getAll("files").filter((x):x is File=>typeof x !== "string" && x.size>0)
     };
   }
 
@@ -41,6 +44,7 @@ async function parseRequest(request:Request){
     action:String(body.action||"").toUpperCase(),
     note:str(body.note,5000),
     resultLetterId:str(body.result_letter_id,36),
+    fields: body as Record<string, unknown>,
     files:[] as File[]
   };
 }
@@ -60,17 +64,22 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
     if(files.length>5)
       throw new Error("Maksimal 5 lampiran proses dalam satu aksi.");
 
+    const [references] = await db.query<RowDataPacket[]>("SELECT letter_id FROM siap_dispositions WHERE id=?", [params.id]);
+    if (!references[0]) throw new Error("Disposisi tidak ditemukan.");
     const data = await withTransaction(async conn => {
+      // New tasks, results and letter transitions acquire the letter lock first.
+      await conn.query("SELECT id FROM siap_letters WHERE id=? FOR UPDATE", [references[0].letter_id]);
       const [rows]=await conn.query<RowDataPacket[]>(
         `SELECT d.*,
           l.direction AS letter_direction,
           l.status AS letter_status,
           fu.role AS originator_role,
-          tu.role AS assignee_role
+          tu.role AS assignee_role,v.purpose,v.invoice_revision AS task_revision
          FROM siap_dispositions d
          JOIN siap_letters l ON l.id=d.letter_id
          JOIN siap_users fu ON fu.id=d.from_user_id
          JOIN siap_users tu ON tu.id=d.to_user_id
+         LEFT JOIN siap_v11_dispositions v ON v.disposition_id=d.id
          WHERE d.id=?
          LIMIT 1 FOR UPDATE`,
         [params.id]
@@ -79,11 +88,31 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
       const d=rows[0];
       if(!d) throw new Error("Disposisi tidak ditemukan.");
 
+      const workflow = await v11Letter(d.letter_id, conn);
       const currentOwner=String(d.current_owner_user_id||d.to_user_id);
       const isRoot=user.role==="ROOT_ADMIN";
+      const strict = Boolean(d.purpose);
+      const verification = d.purpose === "INVOICE_VERIFY";
+      const payment = d.purpose === "INVOICE_PAYMENT";
+      const cancel = action === "CANCEL_TASK";
 
-      if(!isRoot && currentOwner!==String(user.id))
+      if (cancel ? !isRoot && d.from_user_id !== user.id : !isRoot && currentOwner !== user.id) {
         throw new Error("Disposisi ini sedang berada pada pihak lain.");
+      }
+      if ((verification || payment) && !cancel) {
+        const assigneeAction = ["SEEN", "START", "SUBMIT_RESULT", "RETURN_TASK"].includes(action);
+        if (assigneeAction ? user.id !== d.to_user_id || user.role !== (payment ? "FINANCE" : "STAFF")
+          : user.id !== d.from_user_id || user.role !== "MANAGER") {
+          throw new Error("Tugas invoice harus dikerjakan dan diperiksa oleh peserta yang ditetapkan.");
+        }
+        if (verification && ["SUBMIT_RESULT","APPROVE_RESULT"].includes(action) &&
+            (!workflow || workflow.invoice_revision !== d.task_revision || d.letter_status !== "MANAGER_REVIEW")) {
+          throw new Error("Tugas verifikasi berlaku untuk revisi dan tahap review invoice yang aktif.");
+        }
+        if (payment && (!workflow?.payable_id || d.letter_status !== "APPROVED")) {
+          throw new Error("Invoice tidak berada pada tahap pembayaran.");
+        }
+      }
 
       const before=String(d.status);
       let after=before;
@@ -92,9 +121,9 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
       let submittedAt:any=d.submitted_at||null;
       let reviewedAt:any=d.reviewed_at||null;
       let returnNote:any=d.return_note||null;
-      if (action === "SUBMIT_RESULT" || action === "RETURN_TASK") {
+      if (["SUBMIT_RESULT","RETURN_TASK","APPROVE_RESULT","CANCEL_TASK"].includes(action)) {
         const [activeChildren] = await conn.query<RowDataPacket[]>(
-          "SELECT id FROM siap_dispositions WHERE parent_id=? AND status NOT IN ('COMPLETED','RETURNED') LIMIT 1",
+          "SELECT id FROM siap_dispositions WHERE parent_id=? AND status NOT IN ('COMPLETED','RETURNED','CANCELLED') LIMIT 1",
           [params.id],
         );
         if (activeChildren.length) throw new Error("Tunggu hasil disposisi turunan sebelum menyelesaikan proses ini.");
@@ -128,6 +157,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         if(!isRoot && String(d.to_user_id)!==String(user.id))
           throw new Error("Hanya penerima tugas yang dapat mengirim hasil.");
 
+        if ((verification || payment) && resultLetterId) throw new Error("Tugas invoice meminta bukti pemeriksaan atau pembayaran.");
         if (d.result_requirement === "ATTACHMENT" && !files.length) {
           throw new Error("Lampiran hasil wajib diunggah untuk disposisi ini.");
         }
@@ -147,7 +177,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         const assigneeRole=String(d.assignee_role);
 
         if(originatorRole==="PRESIDENT_DIRECTOR"){
-          if(assigneeRole==="DIRECTOR_OPS"){
+          if(strict || assigneeRole==="DIRECTOR_OPS"){
             after="REVIEW_DIRUT";
             nextOwner=String(d.from_user_id);
           }else{
@@ -174,7 +204,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         if(!["REVIEW_MANAGER","REVIEW_DIROPS","REVIEW_DIRUT","REVIEW_ROOT"].includes(before))
           throw new Error("Disposisi tidak sedang menunggu review hasil.");
 
-        if(before==="REVIEW_DIROPS" && String(d.originator_role)==="PRESIDENT_DIRECTOR"){
+        if(!strict && before==="REVIEW_DIROPS" && String(d.originator_role)==="PRESIDENT_DIRECTOR"){
           after="REVIEW_DIRUT";
           nextOwner=String(d.from_user_id);
         }else{
@@ -207,6 +237,13 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         after="RETURNED";
         nextOwner=String(d.from_user_id);
         returnNote=note;
+
+      } else if (action === "CANCEL_TASK") {
+        if (!strict || ["COMPLETED", "RETURNED", "CANCELLED"].includes(before)) throw new Error("Tugas tidak dapat dibatalkan.");
+        if (!note) throw new Error("Alasan pembatalan wajib diisi.");
+        after = "CANCELLED";
+        nextOwner = String(d.from_user_id);
+        returnNote = note;
 
       }else{
         throw new Error("Action tidak valid.");
@@ -260,9 +297,11 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
       );
 
       let attachmentCount=0;
+      let evidenceId: string | null = null;
 
       for(const file of files){
-        const saved=await saveUpload(file,"ADDITIONAL");
+        const isEvidence = action === "SUBMIT_RESULT" && (verification || payment) && !evidenceId;
+        const saved = isEvidence ? await saveProof(file) : await saveUpload(file,"ADDITIONAL");
         stored.push(saved);
         const attachmentId=crypto.randomUUID();
 
@@ -279,10 +318,24 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
           ]
         );
 
+        if (isEvidence) evidenceId = attachmentId;
         attachmentCount++;
       }
 
-      if(action==="START" && String(d.letter_direction)!=="OUTGOING"){
+      if (strict && (action === "SUBMIT_RESULT" || action === "RETURN_RESULT" || cancel)) {
+        await conn.execute("UPDATE siap_v11_dispositions SET result_letter_id=? WHERE disposition_id=?",
+          [action === "SUBMIT_RESULT" ? resultLetterId || null : null, params.id]);
+      }
+      if (payment) {
+        if (action === "SUBMIT_RESULT") {
+          if (!workflow || !evidenceId) throw new Error("Bukti pembayaran wajib dilampirkan.");
+          await recordPayment(conn, workflow, d, actionId, evidenceId, parsed.fields);
+        } else if (action === "APPROVE_RESULT" || action === "RETURN_RESULT" || cancel) {
+          await decidePayment(conn, d, user.id, cancel ? "CANCELLED" : action === "APPROVE_RESULT" ? "APPROVED" : "RETURNED");
+        }
+      }
+
+      if(!workflow && action==="START" && String(d.letter_direction)!=="OUTGOING"){
         if(["APPROVED","DISPOSED","IN_PROGRESS"].includes(String(d.letter_status))){
           await conn.execute(
             `UPDATE siap_letters
@@ -293,12 +346,13 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         }
       }
 
-      if(after==="COMPLETED" && String(d.letter_direction)!=="OUTGOING"){
+      if(!workflow && after==="COMPLETED" && String(d.letter_direction)!=="OUTGOING" &&
+          ["APPROVED","DISPOSED","IN_PROGRESS"].includes(String(d.letter_status))){
         const [pending]=await conn.query<RowDataPacket[]>(
           `SELECT COUNT(*) AS c
            FROM siap_dispositions
            WHERE letter_id=?
-             AND status NOT IN ('COMPLETED','RETURNED')`,
+             AND status NOT IN ('COMPLETED','RETURNED','CANCELLED')`,
           [d.letter_id]
         );
 
@@ -317,7 +371,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         action:`DISPOSITION_${action}`,
         entityType:"DISPOSITION",
         entityId:params.id,
-        metadata:{from:before,to:after,note,nextOwner,attachments:attachmentCount,resultLetterId:resultLetterId||null},
+        metadata:{from:before,to:after,note,nextOwner,attachments:attachmentCount,resultLetterId:resultLetterId||null,purpose:d.purpose,evidenceId},
         request
       }, conn);
       return { status: after, attachments: attachmentCount };

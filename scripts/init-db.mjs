@@ -125,17 +125,11 @@ async function ensureUser(name, email, role, unit, rawPassword) {
 
 const rootName = process.env.INIT_ROOT_NAME || "Root Administrator";
 const rootEmail = (process.env.INIT_ROOT_EMAIL || "root@aruraharja.co.id").toLowerCase();
-const rootPassword = process.env.INIT_ROOT_PASSWORD || "AdminARU!2026";
-const rootId = await ensureUser(rootName, rootEmail, "ROOT_ADMIN", "IT / System", rootPassword);
-
-const operationalPassword = "SiapARU!2026";
-await ensureUser("Staff Administrasi", "staff@aruraharja.co.id", "STAFF", "SDM & Umum", operationalPassword);
-await ensureUser("Manager Keu, SDM & Umum", "manager@aruraharja.co.id", "MANAGER", "Keu, SDM & Umum", operationalPassword);
-await ensureUser("Manager Operasional", "manager.ops@aruraharja.co.id", "MANAGER", "Operasional", operationalPassword);
-await ensureUser("Manager Gedung", "manager.gedung@aruraharja.co.id", "MANAGER", "Gedung", operationalPassword);
-await ensureUser("Direktur Operasional", "dirops@aruraharja.co.id", "DIRECTOR_OPS", "Direksi", operationalPassword);
-await ensureUser("Direktur Utama", "dirut@aruraharja.co.id", "PRESIDENT_DIRECTOR", "Direksi", operationalPassword);
-await ensureUser("Finance User", "finance@aruraharja.co.id", "FINANCE", "Finance", operationalPassword);
+const rootPassword = process.env.INIT_ROOT_PASSWORD;
+if (!rootPassword || rootPassword.length < 16) {
+  throw new Error("Set INIT_ROOT_PASSWORD minimal 16 karakter melalui konfigurasi privat.");
+}
+const rootId = await ensureUser(rootName, rootEmail, "ROOT_ADMIN", "TI", rootPassword);
 
 await conn.execute(
   `INSERT INTO siap_finance_source_modes(ledger_type,data_mode,updated_by) VALUES('RECEIVABLE','SUMMARY',?)
@@ -165,7 +159,5 @@ for (const [code,name,type,pattern,description] of formats) {
 }
 
 console.log("SIAP ARU database initialized.");
-console.log(`Root login: ${rootEmail} / ${rootPassword}`);
-console.log(`Operational user password: ${operationalPassword}`);
 console.log("Operational emails: staff@aruraharja.co.id, manager@aruraharja.co.id, manager.ops@aruraharja.co.id, manager.gedung@aruraharja.co.id, dirops@aruraharja.co.id, dirut@aruraharja.co.id, finance@aruraharja.co.id");
 await conn.end();

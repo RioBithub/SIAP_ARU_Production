@@ -6,12 +6,17 @@ import { canEditFinance } from "@/lib/permissions";
 import { amount, dateOnly, required, str } from "@/lib/http";
 import { auditLog } from "@/lib/audit";
 
+import { linkedPayable } from "@/lib/v11-finance";
+
 export async function PATCH(request:Request,{params}:{params:{id:string}}){
   const user=await getCurrentUser();if(!user)return NextResponse.json({ok:false,error:"Unauthorized"},{status:401});
   if(!canEditFinance(user.role))return NextResponse.json({ok:false,error:"Forbidden"},{status:403});
   try{
+    if(await linkedPayable(params.id)) return NextResponse.json({ok:false,error:"Catat perubahan melalui tugas pembayaran invoice V11."},{status:409});
     const b=await request.json();
-    const [rows]=await db.query<RowDataPacket[]>(`SELECT * FROM siap_payables WHERE id=? LIMIT 1`,[params.id]);
+    const [rows]=await db.query<RowDataPacket[]>(
+      `SELECT p.*, DATE_FORMAT(p.invoice_date,'%Y-%m-%d') invoice_date_text,
+        DATE_FORMAT(p.due_date,'%Y-%m-%d') due_date_text FROM siap_payables p WHERE p.id=? LIMIT 1`,[params.id]);
     const row=rows[0];if(!row)throw new Error("Data tidak ditemukan.");
     const total=b.amount===undefined?Number(row.amount):amount(b.amount,"Total");
     const paid=b.paid_amount===undefined?Number(row.paid_amount):amount(b.paid_amount,"Sudah dibayar");
@@ -19,8 +24,8 @@ export async function PATCH(request:Request,{params}:{params:{id:string}}){
     const status=paid>=total?"PAID":paid>0?"PARTIAL":"OPEN";
     const counterparty=b.counterparty===undefined?String(row.counterparty):required(b.counterparty,"Pihak",255);
     const invoiceNo=b.invoice_no===undefined?String(row.invoice_no):required(b.invoice_no,"Nomor invoice",120);
-    const invoiceDate=b.invoice_date===undefined?String(row.invoice_date).slice(0,10):dateOnly(b.invoice_date,"Tanggal invoice");
-    const dueDate=b.due_date===undefined?String(row.due_date).slice(0,10):dateOnly(b.due_date,"Jatuh tempo");
+    const invoiceDate=b.invoice_date===undefined?row.invoice_date_text:dateOnly(b.invoice_date,"Tanggal invoice");
+    const dueDate=b.due_date===undefined?row.due_date_text:dateOnly(b.due_date,"Jatuh tempo");
     const notes=b.notes===undefined?String(row.notes||""):str(b.notes,1000);
     await db.execute(
       `UPDATE siap_payables SET counterparty=?,invoice_no=?,invoice_date=?,due_date=?,amount=?,paid_amount=?,status=?,notes=?,updated_by=? WHERE id=?`,
@@ -34,6 +39,7 @@ export async function PATCH(request:Request,{params}:{params:{id:string}}){
 export async function DELETE(request:Request,{params}:{params:{id:string}}){
   const user=await getCurrentUser();if(!user)return NextResponse.json({ok:false,error:"Unauthorized"},{status:401});
   if(user.role!=="ROOT_ADMIN")return NextResponse.json({ok:false,error:"Hanya Root Admin yang dapat menghapus."},{status:403});
+  if(await linkedPayable(params.id)) return NextResponse.json({ok:false,error:"Utang terhubung invoice V11 dan bukti pembayaran."},{status:409});
   const [rows]=await db.query<RowDataPacket[]>(`SELECT * FROM siap_payables WHERE id=? LIMIT 1`,[params.id]);
   if(!rows[0])return NextResponse.json({ok:false,error:"Data tidak ditemukan."},{status:404});
   await auditLog({userId:user.id,action:"PAYABLE_DELETE",entityType:"PAYABLE",entityId:params.id,metadata:{invoice_no:rows[0].invoice_no,amount:rows[0].amount},request});

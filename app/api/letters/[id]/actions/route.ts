@@ -11,8 +11,14 @@ import { REVIEW_STATUS, canHandleSecretariat, reviewRole } from "@/lib/correspon
 import { letterAccess } from "@/lib/letter-access";
 import { saveUpload } from "@/lib/upload";
 import { getBusinessDocumentRow } from "@/lib/business-document-data";
-import { isBusinessDocument, isInvoice, SPK_OUTGOING, type SignatureMethod } from "@/lib/business-documents";
+import { INVOICE_INCOMING, isBusinessDocument, isInvoice, SPK_OUTGOING, type SignatureMethod } from "@/lib/business-documents";
 import { discardUncommittedFiles, insertLetterAttachment, type StoredLetterFile } from "@/lib/letter-uploads";
+
+import { activeTasks, checkedDate, invoiceVerified, officialManager, receiptFields, saveProof,
+  takeFile, v11Letter } from "@/lib/v11-data";
+import { DELIVERY_METHODS, jakartaDate } from "@/lib/v11-workflow";
+import { requireInvoicePaid } from "@/lib/v11-finance";
+import { mekariMode } from "@/lib/mekari-sign";
 
 export const runtime="nodejs";
 
@@ -65,6 +71,9 @@ async function parseRequest(request:Request) {
       files:form.getAll("files").filter((x):x is File=>typeof x !== "string" && x.size > 0),
       signedFile:signed && typeof signed !== "string" && signed.size > 0 ? signed : null,
       signatureMethod:String(form.get("signature_method") || ""),
+      fields: Object.fromEntries(form.entries()) as Record<string, unknown>,
+      receiptFile: takeFile(form.get("receipt_file")),
+      dispatchFile: takeFile(form.get("dispatch_file")),
     };
   }
 
@@ -77,7 +86,10 @@ async function parseRequest(request:Request) {
       routingTargetId:str(body.routing_target_user_id,36),
     files:[] as File[],
     signedFile:null,
-    signatureMethod:"",
+    signatureMethod:String(body.signature_method || ""),
+    fields: body as Record<string, unknown>,
+    receiptFile: null,
+    dispatchFile: null,
   };
 }
 
@@ -90,7 +102,9 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
     const parsed=await parseRequest(request);
     const {action,comment,files}=parsed;
 
-    if(files.length + Number(Boolean(parsed.signedFile)) > 5)
+    if (parsed.receiptFile && action !== "REGISTER_INCOMING") throw new Error("Bukti terima diunggah pada tahap registrasi.");
+    if (parsed.dispatchFile && action !== "MARK_SENT") throw new Error("Bukti kirim diunggah bersama pencatatan pengiriman.");
+    if (files.length + [parsed.signedFile, parsed.receiptFile, parsed.dispatchFile].filter(Boolean).length > 5)
       throw new Error("Maksimal 5 lampiran proses dalam satu aksi.");
 
     const result = await withTransaction(async conn => {
@@ -104,10 +118,20 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
       if(!letter)
         return null;
 
+      const workflow = await v11Letter(params.id, conn);
       const status=String(letter.status);
       const direction=String(letter.direction);
       const documentType=String(letter.document_type);
       const business=isBusinessDocument(documentType);
+      const v11Invoice = Boolean(workflow && documentType === INVOICE_INCOMING);
+      const verified = async () => !v11Invoice ||
+        await invoiceVerified(conn, params.id, workflow!.invoice_revision, letter.routing_target_user_id);
+      const assertVerified = async () => {
+        if (!await verified()) throw new Error("ACC hasil verifikasi unit untuk revisi invoice ini wajib sebelum persetujuan atau eskalasi.");
+      };
+      const assertNoActiveTasks = async () => {
+        if (workflow && await activeTasks(conn, params.id)) throw new Error("Selesaikan atau batalkan tugas yang masih aktif.");
+      };
       const secretariat = Boolean(letter.uses_secretariat);
       const administrativeReview = Boolean(letter.secretariat_review_required);
       const outgoing = direction === "OUTGOING";
@@ -115,6 +139,12 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
       const atSecretariat = secretariat && letter.current_role === "SECRETARIAT";
       const handlesSecretariat = atSecretariat && canHandleSecretariat(user.role);
       let signature: SignatureMethod | null = null;
+      let signatureProvenance: string | null = null;
+      let signatureAttachmentId: string | null = null;
+      let receiptDate: string | null = null;
+      let receipt: ReturnType<typeof receiptFields> | null = null;
+      let dispatchChannel: string | null = null;
+      let dispatchRecipient: string | null = null;
 
       let next=status;
       let nextRole=letter.current_role ? String(letter.current_role) : null;
@@ -128,7 +158,22 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         if (!incomingViaSecretariat || status !== "SECRETARIAT_INTAKE" || !handlesSecretariat) {
           throw new Error("Surat ini tidak sedang menunggu registrasi Sekretariat.");
         }
-        const target = await activeReviewer(conn, required(parsed.routingTargetId || letter.routing_target_user_id, "Tujuan review", 36));
+        const targetId = required(parsed.routingTargetId || letter.routing_target_user_id, "Tujuan review", 36);
+        const target = workflow ? await officialManager(conn, targetId, workflow.requesting_unit)
+          : await activeReviewer(conn, targetId);
+        if (workflow) {
+          receipt = receiptFields({ ...workflow, ...parsed.fields }, true);
+          const savedDate = letter.received_date instanceof Date ? letter.received_date.toISOString().slice(0, 10) : letter.received_date;
+          receiptDate = checkedDate(parsed.fields.received_date ?? savedDate, "Tanggal diterima");
+          if (receiptDate > jakartaDate()) throw new Error("Tanggal penerimaan tidak boleh di masa depan.");
+          const [original] = await conn.query<RowDataPacket[]>(
+            "SELECT 1 FROM siap_attachments WHERE letter_id=? AND disposition_id IS NULL AND attachment_kind='ORIGINAL' LIMIT 1", [params.id],
+          );
+          if (!original.length) throw new Error("Dokumen asli wajib tersedia.");
+          if (!workflow.receipt_attachment_id && !parsed.receiptFile) throw new Error("Unggah bukti serah-terima sebelum registrasi.");
+        } else if (parsed.receiptFile) {
+          throw new Error("Gunakan lampiran proses untuk surat historis.");
+        }
         routingTargetId = target.id;
         routingNote = "Diteruskan kepada " + target.name;
         next = REVIEW_STATUS[target.role];
@@ -142,9 +187,27 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         if(user.role!=="ROOT_ADMIN" && String(letter.created_by)!==String(user.id))
           throw new Error("Hanya penyusun dokumen yang dapat mengajukan ulang.");
 
-        const manager=await getRoutingManager(conn, letter.routing_target_user_id);
-        if(!manager)
-          throw new Error("Manager tujuan dokumen tidak ditemukan.");
+        let target: { id: string; role: keyof typeof REVIEW_STATUS } | null;
+        if (workflow) {
+          if (workflow.kind === "PERSEKOT" && !workflow.spb_attachment_id) {
+            throw new Error("Unggah SPB PDF pada pengajuan persekot sebelum diajukan.");
+          }
+          if (direction === "INTERNAL" && letter.current_role === "MANAGER" && status === "DRAFT"
+              && user.role !== "ROOT_ADMIN" && user.role === "MANAGER") {
+            target = await activeReviewer(conn, letter.routing_target_user_id, ["DIRECTOR_OPS", "PRESIDENT_DIRECTOR"]);
+          } else if (direction === "INTERNAL") {
+            const [authors] = await conn.query<RowDataPacket[]>("SELECT role FROM siap_users WHERE id=?", [letter.created_by]);
+            target = authors[0]?.role === "MANAGER"
+              ? await activeReviewer(conn, letter.routing_target_user_id, ["DIRECTOR_OPS", "PRESIDENT_DIRECTOR"])
+              : await officialManager(conn, letter.routing_target_user_id);
+          } else {
+            target = await officialManager(conn, letter.routing_target_user_id, workflow.requesting_unit);
+          }
+        } else {
+          const manager = await getRoutingManager(conn, letter.routing_target_user_id);
+          target = manager && { id: String(manager.id), role: "MANAGER" };
+        }
+        if(!target) throw new Error("Tujuan review dokumen tidak ditemukan.");
 
         if (isInvoice(documentType)) {
           const invoice = await getBusinessDocumentRow(params.id, conn);
@@ -152,15 +215,16 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
             throw new Error("Lengkapi data invoice dan rujukan SPK yang wajib sebelum diajukan.");
           }
         }
-        next="MANAGER_REVIEW";
-        nextRole="MANAGER";
-        nextOwner=String(manager.id);
+        next=REVIEW_STATUS[target.role];
+        nextRole=target.role;
+        nextOwner=target.id;
 
       } else if(action==="APPROVE") {
         const expected = status === "SECRETARIAT_REVIEW" && atSecretariat ? "SECRETARIAT" : reviewRole(status);
         if(!expected) throw new Error("Dokumen tidak sedang menunggu approval.");
 
         assertCurrentReviewer(user,letter,expected);
+        await assertVerified();
 
         if(status==="MANAGER_REVIEW"){
           const dirops=await getActiveRoleUser(conn, "DIRECTOR_OPS");
@@ -204,6 +268,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         if(!expected) throw new Error("Dokumen tidak sedang menunggu approval.");
 
         assertCurrentReviewer(user,letter,expected);
+        await assertVerified();
         next="APPROVED";
         nextRole=null;
         nextOwner=null;
@@ -211,17 +276,18 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
       } else if(action==="RETURN" || action==="RETURN_PREVIOUS") {
         const expected = status === "SECRETARIAT_REVIEW" && atSecretariat ? "SECRETARIAT" : reviewRole(status);
         if(!expected) throw new Error("Dokumen tidak sedang dalam review.");
-        if(action==="RETURN_PREVIOUS" && (!outgoing || status==="MANAGER_REVIEW"))
+        if(action==="RETURN_PREVIOUS" && (workflow || !outgoing || status==="MANAGER_REVIEW"))
           throw new Error("Tidak ada tahap pemeriksa sebelumnya.");
 
         assertCurrentReviewer(user,letter,expected);
         if(!comment) throw new Error("Catatan pengembalian wajib diisi.");
+        await assertNoActiveTasks();
 
-        if (incomingViaSecretariat && letter.current_owner_user_id === letter.routing_target_user_id) {
+        if (incomingViaSecretariat && (workflow || letter.current_owner_user_id === letter.routing_target_user_id)) {
           next = "SECRETARIAT_INTAKE";
           nextRole = "SECRETARIAT";
           nextOwner = null;
-        } else if ((outgoing && action === "RETURN") || status === "MANAGER_REVIEW") {
+         } else if ((outgoing && action === "RETURN") || status === "MANAGER_REVIEW" || (workflow && direction === "INTERNAL")) {
           next = "RETURNED_STAFF";
           nextRole = "STAFF";
           nextOwner = String(letter.created_by);
@@ -250,10 +316,11 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         }
 
       } else if (action === "REJECT") {
-        if (!outgoing || status !== "PRESIDENT_DIRECTOR_REVIEW") {
-          throw new Error("Penolakan Surat Keluar hanya tersedia di tahap keputusan akhir.");
-        }
-        assertCurrentReviewer(user, letter, "PRESIDENT_DIRECTOR");
+        const expected = !outgoing && workflow ? reviewRole(status)
+          : outgoing && status === "PRESIDENT_DIRECTOR_REVIEW" ? "PRESIDENT_DIRECTOR" : undefined;
+        if (!expected) throw new Error("Penolakan final hanya tersedia pada tahap review yang berwenang.");
+        assertCurrentReviewer(user, letter, expected);
+        await assertNoActiveTasks();
         if (!comment) throw new Error("Alasan penolakan wajib diisi.");
         next = "REJECTED";
         nextRole = null;
@@ -306,21 +373,34 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         }
 
         if (secretariat || (documentType === SPK_OUTGOING && await getBusinessDocumentRow(params.id, conn))) {
-          if (parsed.signatureMethod !== "DIGITAL" && parsed.signatureMethod !== "BASAH") {
-            throw new Error("Pilih metode tanda tangan dokumen.");
-          }
-          signature = parsed.signatureMethod;
-          const extension = signature === "DIGITAL" ? /\.pdf$/i : /\.(pdf|png|jpe?g)$/i;
-          if (!parsed.signedFile || !extension.test(parsed.signedFile.name)) {
-            throw new Error(signature === "DIGITAL"
-              ? "Unggah PDF yang sudah ditandatangani secara digital."
-              : "Unggah hasil pindai surat yang ditandatangani (PDF, JPG, atau PNG).");
+          const method = parsed.signatureMethod;
+          if (workflow && method === "MEKARI_API") {
+            const [signing] = await conn.query<RowDataPacket[]>(
+              "SELECT final_attachment_id,mode FROM siap_v11_signing WHERE letter_id=? AND status='COMPLETED'", [params.id],
+            );
+            if (!signing[0]?.final_attachment_id || parsed.signedFile) throw new Error("PDF final Mekari belum tersedia atau ada unggahan ganda.");
+            if (signing[0].mode !== mekariMode()) throw new Error("PDF sandbox atau simulasi hanya berlaku di staging yang sesuai.");
+            signature = "DIGITAL";
+            signatureProvenance = signing[0].mode === "mock" ? "MEKARI_MOCK" : "MEKARI_SANDBOX";
+            signatureAttachmentId = signing[0].final_attachment_id;
+          } else {
+            if (method !== "DIGITAL" && method !== "BASAH" && !(workflow && method === "MEKARI_MANUAL")) {
+              throw new Error("Pilih metode tanda tangan dokumen.");
+            }
+            signature = method === "BASAH" ? "BASAH" : "DIGITAL";
+            signatureProvenance = workflow ? method : null;
+            const extension = signature === "DIGITAL" ? /\.pdf$/i : /\.(pdf|png|jpe?g)$/i;
+            if (!parsed.signedFile || !extension.test(parsed.signedFile.name)) {
+              throw new Error(signature === "DIGITAL"
+                ? "Unggah PDF yang sudah ditandatangani secara digital."
+                : "Unggah hasil pindai surat yang ditandatangani (PDF, JPG, atau PNG).");
+            }
           }
         }
 
         issuedDate=parsed.issuedDate
-          ? dateOnly(parsed.issuedDate,"Tanggal terbit")
-          : new Date().toISOString().slice(0,10);
+          ? (workflow ? checkedDate : dateOnly)(parsed.issuedDate,"Tanggal terbit")
+          : workflow ? jakartaDate() : new Date().toISOString().slice(0,10);
 
         next="ISSUED";
         nextRole=secretariat ? "SECRETARIAT" : null;
@@ -330,7 +410,14 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         if (!outgoing || status !== "ISSUED" || !handlesSecretariat || letter.sent_date) {
           throw new Error("Surat ini tidak sedang menunggu pencatatan pengiriman.");
         }
-        sentDate = dateOnly(parsed.sentDate, "Tanggal kirim");
+        sentDate = (workflow ? checkedDate : dateOnly)(parsed.sentDate, "Tanggal kirim");
+        if (workflow) {
+          dispatchChannel = required(parsed.fields.dispatch_channel, "Kanal pengiriman", 16);
+          if (!Object.hasOwn(DELIVERY_METHODS, dispatchChannel)) throw new Error("Kanal pengiriman tidak valid.");
+          dispatchRecipient = required(parsed.fields.dispatch_recipient, "Penerima pengiriman", 255);
+          if (!parsed.dispatchFile) throw new Error("Unggah bukti pengiriman.");
+          if (sentDate > jakartaDate()) throw new Error("Tanggal kirim tidak boleh di masa depan.");
+        } else if (parsed.dispatchFile) throw new Error("Gunakan lampiran proses untuk surat historis.");
         const issueDate = letter.issued_date instanceof Date
           ? letter.issued_date.toISOString().slice(0, 10) : String(letter.issued_date || "").slice(0, 10);
         if (!issueDate || sentDate < issueDate) throw new Error("Tanggal kirim harus pada atau setelah tanggal terbit.");
@@ -338,8 +425,16 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         nextOwner = null;
 
       } else if(action==="COMPLETE") {
-        if(!["ROOT_ADMIN","DIRECTOR_OPS","PRESIDENT_DIRECTOR"].includes(user.role))
+        if (v11Invoice) {
+          const manager = await officialManager(conn, user.id);
+          if (manager.scope !== "KSU" || status !== "APPROVED") throw new Error("Invoice diselesaikan oleh Manager Keuangan setelah disetujui.");
+          await assertVerified();
+          await requireInvoicePaid(conn, params.id, workflow!.payable_id);
+        } else if (!["ROOT_ADMIN", "DIRECTOR_OPS", "PRESIDENT_DIRECTOR"].includes(user.role) &&
+          !(workflow && user.role === "MANAGER" && user.id === letter.routing_target_user_id)) {
           throw new Error("Tidak berhak menutup dokumen.");
+        }
+        await assertNoActiveTasks();
 
         if ((business || secretariat) && (outgoing
           ? status !== "ISSUED" || (secretariat && !letter.sent_date)
@@ -360,6 +455,8 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         if(!comment)
           throw new Error("Alasan pembatalan wajib diisi.");
 
+        await assertNoActiveTasks();
+        if (workflow?.payable_id) throw new Error("Invoice sudah masuk buku utang dan memerlukan rekonsiliasi Finance.");
         next="CANCELLED";
         nextRole=null;
         nextOwner=null;
@@ -374,13 +471,13 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
       await conn.execute(
         `UPDATE siap_letters SET status=?,\`current_role\`=?,current_owner_user_id=?,
          cancelled_reason=IF(? IN ('CANCELLED','REJECTED'),?,cancelled_reason),
-         issued_date=COALESCE(?,issued_date),sent_date=COALESCE(?,sent_date),
+         issued_date=COALESCE(?,issued_date),sent_date=COALESCE(?,sent_date),received_date=COALESCE(?,received_date),
          routing_target_user_id=COALESCE(?,routing_target_user_id),updated_by=?
          WHERE id=?`,
-        [next, nextRole, nextOwner, next, comment.slice(0, 1000) || null, issuedDate, sentDate, routingTargetId, user.id, params.id],
+        [next, nextRole, nextOwner, next, comment.slice(0, 1000) || null, issuedDate, sentDate, receiptDate, routingTargetId, user.id, params.id],
       );
       const signatureNote = signature === "DIGITAL" ? "Tanda tangan digital" : signature === "BASAH" ? "Tanda tangan basah" : null;
-      const actionComment = [comment, routingNote, signatureNote].filter(Boolean).join(" • ");
+      const actionComment = [comment, routingNote, signatureProvenance || signatureNote].filter(Boolean).join(" • ");
       await conn.execute(
         `INSERT INTO siap_letter_actions (id,letter_id,actor_user_id,action,from_status,to_status,comment)
          VALUES (?,?,?,?,?,?,?)`,
@@ -388,9 +485,36 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
       );
 
       if (signature && parsed.signedFile) {
-        const signed = await saveUpload(parsed.signedFile, "ORIGINAL");
+        const signed = workflow ? await saveProof(parsed.signedFile, signature === "DIGITAL", "ORIGINAL")
+          : await saveUpload(parsed.signedFile, "ORIGINAL");
         stored.push(signed);
-        await insertLetterAttachment(conn, params.id, user.id, signed, "PROCESS", actionId);
+        signatureAttachmentId = await insertLetterAttachment(conn, params.id, user.id, signed, "PROCESS", actionId);
+      }
+
+      const storeProof = async (file: File) => {
+        const saved = await saveProof(file);
+        stored.push(saved);
+        return insertLetterAttachment(conn, params.id, user.id, saved, "PROCESS", actionId);
+      };
+      let receiptId = workflow?.receipt_attachment_id ?? null;
+      let dispatchId: string | null = null;
+      if (receipt) {
+        if (parsed.receiptFile) receiptId = await storeProof(parsed.receiptFile);
+        const rerouted = v11Invoice && routingTargetId !== letter.routing_target_user_id;
+        await conn.execute(
+          `UPDATE siap_v11_letters SET received_time=?,delivery_method=?,delivered_by=?,received_by=?,
+             receipt_note=?,receipt_attachment_id=?,invoice_revision=invoice_revision+? WHERE letter_id=?`,
+          [receipt.receivedTime, receipt.method, receipt.deliveredBy, receipt.receivedBy, receipt.note, receiptId, Number(rerouted), params.id],
+        );
+      }
+      if (dispatchChannel && parsed.dispatchFile) {
+        dispatchId = await storeProof(parsed.dispatchFile);
+        await conn.execute("UPDATE siap_v11_letters SET dispatch_channel=?,dispatch_recipient=?,dispatch_attachment_id=? WHERE letter_id=?",
+          [dispatchChannel, dispatchRecipient, dispatchId, params.id]);
+      }
+      if (signatureProvenance) {
+        await conn.execute("UPDATE siap_v11_letters SET signature_provenance=?,signature_attachment_id=? WHERE letter_id=?",
+          [signatureProvenance, signatureAttachmentId, params.id]);
       }
 
       for (const file of files) {
@@ -413,7 +537,8 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         userId: user.id, action: "LETTER_" + action, entityType: "LETTER", entityId: params.id,
         metadata: {
           from: status, to: next, comment, direction, issuedDate, sentDate, routingTargetId,
-          processAttachments: stored.map(file => file.originalName), signatureMethod: signature,
+          processAttachments: stored.map(file => file.originalName), signatureMethod: signature, signatureProvenance,
+          receiptDate, receiptAttachmentId: receipt ? receiptId : null, dispatchChannel, dispatchAttachmentId: dispatchId,
         },
         request,
       }, conn);
