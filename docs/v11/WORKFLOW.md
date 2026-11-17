@@ -66,3 +66,11 @@ Hubungan tugas asal mengikuti `parent_id`. Dirut dapat menugaskan Dirops atau Ma
 Unit Operasional diarahkan ke Manager Operasional. Keuangan, SDM dan Umum diarahkan ke Manager KSU. Unit IT, Pengadaan, Legal dan PIC memerlukan pilihan Manager secara eksplisit. Staff untuk verifikasi harus punya unit yang sesuai. Manager Gedung tetap tersedia untuk riwayat dan sesi lama yang berhak.
 
 Invoice yang sudah mempunyai nomor di buku utang tidak dibuat ulang otomatis. Nomor invoice buku utang tetap mengikuti indeks unik existing. Lakukan rekonsiliasi untuk tagihan lama atau benturan nomor antarvendor. Identitas invoice baru memakai pasangan vendor dan nomor. Dokumen yang ditolak final tetap memiliki jejak dan identitas aslinya.
+
+## Notifikasi dan status verifikasi
+
+Notifikasi di aplikasi mengikuti penerima review surat, disposisi baru, pengembalian hasil dan hasil yang disetujui. Persetujuan invoice memberi tahu Manager KSU untuk menyiapkan instruksi Finance. Event notifikasi disimpan bersama audit dalam transaksi perubahan workflow. Daftar dan penanda baca tersedia untuk penerima dengan pemeriksaan akses dokumen pada setiap permintaan.
+
+Header aplikasi memperbarui jumlah notifikasi setiap 15 detik saat halaman aktif. Klik notifikasi membuka dokumen atau tugas dan mencatat waktu baca. Histori surat dan disposisi menyimpan rincian transisi.
+
+Bagian verifikasi invoice menampilkan **Menunggu Verifikasi**, **Disetujui**, atau **Ditolak**. Persetujuan hasil unit berlaku untuk revisi aktif. Penolakan final pada dokumen menampilkan Ditolak. Pembayaran dapat diproses setelah persetujuan dokumen dan instruksi Manager KSU kepada Finance.

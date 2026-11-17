@@ -1,5 +1,7 @@
 # Demo staging V11
 
+[Empat skenario Pak Nor](SKENARIO-PAK-NOR.md) menyediakan data penawaran PT ABC, invoice CV Sinar Jaya Rp45 juta, proyek PT XYZ dan surat balasan. Jalankan perintah `demo` melalui runner konfigurasi VPS untuk menyiapkan dokumen serta tugas awal.
+
 Gunakan hanya profil SIMULASI dari bootstrap. Sign in bergantian dengan akun yang tercatat pada profil privat hasil setup.
 
 | Langkah | Role dan menu | Yang dilihat |

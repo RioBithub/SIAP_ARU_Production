@@ -3,6 +3,8 @@ import { readStageConfig, repositoryRoot, stageEnvironment } from "./stage-confi
 
 const commands = {
   bootstrap: ["scripts/v11/bootstrap.mjs"],
+  migrate: ["scripts/v11/migrate.mjs"],
+  demo: ["scripts/v11/demo-cases.mjs"],
   typecheck: ["node_modules/typescript/bin/tsc", "--noEmit"],
   build: ["node_modules/next/dist/bin/next", "build"],
   start: ["scripts/v11/start.mjs"],
@@ -11,7 +13,7 @@ const commands = {
 
 try {
   const [, , file, command] = process.argv;
-  if (!commands[command]) throw new Error("Pilih perintah bootstrap, typecheck, build, start, atau smoke.");
+  if (!commands[command]) throw new Error("Pilih perintah bootstrap, migrate, demo, typecheck, build, start, atau smoke.");
   const config = await readStageConfig(file);
   const app = spawn(process.execPath, commands[command], {
     cwd: repositoryRoot, env: stageEnvironment(config), stdio: "inherit",

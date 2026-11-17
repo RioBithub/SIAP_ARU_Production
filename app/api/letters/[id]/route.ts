@@ -11,7 +11,7 @@ import { canHandleSecretariat } from "@/lib/correspondence-workflow";
 import { outgoingSources } from "@/lib/correspondence-data";
 import { checkedDate, invoiceKey, invoiceVerified, officialManager, persekotChecklist, receiptFields,
   requestingUnit, saveProof, takeFile, v11Letter } from "@/lib/v11-data";
-import { jakartaDate } from "@/lib/v11-workflow";
+import { invoiceVerificationStatus, jakartaDate } from "@/lib/v11-workflow";
 import { invoicePaymentSummary } from "@/lib/v11-finance";
 import { discardUncommittedFiles, insertLetterAttachment, type StoredLetterFile } from "@/lib/letter-uploads";
 
@@ -74,9 +74,10 @@ export async function GET(_:Request,{params}:{params:{id:string}}) {
   if (workflow) {
     const { invoice_key: _invoiceKey, ...safe } = workflow;
     const checklist = typeof safe.persekot_checklist === "string" ? JSON.parse(safe.persekot_checklist) : safe.persekot_checklist;
-    v11 = { ...safe, persekot_checklist: checklist ?? [],
-      verified: letter.document_type === INVOICE_INCOMING
-        ? await invoiceVerified(db, params.id, safe.invoice_revision, letter.routing_target_user_id) : null,
+    const verified = letter.document_type === INVOICE_INCOMING
+      ? await invoiceVerified(db, params.id, safe.invoice_revision, letter.routing_target_user_id) : null;
+    v11 = { ...safe, persekot_checklist: checklist ?? [], verified,
+      verification_status: verified === null ? null : invoiceVerificationStatus(letter.status, verified),
       payment: business?.invoice && letter.document_type === INVOICE_INCOMING
         ? await invoicePaymentSummary(safe.payable_id, business.invoice.total) : null,
     };

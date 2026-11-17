@@ -47,6 +47,7 @@ pm2 restart siap-aru-v11-sandbox
 
 ```bash
 node scripts/v11/run.mjs /etc/siap-aru-v11/stage.json smoke
+node scripts/v11/run.mjs /etc/siap-aru-v11/stage.json migrate
 node scripts/v11/run.mjs /etc/siap-aru-v11/stage.json typecheck
 node scripts/v11/run.mjs /etc/siap-aru-v11/stage.json build
 pm2 start scripts/v11/run.mjs --name siap-aru-v11-sandbox --interpreter node -- /etc/siap-aru-v11/stage.json start
@@ -69,6 +70,8 @@ ssh -N -L 33317:127.0.0.1:33317 root@ALAMAT_VPS
 Pertahankan terminal tunnel terbuka. Buka `http://127.0.0.1:33317/login` di browser komputer tersebut. Bila memilih port lain, sesuaikan port tujuan tunnel dan URL lokal. Jika aplikasi staging sudah memiliki subdomain HTTPS sendiri, operator dapat memakai reverse proxy subdomain itu menuju port staging.
 
 ## Akun dan skenario
+
+Empat kasus dari Pak Nor dapat dimuat dengan `node scripts/v11/run.mjs /etc/siap-aru-v11/stage.json demo` setelah web staging berjalan. [Panduan demo Pak Nor](SKENARIO-PAK-NOR.md) memuat penawaran PT ABC, invoice Rp45 juta CV Sinar Jaya, proyek PT XYZ dan surat balasan.
 
 Semua akun berikut memakai password simulasi yang dimasukkan saat setup pertama.
 

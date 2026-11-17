@@ -21,6 +21,11 @@ export const TASK_PURPOSES = {
 export type TaskPurpose = keyof typeof TASK_PURPOSES;
 export const TERMINAL_TASK_STATES = ["COMPLETED", "RETURNED", "CANCELLED"];
 
+export function invoiceVerificationStatus(documentStatus: string, verified: boolean) {
+  if (documentStatus === "REJECTED" || documentStatus === "CANCELLED") return documentStatus;
+  return verified ? "APPROVED" : "WAITING_VERIFICATION";
+}
+
 export function unitManagerScope(unit: unknown): ManagerScope | null {
   if (unit === "OPS") return "OPS";
   if (["KEU", "SDM", "UMUM"].includes(String(unit))) return "KSU";

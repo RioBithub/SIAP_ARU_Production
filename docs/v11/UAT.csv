@@ -47,5 +47,5 @@ UAT-045,P1,Mekari,Status completed dan PDF,Selesaikan demo signing di sandbox,Fi
 UAT-046,P0,Regression,Modul Finance dan Rekening Koran existing,Jalankan smoke suite,Tidak ada perubahan angka/bug,PASS,"Utang manual, saldo Rekening Koran, impor BRI fiktif dan deduplikasi lulus."
 UAT-047,P0,Regression,Penerbitan dan ledger existing,"Jalankan nomor lama, custom/backdate",Behavior lama aman kecuali perubahan disetujui,PASS,Custom/backdate tetap memakai ledger bawaan; nomor terbit unik.
 UAT-048,P0,Build,Build/Typecheck,npm ci && npm run typecheck && npm run build,Keluar code 0 tanpa warning blocking,PASS,"npm ci, npm run typecheck, npm run build masing-masing exit 0."
-UAT-049,P0,Migration,Migration additive di staging,"Snapshot, apply, reapply, rollback plan",Tidak ada data hilang; idempotent,PASS,Migrasi dua kali; baris lama identik; backup berhasil dipulihkan dan cocok pada 35 tabel.
+UAT-049,P0,Migration,Migration additive di staging,"Snapshot, apply, reapply, rollback plan",Tidak ada data hilang; idempotent,PASS,Migrasi dua kali; baris lama identik; backup berhasil dipulihkan dan cocok pada 36 tabel.
 UAT-050,P1,Responsive,Mobile 390px,Praktik form receipt & task,"Tanpa overflow horizontal, tombol terbaca",PASS,"Chromium 390 px dan 1440 px: registrasi, dua Manager, pembuatan tugas, form hasil dan invoice lunas."

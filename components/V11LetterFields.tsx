@@ -2,6 +2,7 @@
 
 import { DELIVERY_METHODS, PERSEKOT_DOCUMENTS, REQUESTING_UNITS, jakartaDate, type RequestingUnit } from "@/lib/v11-workflow";
 import { formatInvoiceAmount } from "@/lib/business-documents";
+import StatusBadge from "@/components/StatusBadge";
 
 export function UnitField({ value = "" }: { value?: RequestingUnit | "" }) {
   return <label className="field">
@@ -72,7 +73,8 @@ export function WorkflowSummary({ data, date }: { data: any; date?: string }) {
       <Evidence id={data.receipt_attachment_id} label="Unduh bukti penerimaan"/>
     </>}
     {data.payment && <>
-      <div className="kpi-row"><span>Verifikasi revisi {data.invoice_revision}</span><b>{data.verified ? "Sudah di-ACC" : "Menunggu ACC unit"}</b></div>
+      <div className="kpi-row"><span>Verifikasi revisi {data.invoice_revision}</span>
+        <StatusBadge status={data.verification_status || (data.verified ? "APPROVED" : "WAITING_VERIFICATION")}/></div>
       <div className="kpi-row"><span>Bayar di-ACC</span><b>{formatInvoiceAmount(data.payment.paid)}</b></div>
       <div className="kpi-row"><span>Sisa tagihan</span><b>{formatInvoiceAmount(data.payment.outstanding)}</b></div>
     </>}

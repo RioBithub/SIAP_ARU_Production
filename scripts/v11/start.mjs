@@ -20,6 +20,10 @@ const cn = await mysql.createConnection({
 try {
   const [[identity]] = await cn.query("SELECT id FROM siap_v11_stage_marker");
   if (identity.id !== profile.marker) throw new Error("Marker database staging tidak cocok.");
+  if (env.SIAP_V11_ENABLED === "1") {
+    const [tables] = await cn.query("SHOW TABLES LIKE 'siap_v11_notifications'");
+    if (!tables.length) throw new Error("Jalankan perintah migrate melalui scripts/v11/run.mjs sebelum memulai staging.");
+  }
 } finally {
   await cn.end();
 }

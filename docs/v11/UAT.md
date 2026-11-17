@@ -1,6 +1,6 @@
 # Hasil UAT SIAP ARU V11
 
-17 November 2026 · Run 7BD1D23
+18 November 2026 · Run DE10F30
 
 **48 PASS, 0 FAIL, 2 SKIP dari 50 skenario.** Lihat hasil per kasus di [UAT.csv](UAT.csv).
 
@@ -8,7 +8,7 @@
 - Uji menggunakan API HTTP sungguhan dan lampiran dari storage staging. Browser menjalankan registrasi dengan bukti dan pembuatan disposisi. Form penerimaan dan hasil tampil pada 390 px tanpa overflow horizontal. Form desktop diperiksa pada 1440 px.
 - `npm ci`, `npm run typecheck`, dan `npm run build` keluar dengan kode 0.
 - Dua pengajuan paralel memakai nomor dan variant yang berbeda. Catatan pembayaran paralel hanya menghasilkan satu transaksi untuk referensi yang sama. Verifikasi revisi, bukti dan akses telah diuji di API.
-- Skema dasar dan 11 migrasi awal dibuat di lingkungan terisolasi. Migrasi V11 diterapkan dua kali. Snapshot data lama identik. Backup logis dipulihkan ke skema kosong lain dan baris dari 35 tabel cocok.
+- Skema dasar dan 11 migrasi awal dibuat di lingkungan terisolasi. Migrasi V11 dan notifikasi diterapkan dua kali. Snapshot data lama identik. Backup logis dipulihkan ke skema kosong lain dan baris dari 36 tabel cocok.
 - Pengujian regresi memeriksa perubahan utang manual, Rekening Koran, impor PDF BRI fiktif dan deduplikasi, serta ledger custom/backdate. Sumber Finance dan Rekening Koran existing tetap memakai tabel semula.
 - UAT-043 SKIP untuk panggilan HMAC ke vendor. HMAC full path dan query lulus secara lokal.
 - UAT-044 PASS pada mock. Token yang salah ditolak dan webhook duplikat tercatat sekali.
@@ -37,3 +37,18 @@ Panggilan vendor dan format konkret hasil AI masih perlu divalidasi di sandbox e
 Pengulangan setup memperbarui kredensial Mekari dan daftar email penguji. Schema, akun simulasi, password, marker dan tabel sentinel pada schema lain tetap sesuai hasil awal. Enam tes konfigurasi dan adapter lulus. Runner typecheck, build dan start lulus dengan konfigurasi staging dari file. Login melalui browser Chromium pada HTTP loopback berhasil menghasilkan sesi Sekretariat dengan cookie secure.
 
 Koneksi HMAC ke layanan Mekari tetap menunggu kredensial sandbox operator dan jaringan VPS. [Panduan pemasangan](VPS-SANDBOX.md) memuat perintah setup, smoke, PM2, tunnel SSH dan skenario multi-signer.
+
+## Empat kasus Pak Nor
+
+Suite `tests/v11/demo-cases.mjs` lulus untuk keempat kasus pada data simulasi. Seed dijalankan dua kali dengan jumlah tetap empat dokumen utama. API web dan koneksi database dicocokkan melalui marker staging sebelum data dibuat.
+
+| Kasus | Hasil |
+| --- | --- |
+| DEMO-1 Penawaran PT ABC | PASS. Tenggat dua hari kalender, hasil berupa surat balasan terbit dan tertaut ke tugas. Hasil diterima Direksi dan review dokumen asal diselesaikan |
+| DEMO-2 Invoice CV Sinar Jaya | PASS. Menunggu Verifikasi, Disetujui dan cabang Ditolak tersedia. Pembayaran simulasi Rp45 juta lewat Finance dan ACC Manager KSU membuat sisa nol |
+| DEMO-3 Proyek PT XYZ | PASS. Tugas turun Direksi–Manager–Staff, laporan diunggah dan kembali naik untuk ACC. Notifikasi baru tampil otomatis pada browser Staff |
+| DEMO-4 Surat balasan | PASS. Review lengkap, PDF mock, nomor surat, bukti kirim dan arsip tercatat. Pencatatan pengiriman oleh Staff penyusun ditolak sesuai kewenangan Sekretariat |
+
+Notifikasi diperiksa dengan akun penerima dan akun lain. Akun lain tidak dapat membaca daftar penerima atau mengubah penanda baca miliknya. Penandaan baca berulang mempertahankan waktu baca yang sama. Uji browser 390 px memeriksa label invoice dan membuka tugas melalui notifikasi. Panel notifikasi ditempatkan di luar header agar dapat dipakai pada layar ponsel.
+
+Pengujian tambahan memigrasikan staging lama dari 35 menjadi 36 tabel, menjalankan migrasi kembali dan mencocokkan seluruh baris lama. Panduan presenter ada di [SKENARIO-PAK-NOR.md](SKENARIO-PAK-NOR.md).
