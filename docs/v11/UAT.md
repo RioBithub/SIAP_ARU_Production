@@ -21,3 +21,11 @@ Fase awal menemukan deadlock reservasi nomor dan kegagalan konversi tanggal pada
 Run A4292C3 pada staging lokal dari skema kosong menghasilkan 48 PASS, 0 FAIL dan 2 SKIP. Uji lokal memakai skrip pre-request koleksi Postman dan data fiktif. Header HMAC GET dengan query dan `Digest` untuk byte JSON yang membawa PDF cocok dengan request SIAP ARU. Gateway simulasi menerima pengiriman, mengembalikan status, dan menunda PDF dengan HTTP 424 sebelum unduhan berhasil. Regresi header bisa dijalankan dengan `node --test tests/v11/mekari-sign.test.mjs`.
 
 UAT-043 dan UAT-045 tetap SKIP untuk gateway vendor. Kredensial sandbox belum tersedia dan pemeriksaan koneksi dari lingkungan uji mengalami timeout. Lihat [langkah pengujian sandbox di staging](STAGING.md#mekari-sign).
+
+## Multi-signer dan Predict Annotation
+
+Run 1FBAFB7 mengulang 50 skenario pada skema baru. Hasilnya 48 PASS, 0 FAIL dan 2 SKIP. Empat tes adapter lulus untuk Digest, format berurutan dan paralel, validasi penandatangan, serta permintaan dan respons prediksi.
+
+Uji tambahan menjalankan SIAP ARU dalam mode sandbox dengan gateway Mekari simulasi dan dua alamat fiktif. Dari browser 390 px, Sekretariat bisa meminta saran, memilih posisi per penandatangan, mengubah koordinat, dan mengubah urutan. Setelah pengiriman tunggal, simulasi tetap `IN_PROGRESS` ketika baru satu penandatangan selesai. PDF final dapat diunduh dan surat diterbitkan setelah `COMPLETED`. Uji API juga memverifikasi pengiriman paralel dan penolakan akses atau alamat uji yang tidak valid.
+
+Panggilan vendor dan format konkret hasil AI masih perlu divalidasi di sandbox eksternal. Dokumentasi Mekari menerangkan bahwa `data.data` berisi respons AI mentah. SIAP ARU menampilkan koordinat dengan format anotasi yang bisa divalidasi. Sekretariat dapat mengisi posisi manual ketika hasilnya kosong atau berbeda format. [Spesifikasi Predict Annotation](https://api-docs.esign.mekari.com/#tag/send-for-signature/POST/v1/documents/predict_annotations)

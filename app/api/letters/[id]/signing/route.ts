@@ -9,8 +9,8 @@ import { required } from "@/lib/http";
 import { getAccessibleLetter } from "@/lib/letter-access";
 import { discardUncommittedFiles, insertLetterAttachment, type StoredLetterFile } from "@/lib/letter-uploads";
 import {
-  callbackUrl, configuredSandboxSigner, mekariMode, MekariError, mockSignedPdf,
-  sandboxPdf, sandboxStatus, sendSandboxSignature,
+  callbackUrl, configuredSandboxSigning, mekariMode, MekariError, mockSignedPdf, predictSandboxAnnotations,
+  sandboxCredentials, sandboxPdf, sandboxStatus, sendSandboxSignature,
 } from "@/lib/mekari-sign";
 import { readStoredFile } from "@/lib/upload";
 import { saveProof } from "@/lib/v11-data";
@@ -38,6 +38,24 @@ async function lockSigningLetter(conn: PoolConnection, id: string) {
       rows[0].owner_role !== "SECRETARIAT") throw new Error("Surat belum menunggu tanda tangan Sekretariat.");
 }
 
+async function signingPdf(conn: PoolConnection, letterId: string, value: unknown) {
+  const id = required(value, "PDF draf yang telah disetujui", 36);
+  const [rows] = await conn.query<RowDataPacket[]>(
+    `SELECT original_name,storage_path,is_compressed FROM siap_attachments
+     WHERE id=? AND letter_id=? AND disposition_id IS NULL
+       AND attachment_kind='ORIGINAL' AND original_size BETWEEN 8 AND 10485760`,
+    [id, letterId],
+  );
+  const source = rows[0];
+  if (!source || !/\.pdf$/i.test(source.original_name)) throw new Error("Pilih PDF draf dari surat ini.");
+  const bytes = await readStoredFile(source.storage_path, Boolean(source.is_compressed));
+  if (bytes.length > 10 * 1024 * 1024 || !bytes.subarray(0, 5).equals(Buffer.from("%PDF-")) ||
+      !bytes.subarray(-2048).includes(Buffer.from("%%EOF"))) {
+    throw new Error("PDF draf tidak valid atau melebihi 10 MB.");
+  }
+  return { id, bytes, name: String(source.original_name) };
+}
+
 export async function GET(_: Request, { params }: { params: { id: string } }) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ ok: false }, { status: 401 });
@@ -56,38 +74,43 @@ export async function POST(request: Request, { params }: { params: { id: string 
   const files: StoredLetterFile[] = [];
   try {
     const body = await request.json();
+    if (body.action === "PREDICT") {
+      if (mode !== "sandbox") throw new Error("Prediksi posisi tersedia dalam mode Mekari Sandbox.");
+      const source = await withTransaction(async conn => {
+        await lockSigningLetter(conn, params.id);
+        if (await getJob(conn, params.id)) throw new Error("Surat ini sudah memiliki permintaan tanda tangan.");
+        return signingPdf(conn, params.id, body.attachment_id);
+      });
+      const suggestions = await predictSandboxAnnotations(source.name, source.bytes, body);
+      await auditLog({ userId: user.id, action: "LETTER_MEKARI_PREDICT", entityType: "LETTER", entityId: params.id,
+        metadata: { sourceAttachmentId: source.id, suggestionCount: suggestions.length }, request });
+      return NextResponse.json({ ok: true, data: suggestions });
+    }
     if (body.action === "START") {
       const id = randomUUID();
-      const signer = mode === "sandbox" ? configuredSandboxSigner(body) : null;
+      const signing = mode === "sandbox" ? configuredSandboxSigning(body) : null;
       const callback = mode === "sandbox" ? callbackUrl(id) : null;
       const result = await withTransaction(async conn => {
         await lockSigningLetter(conn, params.id);
         const existing = await getJob(conn, params.id, true);
         if (existing) return { existing, source: null };
-        const attachmentId = required(body.attachment_id, "PDF draf yang telah disetujui", 36);
-        const [source] = await conn.query<RowDataPacket[]>(
-          `SELECT * FROM siap_attachments WHERE id=? AND letter_id=? AND disposition_id IS NULL
-           AND attachment_kind='ORIGINAL' AND original_size BETWEEN 8 AND 10485760`,
-          [attachmentId, params.id],
-        );
-        if (!source[0] || !/\.pdf$/i.test(source[0].original_name)) throw new Error("Pilih PDF draf dari surat ini.");
-        const bytes = await readStoredFile(source[0].storage_path, Boolean(source[0].is_compressed));
-        if (!bytes.subarray(0, 5).equals(Buffer.from("%PDF-")) || !bytes.subarray(-2048).includes(Buffer.from("%%EOF"))) {
-          throw new Error("PDF draf tidak valid.");
-        }
+        if (mode === "sandbox") sandboxCredentials();
+        const source = await signingPdf(conn, params.id, body.attachment_id);
         const status = mode === "mock" ? "IN_PROGRESS" : "REQUESTING";
         await conn.execute(
           "INSERT INTO siap_v11_signing (id,letter_id,mode,provider_id,status,requested_by,source_attachment_id) VALUES (?,?,?,?,?,?,?)",
-          [id, params.id, mode, mode === "mock" ? "mock-" + id : null, status, user.id, attachmentId],
+          [id, params.id, mode, mode === "mock" ? "mock-" + id : null, status, user.id, source.id],
         );
         await auditLog({ userId: user.id, action: "LETTER_MEKARI_REQUEST", entityType: "LETTER", entityId: params.id,
-          metadata: { signingId: id, mode, status }, request }, conn);
-        return { existing: null, source: { bytes, name: String(source[0].original_name) } };
+          metadata: { signingId: id, mode, status, ...(signing ? {
+            signerCount: signing.signers.length, signingOrder: signing.signing_order,
+          } : {}) }, request }, conn);
+        return { existing: null, source };
       });
       if (result.existing) return NextResponse.json({ ok: true, data: publicJob(result.existing) });
-      if (mode === "sandbox" && signer && result.source) {
+      if (mode === "sandbox" && signing && result.source) {
         try {
-          const providerId = await sendSandboxSignature(result.source.name, result.source.bytes, signer, callback);
+          const providerId = await sendSandboxSignature(result.source.name, result.source.bytes, signing, callback);
           await db.execute("UPDATE siap_v11_signing SET provider_id=?,status='IN_PROGRESS' WHERE id=? AND status='REQUESTING'", [providerId, id]);
         } catch (error) {
           const state = error instanceof MekariError && [400,401,403,404,422].includes(error.status)

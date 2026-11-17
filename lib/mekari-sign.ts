@@ -21,6 +21,13 @@ export function hmacHeaders(method: string, url: URL, config: { id: string; secr
   };
 }
 
+export function sandboxCredentials() {
+  const id = process.env.MEKARI_CLIENT_ID || "";
+  const secret = process.env.MEKARI_CLIENT_SECRET || "";
+  if (!/^[\w.\-]{1,150}$/.test(id) || !secret) throw new Error("Kredensial sandbox Mekari belum siap.");
+  return { id, secret };
+}
+
 export class MekariError extends Error {
   readonly status: number;
   readonly retryAfter: number | null;
@@ -32,12 +39,10 @@ export class MekariError extends Error {
   }
 }
 
-async function request(method: "GET" | "POST", route: string, body?: unknown) {
+async function request(method: "GET" | "POST", route: string, body?: unknown, timeoutMs = 12_000) {
   if (mekariMode() !== "sandbox") throw new Error("Mode sandbox tidak aktif.");
   const url = new URL(MEKARI_SANDBOX_BASE + route);
-  const headers = hmacHeaders(method, url, {
-    id: process.env.MEKARI_CLIENT_ID || "", secret: process.env.MEKARI_CLIENT_SECRET || "",
-  });
+  const headers = hmacHeaders(method, url, sandboxCredentials());
   const payload = JSON.stringify(body);
   const payloadHeaders = payload === undefined ? undefined : {
     "Content-Type": "application/json",
@@ -47,7 +52,7 @@ async function request(method: "GET" | "POST", route: string, body?: unknown) {
   try {
     response = await fetch(url, {
       method, headers: { ...headers, ...payloadHeaders }, body: payload,
-      redirect: "error", cache: "no-store", signal: AbortSignal.timeout(12_000),
+      redirect: "error", cache: "no-store", signal: AbortSignal.timeout(timeoutMs),
     });
   } catch {
     throw new MekariError(0);
@@ -61,27 +66,21 @@ async function request(method: "GET" | "POST", route: string, body?: unknown) {
   return response;
 }
 
-type Annotation = {
+export type SignatureAnnotation = {
   type_of: "signature"; page: number; position_x: number; position_y: number;
   element_width: number; element_height: number; canvas_width: number; canvas_height: number;
 };
 
-export function configuredSandboxSigner(input: Record<string, unknown>) {
-  const allow = (process.env.SIAP_V11_MEKARI_TEST_RECIPIENTS || "").toLowerCase().split(",").map(email => email.trim());
-  const email = typeof input.signer_email === "string" ? input.signer_email.trim().toLowerCase() : "";
-  const name = typeof input.signer_name === "string" ? input.signer_name.trim().slice(0, 150) : "";
-  if (process.env.SIAP_V11_MEKARI_ALLOW_SEND !== "1" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !allow.includes(email) || !name) {
-    throw new Error("Pengiriman sandbox memerlukan signer simulasi yang sudah diizinkan.");
-  }
+function signatureAnnotation(input: Record<string, unknown>): SignatureAnnotation {
   const read = (key: string, min: number, max: number) => {
     const value = input[key];
-    if ((typeof value !== "number" && typeof value !== "string") || value === "" ||
+    if ((typeof value !== "number" && typeof value !== "string") || (typeof value === "string" && !value.trim()) ||
         !Number.isFinite(Number(value)) || Number(value) < min || Number(value) > max) {
       throw new Error("Koordinat penempatan tanda tangan tidak valid.");
     }
     return Number(value);
   };
-  const annotation: Annotation = {
+  const annotation: SignatureAnnotation = {
     type_of: "signature", page: read("page", 1, 500), position_x: read("position_x", 0, 2000),
     position_y: read("position_y", 0, 2000), element_width: read("element_width", 1, 2000),
     element_height: read("element_height", 1, 2000), canvas_width: read("canvas_width", 1, 2000),
@@ -89,7 +88,89 @@ export function configuredSandboxSigner(input: Record<string, unknown>) {
   };
   if (!Number.isInteger(annotation.page) || annotation.position_x + annotation.element_width > annotation.canvas_width ||
       annotation.position_y + annotation.element_height > annotation.canvas_height) throw new Error("Bidang tanda tangan berada di luar halaman.");
-  return { name, email, annotations: [annotation] };
+  return annotation;
+}
+
+function configuredSandboxRecipients(input: Record<string, unknown>) {
+  const allowed = new Set((process.env.SIAP_V11_MEKARI_TEST_RECIPIENTS || "").toLowerCase()
+    .split(",").map(email => email.trim()).filter(Boolean));
+  const entries = input.signers === undefined ? [input] : input.signers;
+  if (!Array.isArray(entries) || !entries.length) throw new Error("Tambahkan minimal satu penandatangan.");
+  const seen = new Set<string>();
+  return entries.map((entry: unknown, index) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error("Data penandatangan tidak valid.");
+    const fields = entry as Record<string, unknown>;
+    const email = typeof fields.signer_email === "string" ? fields.signer_email.trim().toLowerCase() : "";
+    const name = typeof fields.signer_name === "string" ? fields.signer_name.trim().slice(0, 150) : "";
+    if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !allowed.has(email)) {
+      throw new Error(`Penandatangan ${index + 1} memerlukan nama dan email uji yang sudah diizinkan.`);
+    }
+    if (seen.has(email)) throw new Error("Setiap penandatangan harus memakai email yang berbeda.");
+    seen.add(email);
+    return { name, email, fields };
+  });
+}
+
+export function configuredSandboxSigning(input: Record<string, unknown>) {
+  if (process.env.SIAP_V11_MEKARI_ALLOW_SEND !== "1") {
+    throw new Error("Pengiriman sandbox belum diaktifkan.");
+  }
+  if (input.signing_order !== undefined && typeof input.signing_order !== "boolean") {
+    throw new Error("Mode urutan tanda tangan tidak valid.");
+  }
+  const signers = configuredSandboxRecipients(input).map(({ name, email, fields }, index) => {
+    try {
+      return { name, email, annotations: [signatureAnnotation(fields)] };
+    } catch (error) {
+      throw new Error(`Penandatangan ${index + 1}: ${(error as Error).message}`);
+    }
+  });
+  return { signers, signing_order: input.signing_order === true };
+}
+
+export async function predictSandboxAnnotations(filename: string, pdf: Buffer, input: Record<string, unknown>) {
+  const recipients = configuredSandboxRecipients(input).map(({ name, email }) => ({ name, email }));
+  let response: Response;
+  try {
+    response = await request("POST", "/v1/documents/predict_annotations", {
+      doc: pdf.toString("base64"), filename, recipients, annotation_types: ["signature"],
+    }, 45_000);
+  } catch (error) {
+    if (error instanceof MekariError && error.status === 403) {
+      throw new Error("Akun sandbox ini belum memiliki akses Predict Annotation.");
+    }
+    if (error instanceof MekariError && error.status === 422) {
+      throw new Error("Mekari belum bisa memprediksi posisi tanda tangan untuk PDF ini.");
+    }
+    throw error;
+  }
+  const result = await response.json().catch(() => {
+    throw new Error("Respons prediksi dari Mekari tidak dapat dibaca.");
+  });
+  if (result?.error === true) throw new Error("Mekari belum bisa memprediksi posisi tanda tangan untuk PDF ini.");
+
+  // Mekari exposes the AI's raw result in data.data without a fixed schema.
+  // Keep only complete signature coordinates accepted by the signing endpoint.
+  const suggestions = new Map<string, SignatureAnnotation>();
+  const pending: unknown[] = [result?.data?.data];
+  while (pending.length) {
+    const value = pending.pop();
+    if (!value || typeof value !== "object") continue;
+    const fields = value as Record<string, unknown>;
+    if ("position_x" in fields && (fields.type_of === undefined || fields.type_of === "signature")) {
+      try {
+        const annotation = signatureAnnotation(fields);
+        const key = JSON.stringify(annotation);
+        suggestions.set(key, annotation);
+      } catch {
+        // The operator can position fields manually when predictions are incomplete.
+      }
+    }
+    for (const child of Object.values(value).reverse()) {
+      if (child && typeof child === "object") pending.push(child);
+    }
+  }
+  return Array.from(suggestions.values());
 }
 
 function providerId(value: unknown) {
@@ -97,9 +178,12 @@ function providerId(value: unknown) {
   return value;
 }
 
-export async function sendSandboxSignature(filename: string, pdf: Buffer, signer: ReturnType<typeof configuredSandboxSigner>, callback: string | null) {
+export async function sendSandboxSignature(filename: string, pdf: Buffer, signing: ReturnType<typeof configuredSandboxSigning>, callback: string | null) {
+  const signers = signing.signing_order ? signing.signers.map((signer, index) => ({ ...signer, order: index + 1 })) : signing.signers;
   const response = await request("POST", "/v1/documents/request_global_sign", {
-    filename, doc: pdf.toString("base64"), signers: [signer], receivers: [], ...(callback ? { callback_url: callback } : {}),
+    filename, doc: pdf.toString("base64"), signers, receivers: [],
+    ...(signing.signing_order ? { signing_order: true } : {}),
+    ...(callback ? { callback_url: callback } : {}),
   });
   const result = await response.json();
   return providerId(result?.data?.id);
