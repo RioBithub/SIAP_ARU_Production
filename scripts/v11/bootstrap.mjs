@@ -8,9 +8,10 @@ const { DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD, UPLOAD_DIR, SIAP_V11_ST
 if (process.env.SIAP_V11_STAGE !== "1" || DB_HOST !== "127.0.0.1" ||
     !/^siap_aru_sqa_v11_[a-z0-9]{4,24}$/.test(DB_NAME ?? "") ||
     !/^v11_stage_[a-z0-9]+$/.test(DB_USER ?? "") || !DB_PASSWORD || !DB_PORT ||
-    Number(DB_PORT) === 3306 || !UPLOAD_DIR || !path.isAbsolute(UPLOAD_DIR) ||
+    !Number.isInteger(Number(DB_PORT)) || Number(DB_PORT) < 1 || Number(DB_PORT) > 65535 ||
+    !UPLOAD_DIR || !path.isAbsolute(UPLOAD_DIR) ||
     !SIAP_V11_STAGE_PROFILE || !path.isAbsolute(SIAP_V11_STAGE_PROFILE)) {
-  throw new Error("Siapkan skema SQA lokal kosong, user staging, port khusus, direktori upload, dan path profil privat.");
+  throw new Error("Siapkan skema SQA lokal kosong, user staging, port database, direktori upload, dan path profil privat.");
 }
 const password = process.env.SIAP_V11_STAGE_PASSWORD;
 if (!password || password.length < 16) throw new Error("Set password fixture tersendiri melalui environment privat.");

@@ -29,3 +29,11 @@ Run 1FBAFB7 mengulang 50 skenario pada skema baru. Hasilnya 48 PASS, 0 FAIL dan 
 Uji tambahan menjalankan SIAP ARU dalam mode sandbox dengan gateway Mekari simulasi dan dua alamat fiktif. Dari browser 390 px, Sekretariat bisa meminta saran, memilih posisi per penandatangan, mengubah koordinat, dan mengubah urutan. Setelah pengiriman tunggal, simulasi tetap `IN_PROGRESS` ketika baru satu penandatangan selesai. PDF final dapat diunduh dan surat diterbitkan setelah `COMPLETED`. Uji API juga memverifikasi pengiriman paralel dan penolakan akses atau alamat uji yang tidak valid.
 
 Panggilan vendor dan format konkret hasil AI masih perlu divalidasi di sandbox eksternal. Dokumentasi Mekari menerangkan bahwa `data.data` berisi respons AI mentah. SIAP ARU menampilkan koordinat dengan format anotasi yang bisa divalidasi. Sekretariat dapat mengisi posisi manual ketika hasilnya kosong atau berbeda format. [Spesifikasi Predict Annotation](https://api-docs.esign.mekari.com/#tag/send-for-signature/POST/v1/documents/predict_annotations)
+
+## Setup kredensial pada VPS
+
+18 November 2026. Setup interaktif diuji menggunakan MariaDB lokal pada port 3306 dan kredensial fiktif. Wizard berhasil membuat schema/user baru, melakukan bootstrap, dan menyimpan file JSON privat dengan izin 600. Password dan Client Secret tidak muncul pada rekaman terminal. Karakter kutip, dolar dan backslash pada secret tetap utuh.
+
+Pengulangan setup memperbarui kredensial Mekari dan daftar email penguji. Schema, akun simulasi, password, marker dan tabel sentinel pada schema lain tetap sesuai hasil awal. Enam tes konfigurasi dan adapter lulus. Runner typecheck, build dan start lulus dengan konfigurasi staging dari file. Login melalui browser Chromium pada HTTP loopback berhasil menghasilkan sesi Sekretariat dengan cookie secure.
+
+Koneksi HMAC ke layanan Mekari tetap menunggu kredensial sandbox operator dan jaringan VPS. [Panduan pemasangan](VPS-SANDBOX.md) memuat perintah setup, smoke, PM2, tunnel SSH dan skenario multi-signer.

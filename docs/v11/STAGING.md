@@ -1,10 +1,12 @@
 # Staging, deployment dan rollback V11
 
+Panduan interaktif untuk memasang kredensial, membuat data simulasi dan membuka SIAP ARU dari VPS tersedia di [VPS-SANDBOX.md](VPS-SANDBOX.md).
+
 ## Staging lokal
 
-Gunakan proses MariaDB atau MySQL lokal yang dipisah dari server kantor. Pengujian PR memakai Node.js 24 untuk runner UAT dan MariaDB 11.8.6 dari skema kosong dan penyimpanan lampiran privat per run.
+Gunakan schema kosong dan user database khusus staging. Schema dapat berada pada instance MySQL/MariaDB yang sama dengan aplikasi kantor, dengan izin user terbatas pada schema staging. Pengujian PR memakai instance lokal terpisah, Node.js 24 untuk runner UAT dan MariaDB 11.8.6 dari skema kosong serta penyimpanan lampiran privat per run.
 
-1. Buat skema kosong bernama `siap_aru_sqa_v11_<suffix>` pada port staging khusus. Buat user `v11_stage_<suffix>` dengan izin skema tersebut. Atur lokasi unggahan privat absolut.
+1. Buat skema kosong bernama `siap_aru_sqa_v11_<suffix>` pada koneksi database yang ditentukan. Buat user `v11_stage_<suffix>` dengan izin skema tersebut. Atur lokasi unggahan privat absolut.
 2. Atur environment lokal di luar repo. Pakai `DB_HOST=127.0.0.1`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `UPLOAD_DIR`, `SESSION_SECRET`, `SIAP_V11_ENABLED=1`, dan `SIAP_V11_STAGE=1`. Atur `SIAP_V11_STAGE_URL` ke URL loopback pada port bebas dan `SIAP_V11_STAGE_PROFILE` ke path JSON privat yang belum ada.
 3. Buat nilai privat untuk `SIAP_V11_STAGE_PASSWORD` (minimum 16 karakter) dan `SIAP_V11_WEBHOOK_SECRET` (minimum 32 karakter). Atur `SIAP_V11_MEKARI_MODE=mock` untuk demo. Akun fixture memakai domain `@simulasi.siap.invalid` dan hanya digunakan di staging.
 4. Jalankan `npm ci`, `npm run v11:bootstrap`, `npm run typecheck`, `npm run build`, dan `npm run v11:start` dari branch fitur. Profil privat mencatat daftar akun SIMULASI. `v11:start` mencocokkan marker database, lalu mengikat proses ke loopback.

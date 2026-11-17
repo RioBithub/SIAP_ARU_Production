@@ -30,5 +30,9 @@ await cp(".next/static", path.join(standalone, ".next/static"), { recursive: tru
 const app = spawn(process.execPath, ["server.js"], {
   cwd: standalone, env: { ...env, NODE_ENV: "production", HOSTNAME: "127.0.0.1", PORT: url.port }, stdio: "inherit",
 });
+app.once("error", () => {
+  console.error("Proses web staging tidak dapat dimulai.");
+  process.exitCode = 1;
+});
 for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => app.kill(signal));
 app.on("exit", code => { process.exitCode = code ?? 1; });
