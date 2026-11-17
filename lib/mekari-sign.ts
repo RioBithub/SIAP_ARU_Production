@@ -1,6 +1,6 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
-const BASE = "https://sandbox-api.mekari.com/v2/esign-hmac";
+export const MEKARI_SANDBOX_BASE = "https://sandbox-api.mekari.com/v2/esign-hmac";
 const MAX_PDF_SIZE = 10 * 1024 * 1024;
 
 export function mekariMode() {
@@ -34,15 +34,19 @@ export class MekariError extends Error {
 
 async function request(method: "GET" | "POST", route: string, body?: unknown) {
   if (mekariMode() !== "sandbox") throw new Error("Mode sandbox tidak aktif.");
-  const url = new URL(BASE + route);
+  const url = new URL(MEKARI_SANDBOX_BASE + route);
   const headers = hmacHeaders(method, url, {
     id: process.env.MEKARI_CLIENT_ID || "", secret: process.env.MEKARI_CLIENT_SECRET || "",
   });
+  const payload = JSON.stringify(body);
+  const payloadHeaders = payload === undefined ? undefined : {
+    "Content-Type": "application/json",
+    Digest: "SHA-256=" + createHash("sha256").update(payload, "utf8").digest("base64"),
+  };
   let response: Response;
   try {
     response = await fetch(url, {
-      method, headers: body ? { ...headers, "Content-Type": "application/json" } : headers,
-      body: body ? JSON.stringify(body) : undefined,
+      method, headers: { ...headers, ...payloadHeaders }, body: payload,
       redirect: "error", cache: "no-store", signal: AbortSignal.timeout(12_000),
     });
   } catch {

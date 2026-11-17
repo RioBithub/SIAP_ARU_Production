@@ -10,6 +10,7 @@
     "db:init": "node scripts/init-db.mjs",
     "db:seed": "node scripts/seed.mjs",
     "v11:bootstrap": "node scripts/v11/bootstrap.mjs",
+    "v11:mekari:smoke": "node tests/v11/mekari-sandbox-smoke.mjs",
     "v11:uat": "node tests/v11/uat.mjs",
     "v11:start": "node scripts/v11/start.mjs"
   },

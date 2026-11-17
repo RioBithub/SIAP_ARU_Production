@@ -15,3 +15,9 @@
 - UAT-045 SKIP untuk signing vendor. Mock lulus pada polling, penyimpanan PDF final terproteksi, idempotensi dan penerbitan dengan provenance. PDF manual diuji pada UAT-036.
 
 Fase awal menemukan deadlock reservasi nomor dan kegagalan konversi tanggal pada edit utang manual. Keduanya diperbaiki, lalu suite dijalankan lagi dari skema kosong. Dokumentasi staging dan cara mengulang demo ada di [STAGING.md](STAGING.md) dan [DEMO.md](DEMO.md).
+
+## Pengujian ulang setelah pencocokan koleksi Postman
+
+Run A4292C3 pada staging lokal dari skema kosong menghasilkan 48 PASS, 0 FAIL dan 2 SKIP. Uji lokal memakai skrip pre-request koleksi Postman dan data fiktif. Header HMAC GET dengan query dan `Digest` untuk byte JSON yang membawa PDF cocok dengan request SIAP ARU. Gateway simulasi menerima pengiriman, mengembalikan status, dan menunda PDF dengan HTTP 424 sebelum unduhan berhasil. Regresi header bisa dijalankan dengan `node --test tests/v11/mekari-sign.test.mjs`.
+
+UAT-043 dan UAT-045 tetap SKIP untuk gateway vendor. Kredensial sandbox belum tersedia dan pemeriksaan koneksi dari lingkungan uji mengalami timeout. Lihat [langkah pengujian sandbox di staging](STAGING.md#mekari-sign).
