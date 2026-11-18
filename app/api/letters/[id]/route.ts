@@ -16,7 +16,7 @@ import { checkedDate, invoiceKey, invoiceVerified, officialManager, persekotChec
   requestingUnit, saveProof, takeFile, v11Letter } from "@/lib/v11-data";
 import { invoiceVerificationStatus, jakartaDate } from "@/lib/v11-workflow";
 import { invoicePaymentSummary } from "@/lib/v11-finance";
-import { discardUncommittedFiles, insertLetterAttachment, type StoredLetterFile } from "@/lib/letter-uploads";
+import { discardUncommittedFiles, insertLetterAttachment, listLetterAttachments, type StoredLetterFile } from "@/lib/letter-uploads";
 
 export const runtime = "nodejs";
 
@@ -49,13 +49,7 @@ export async function GET(_:Request,{params}:{params:{id:string}}) {
   const [actions]=await db.query<RowDataPacket[]>(
     `SELECT a.*,u.name actor_name FROM siap_letter_actions a JOIN siap_users u ON u.id=a.actor_user_id
      WHERE a.letter_id=? ORDER BY a.created_at ASC`,[params.id]);
-  const [attachments]=await db.query<RowDataPacket[]>(
-    `SELECT a.id,a.letter_action_id,a.attachment_kind,a.original_name,a.mime_type,a.original_size,a.stored_size,a.is_compressed,a.created_at,
-      ua.name uploaded_by_name,la.action process_action,la.from_status process_from_status,la.to_status process_to_status
-     FROM siap_attachments a
-     JOIN siap_users ua ON ua.id=a.uploaded_by
-     LEFT JOIN siap_letter_actions la ON la.id=a.letter_action_id
-     WHERE a.letter_id=? AND a.disposition_id IS NULL ORDER BY a.created_at ASC,a.id ASC`,[params.id]);
+  const attachments=await listLetterAttachments(db,user,params.id);
   const approval = await reversibleApproval(db, user, letters[0]);
   const { source_letter_id: sourceLetterId, source_disposition_id: sourceDispositionId, approval_snapshot, ...letter } = letters[0];
   const originalId = letter.active_original_attachment_id ??

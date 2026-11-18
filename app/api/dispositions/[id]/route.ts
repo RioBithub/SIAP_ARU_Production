@@ -7,6 +7,7 @@ import { dispositionAccess } from "@/lib/disposition-access";
 import { v11Letter } from "@/lib/v11-data";
 import { paymentDocuments } from "@/lib/v11-payment-documents";
 import { findLetterReferences } from "@/lib/business-document-data";
+import { listLetterAttachments } from "@/lib/letter-uploads";
 
 export const runtime="nodejs";
 
@@ -44,7 +45,7 @@ export async function GET(_:Request,{params}:{params:{id:string}}){
      FROM siap_disposition_actions a
      JOIN siap_users u ON u.id=a.actor_user_id
      WHERE a.disposition_id=?
-     ORDER BY a.created_at ASC`,
+     ORDER BY a.created_at ASC,(a.action<>'CREATE'),a.id`,
     [params.id]
   );
 
@@ -58,6 +59,17 @@ export async function GET(_:Request,{params}:{params:{id:string}}){
      ORDER BY a.created_at ASC`,
     [params.id]
   );
+  const sourceAttachments = await listLetterAttachments(db, user, d.letter_id);
+  const [related] = await db.query<RowDataPacket[]>(
+    `SELECT d.id,d.parent_id,d.status,f.name AS from_name,t.name AS to_name,c.name AS current_owner_name
+     FROM siap_dispositions d
+     JOIN siap_users f ON f.id=d.from_user_id JOIN siap_users t ON t.id=d.to_user_id
+     LEFT JOIN siap_users c ON c.id=d.current_owner_user_id
+     WHERE d.letter_id=? AND (d.id=? OR d.parent_id=?) AND ${access.clause}
+     ORDER BY d.created_at,d.id`, [d.letter_id, d.parent_id, d.id, ...access.params],
+  );
+  const parent = related.find(task => task.id === d.parent_id) ?? null;
+  const children = related.filter(task => task.parent_id === d.id);
 
   const resultIds = [...new Set(actions.flatMap(action => action.result_letter_id ? [String(action.result_letter_id)] : []))];
   const results = resultIds.length ? await findLetterReferences(user, {
@@ -77,7 +89,7 @@ export async function GET(_:Request,{params}:{params:{id:string}}){
   const requirements = workflow ? await paymentDocuments(db, d.letter_id, workflow, d.document_type) : null;
   return NextResponse.json({
     ok:true,
-    data:{disposition:d,actions:history,attachments,payments,paymentDocuments:requirements,
+    data:{disposition:d,actions:history,attachments,sourceAttachments,parent,children,payments,paymentDocuments:requirements,
       sandboxSigning: sandboxAttachmentsEnabled() && (user.role === "ROOT_ADMIN" ||
         [d.from_user_id,d.to_user_id,d.current_owner_user_id].includes(user.id))}
   });

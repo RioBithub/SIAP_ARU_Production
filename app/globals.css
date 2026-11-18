@@ -414,6 +414,11 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit;
 .disposition-letter-results > li + li { border-top: 1px solid var(--line); }
 .disposition-letter-results > li:is(:hover, [aria-selected=true]) { background: #eaf4ff; color: var(--navy); }
 .disposition-letter-results > li > span { font-size: 11px; }
+.disposition-search-feedback { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.disposition-child { border-inline-start: 2px solid var(--line); padding-inline-start: 9px; }
+.disposition-context { box-shadow: none; margin-top: 14px; }
+.signing-progress { list-style: none; margin: 8px 0 12px; padding: 0; }
+.signing-progress > li { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
 .letter-activity { min-width: 155px; white-space: nowrap; }
 .letter-activity span { display: block; }
 .letter-activity span + span { margin-top: 4px; }

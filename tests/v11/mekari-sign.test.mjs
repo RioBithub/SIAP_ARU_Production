@@ -41,7 +41,7 @@ test("Digest mencakup byte JSON yang dikirim dan header absen pada GET", async t
   const name = "SIMULASI–Surat.pdf";
   const signing = configuredSandboxSigning(firstSigner);
   assert.equal(await sendSandboxSignature(name, pdf, signing, null), "fixture-document");
-  assert.equal(await sandboxStatus("fixture-document"), "IN_PROGRESS");
+  assert.equal((await sandboxStatus("fixture-document")).status, "IN_PROGRESS");
 
   assert.equal(fetchMock.mock.callCount(), 2);
   const [send, poll] = fetchMock.mock.calls.map(({ arguments: args }) => new Request(...args));
@@ -75,6 +75,27 @@ test("Payload multi-signer mengikuti urutan pilihan dan penempatan masing-masing
   assert.deepEqual(ordered.signers.map(signer => signer.annotations[0].position_x), [300, 100]);
   assert.equal(parallel.signing_order, undefined);
   assert(parallel.signers.every(signer => !("order" in signer)));
+});
+
+test("Status dokumen dan progres setiap signer dipisahkan dari kredensial Mekari", async t => {
+  const signers = [
+    { name: "Pertama", status: "completed", signed_at: "2026-11-18T10:00:00Z", signing_url: "fixture-link" },
+    { name: "Kedua", status: "your_turn", email: "tester@example.invalid", passcode: "fixture-code" },
+    { name: "Ketiga", status: "awaiting" },
+  ];
+  const fetchMock = t.mock.method(globalThis, "fetch", async () =>
+    Response.json({ data: { id: "fixture-document", attributes: { signing_status: "in_progress", signers } } }));
+  assert.deepEqual(await sandboxStatus("fixture-document"), {
+    status: "IN_PROGRESS",
+    signers: [
+      { name: "Pertama", status: "completed" },
+      { name: "Kedua", status: "your_turn" },
+      { name: "Ketiga", status: "awaiting" },
+    ],
+  });
+  fetchMock.mock.mockImplementation(async () =>
+    Response.json({ data: { id: "other-document", attributes: { signing_status: "completed" } } }));
+  await assert.rejects(sandboxStatus("fixture-document"), /dokumen sandbox tidak cocok/);
 });
 
 test("Email uji yang valid diterima, duplikat dan koordinat di luar halaman ditolak", () => {
@@ -122,7 +143,7 @@ test("Sandbox lampiran memiliki konfigurasi sendiri di luar staging", async t =>
   await assert.rejects(sandboxStatus("fixture-document", "attachment"), /sandbox tidak aktif/);
   process.env.SIAP_V11_MEKARI_ATTACHMENT_SANDBOX = "1";
   assert.equal(sandboxAttachmentsEnabled(), true);
-  assert.equal(await sandboxStatus("fixture-document", "attachment"), "IN_PROGRESS");
+  assert.equal((await sandboxStatus("fixture-document", "attachment")).status, "IN_PROGRESS");
   await assert.rejects(sandboxStatus("fixture-document"), /sandbox tidak aktif/);
   assert.equal(fake.mock.callCount(), 1);
 });

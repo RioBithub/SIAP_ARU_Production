@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import type { SignatureAnnotation } from "@/lib/mekari-sign";
+import type { SandboxProgress, SignatureAnnotation } from "@/lib/mekari-sign";
 import SignaturePlacement from "@/components/SignaturePlacement";
 import AttachmentActions from "@/components/AttachmentActions";
 
@@ -21,6 +21,14 @@ const fieldLabels: Record<Coordinate, string> = {
   element_height: "Tinggi tanda tangan", canvas_width: "Lebar halaman PDF", canvas_height: "Tinggi halaman PDF",
 };
 const coordinateFields = Object.keys(fieldLabels) as Coordinate[];
+const jobLabels: Record<string, string> = {
+  IN_PROGRESS: "Menunggu tanda tangan", COMPLETED: "Selesai", REQUESTING: "Mengirim permintaan",
+  VOIDED: "Dibatalkan", DECLINED: "Ditolak penandatangan", DENIED: "Ditolak Mekari",
+  FAILED: "Pengiriman gagal", RECONCILE: "Perlu pengecekan permintaan",
+};
+const signerLabels: Record<SandboxProgress["signers"][number]["status"], string> = {
+  completed: "Sudah tanda tangan", your_turn: "Giliran tanda tangan", awaiting: "Menunggu giliran", unknown: "Status belum diketahui",
+};
 
 function editableCoordinates(annotation?: SignatureAnnotation) {
   return Object.fromEntries(coordinateFields.map(key => [key, String(annotation?.[key] ?? "")])) as DraftSigner["coordinates"];
@@ -44,6 +52,8 @@ export default function V11SigningPanel({ id, files = [], onReady, source }: {
 }) {
   const [mode, setMode] = useState<Mode | null>(null);
   const [job, setJob] = useState<Job | null>(null);
+  const [progress, setProgress] = useState<SandboxProgress | null>(null);
+  const [retryAfter, setRetryAfter] = useState(0);
   const [busy, setBusy] = useState<"START" | "REFRESH" | "PREDICT" | null>(null);
   const [message, setMessage] = useState("");
   const [attachmentId, setAttachmentId] = useState("");
@@ -55,30 +65,44 @@ export default function V11SigningPanel({ id, files = [], onReady, source }: {
   const [placementSigner, setPlacementSigner] = useState(0);
   const nextSignerId = useRef(1);
   const path = source ? "/api/attachments/" + source.id + "/signing" : "/api/letters/" + id + "/signing";
+  const attachmentMode = Boolean(source);
   const selectedPdf = source?.id ?? attachmentId;
   useEffect(() => {
     const controller = new AbortController();
     onReady?.(false);
     setMode(null);
     setJob(null);
+    setProgress(null);
+    setRetryAfter(0);
+    setMessage("");
     void fetch(path, { signal: controller.signal }).then(async response => {
+      if (controller.signal.aborted) return;
       if (!response.ok) {
-        if (source && !controller.signal.aborted) setMessage("Akses tanda tangan untuk PDF ini tidak tersedia.");
+        if (attachmentMode) setMessage("Akses tanda tangan untuk PDF ini tidak tersedia.");
         return;
       }
       const json = await response.json();
+      if (controller.signal.aborted) return;
       setMode(json.mode);
       setJob(json.data);
       onReady?.(json.data?.status === "COMPLETED");
-    }).catch(() => {});
+    }).catch(() => {
+      if (!controller.signal.aborted) setMessage("Status tanda tangan belum dapat dimuat.");
+    });
     return () => controller.abort();
-  }, [path, onReady, source]);
+  }, [path, onReady, attachmentMode]);
+
+  useEffect(() => {
+    if (!retryAfter) return;
+    const timer = window.setTimeout(() => setRetryAfter(0), retryAfter * 1000);
+    return () => window.clearTimeout(timer);
+  }, [retryAfter]);
 
   async function postAction(action: "START" | "REFRESH" | "PREDICT", fields = {}) {
     const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...fields, action }) });
-    const json = await response.json();
-    if (!response.ok) throw new Error(json.error || "Mekari belum dapat diproses.");
+    const json = await response.json().catch(() => null);
+    if (!response.ok || !json?.ok) throw new Error(json?.error || "Mekari belum dapat diproses.");
     return json;
   }
 
@@ -126,8 +150,9 @@ export default function V11SigningPanel({ id, files = [], onReady, source }: {
       const fields = kind === "START" ? { attachment_id: selectedPdf, confirm_sandbox: confirmed, ...sandboxFields } : {};
       const json = await postAction(kind, fields);
       setJob(json.data);
+      if (json.progress) setProgress(json.progress);
+      setRetryAfter(Number(json.retry_after) || 0);
       onReady?.(json.data?.status === "COMPLETED");
-      if (json.retry_after) setMessage("PDF belum siap. Segarkan setelah " + json.retry_after + " detik.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Proses Mekari gagal.");
     } finally {
@@ -137,14 +162,32 @@ export default function V11SigningPanel({ id, files = [], onReady, source }: {
 
   if (!mode) return source ? <p role="status">{message || "Memuat Mekari Sandbox…"}</p> : null;
   const pdfs = files.filter(file => file.attachment_kind === "ORIGINAL" && /\.pdf$/i.test(file.original_name));
+  const checkedSigners = progress?.signers ?? [];
+  const signed = checkedSigners.filter(signer => signer.status === "completed").length;
+  const pdfPending = job?.status === "IN_PROGRESS" && progress?.status === "COMPLETED";
+  const documentAwaitingConfirmation = job?.status === "IN_PROGRESS" && checkedSigners.length > 0 && signed === checkedSigners.length;
   return <details className="card" style={{ marginTop: 12 }} open={source ? true : undefined}>
     <summary className="card-head"><b>{(job?.mode ?? mode) === "mock" ? "Simulasi Mekari Sign" : "Mekari Sign Sandbox"}</b></summary>
     <div className="card-body">
       {source && <p className="notice">Hasil tanda tangan disimpan sebagai bukti Sandbox. Status persetujuan dan penerbitan dicatat melalui alur SIAP ARU.</p>}
       {message && <p className="notice" role="status">{message}</p>}
       {job ? <>
-        <p>Status {job.status}</p>
-        {job.status === "IN_PROGRESS" && job.mode === mode && <button className="btn btn-secondary" disabled={!!busy} onClick={() => void action("REFRESH")}>Segarkan Status Mekari</button>}
+        <div role="status">
+          <b>{pdfPending ? "PDF final sedang disiapkan" : documentAwaitingConfirmation
+            ? "Menunggu konfirmasi akhir dari Mekari" : jobLabels[job.status] ?? job.status}</b>
+          {checkedSigners.length > 0 && <p>{signed} dari {checkedSigners.length} penandatangan sudah selesai.</p>}
+        </div>
+        {checkedSigners.length > 0 && <ul className="signing-progress">
+          {checkedSigners.map((signer, index) => <li key={index}>
+            <span>{signer.name}</span><span className="muted">{signerLabels[signer.status]}</span>
+          </li>)}
+        </ul>}
+        {job.status === "IN_PROGRESS" && job.mode === mode && <>
+          <button className="btn btn-secondary" disabled={!!busy || retryAfter > 0} onClick={() => void action("REFRESH")}>
+            {busy === "REFRESH" ? "Mengecek Mekari…" : "Segarkan Status Mekari"}
+          </button>
+          {retryAfter > 0 && <p className="hint">Bisa dicek lagi dalam {retryAfter} detik.</p>}
+        </>}
         {job.final_attachment_id && <AttachmentActions id={job.final_attachment_id} name="Bukti tanda tangan.pdf"
           downloadLabel={source ? "Unduh PDF bukti Sandbox" : "Unduh PDF final"}/>}
       </> : <form className="workflow-form" onSubmit={event => void action("START", event)}>

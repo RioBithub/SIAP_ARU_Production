@@ -9,7 +9,7 @@ import { getAccessibleLetter } from "@/lib/letter-access";
 import { discardUncommittedFiles, type StoredLetterFile } from "@/lib/letter-uploads";
 import {
   configuredSandboxSigning, MekariError, predictSandboxAnnotations, sandboxAttachmentsEnabled,
-  sandboxCredentials, sandboxPdf, sandboxStatus, sendSandboxSignature,
+  sandboxCredentials, sandboxPdf, sandboxPollDelay, sandboxStatus, sendSandboxSignature, type SandboxProgress,
 } from "@/lib/mekari-sign";
 import type { SessionUser } from "@/lib/types";
 import { readStoredFile } from "@/lib/upload";
@@ -51,9 +51,9 @@ async function findJob(conn: Pick<PoolConnection, "query">, id: string, lock = f
   return rows[0] ?? null;
 }
 
-function response(job: RowDataPacket | null, status = 200, retryAfter?: number) {
+function response(job: RowDataPacket | null, status = 200, retryAfter?: number, progress?: SandboxProgress) {
   const data = job && { id: job.source_attachment_id, status: job.status, mode: "sandbox", final_attachment_id: job.final_attachment_id };
-  return NextResponse.json({ ok: true, mode: "sandbox", data, retry_after: retryAfter }, { status });
+  return NextResponse.json({ ok: true, mode: "sandbox", data, retry_after: retryAfter, progress }, { status });
 }
 
 async function readSourcePdf(source: RowDataPacket) {
@@ -132,9 +132,11 @@ export async function POST(request: Request, { params }: { params: { id: string 
     );
     const current = await findJob(db, id);
     if (!current) return error(409, "Permintaan untuk PDF ini belum tercatat.");
-    if (!claim.affectedRows) return response(current);
-    const status = await sandboxStatus(current.provider_id, "attachment");
-    if (status === "IN_PROGRESS") return response(current);
+    const retryAfter = current.status === "IN_PROGRESS" ? sandboxPollDelay(current.next_poll_at) || undefined : undefined;
+    if (!claim.affectedRows) return response(current, 200, retryAfter);
+    const progress = await sandboxStatus(current.provider_id, "attachment");
+    const { status } = progress;
+    if (status === "IN_PROGRESS") return response(current, 200, retryAfter, progress);
     let pdf: Buffer | null = null;
     if (status === "COMPLETED") {
       try {
@@ -146,7 +148,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
           "UPDATE siap_v11_attachment_signing SET next_poll_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL ? SECOND) WHERE source_attachment_id=? AND status='IN_PROGRESS'",
           [seconds, id],
         );
-        return response(current, 202, seconds);
+        return response(current, 202, seconds, progress);
       }
     }
     await withTransaction(async conn => {
@@ -173,7 +175,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
       await audit("ATTACHMENT_MEKARI_STATUS", { status, finalAttachmentId: finalId }, conn);
     });
     files.length = 0;
-    return response(await findJob(db, id));
+    return response(await findJob(db, id), 200, undefined, progress);
   } catch (cause) {
     await discardUncommittedFiles(files);
     const message = cause instanceof Error && !("code" in cause) ? cause.message : "Permintaan Sandbox gagal diproses.";

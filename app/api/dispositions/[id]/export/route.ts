@@ -11,6 +11,7 @@ import { ROLE_LABELS, type Role } from "@/lib/types";
 import { safeFilename } from "@/lib/upload";
 import { TASK_PURPOSES, type TaskPurpose } from "@/lib/v11-workflow";
 import { dispositionDeadline, formatWorkflowTime } from "@/lib/workflow-time";
+import { listLetterAttachments } from "@/lib/letter-uploads";
 
 export const runtime = "nodejs";
 
@@ -94,6 +95,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
          FROM siap_attachments a JOIN siap_users u ON u.id=a.uploaded_by
          WHERE a.disposition_id IN (?) ORDER BY a.created_at,a.id`, [ids],
       );
+      const sourceFiles = await listLetterAttachments(conn, user, letter.id);
       const actionRows = new Map(actions.map((action, index) => [action.id, index + 1]));
 
       const workbook = XLSX.utils.book_new();
@@ -131,11 +133,14 @@ export async function GET(request: Request, { params }: { params: { id: string }
       ], [7, 11, 26, 27, 28, 24, 20, 20, 72, 26], true);
       addSheet(workbook, "Lampiran", [
         ["Bagian", "No. log", "Nama file", "Diunggah oleh", "Waktu (WIB)"],
+        ...sourceFiles.map(file => [
+          "Surat asal", "", file.original_name, file.uploaded_by_name, formatWorkflowTime(file.created_at),
+        ]),
         ...files.map(file => [
           taskNumbers.get(file.disposition_id)!, actionRows.get(file.disposition_action_id) || "",
           file.original_name, file.uploader, formatWorkflowTime(file.created_at),
         ]),
-      ], [11, 11, 50, 30, 26], true);
+      ], [15, 11, 50, 30, 26], true);
 
       const data: Buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx", compression: true });
       await auditLog({ user, action: "DISPOSITION_EXPORT", entityType: "DISPOSITION", entityId: root.id,
