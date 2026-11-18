@@ -3,6 +3,7 @@
 import { FormEvent,useEffect,useMemo,useState } from "react";
 import type { SessionUser } from "@/lib/types";
 import ConfidentialityBadge from "@/components/ConfidentialityBadge";
+import DispositionLetterPicker, { type DispositionLetterOption } from "@/components/DispositionLetterPicker";
 import AttachmentActions from "@/components/AttachmentActions";
 import PaymentDocumentsPanel from "@/components/PaymentDocumentsPanel";
 import SearchableSelect from "@/components/SearchableSelect";
@@ -10,10 +11,10 @@ import { dispositionDeadline, formatWorkflowTime } from "@/lib/workflow-time";
 import AttachmentSandbox from "@/components/AttachmentSandbox";
 import Modal from "@/components/Modal";
 import StatusBadge from "@/components/StatusBadge";
-import { dispositionActionLabel, RESULT_REQUIREMENTS, reviewRole, type ResultRequirement } from "@/lib/correspondence-workflow";
+import { dispositionActionLabel, RESULT_REQUIREMENTS, type ResultRequirement } from "@/lib/correspondence-workflow";
 import { INVOICE_INCOMING, formatInvoiceAmount, type DocumentReference } from "@/lib/business-documents";
 import { dispositionTargetRoles, jakartaDate, staffCanVerify, staffUnit, TASK_PURPOSES, TERMINAL_TASK_STATES,
-  unitManagerScope, type TaskPurpose } from "@/lib/v11-workflow";
+  unitManagerScope, type RequestingUnit, type TaskPurpose } from "@/lib/v11-workflow";
 
 const size=(n:number)=>
   n<1024*1024
@@ -39,6 +40,27 @@ type ProcessAction={
   purpose?:TaskPurpose;
   tone?:"primary"|"success"|"danger";
 };
+
+type DispositionLetter = {
+  id: string;
+  subject: string;
+  direction: string;
+  display_number: string | null;
+  letter_number: string | null;
+  external_number: string | null;
+  document_type: string;
+  status: string;
+  confidentiality: string;
+  current_owner_user_id: string | null;
+  v11_kind: string | null;
+  v11_unit: RequestingUnit | null;
+};
+
+function letterOption(letter: DispositionLetter): DispositionLetterOption {
+  const type = letter.direction === "INCOMING" ? "Surat Masuk" : letter.direction === "INTERNAL" ? "Nota Dinas" : "Surat Keluar";
+  const number = letter.display_number || letter.letter_number || letter.external_number;
+  return { id: letter.id, subject: letter.subject, reference: number ? `${type} · ${number}` : type };
+}
 
 function reviewButtonLabel(d:any){
   if(d.status==="REVIEW_MANAGER") return "Setujui & Selesaikan";
@@ -96,12 +118,10 @@ export default function DispositionsClient({user}:{user:SessionUser}){
   const [users,setUsers]=useState<any[]>([]);
   const [v11Enabled,setV11Enabled]=useState(false);
   const [purpose,setPurpose]=useState<TaskPurpose>("GENERAL");
-  const [letters,setLetters]=useState<any[]>([]);
   const [selectedLetterId,setSelectedLetterId]=useState("");
-  const [pinnedLetter,setPinnedLetter]=useState<any>(null);
+  const [pinnedLetter,setPinnedLetter]=useState<DispositionLetter|null>(null);
   const [letterQuery,setLetterQuery]=useState("");
-  const [letterLoading,setLetterLoading]=useState(false);
-  const [letterError,setLetterError]=useState("");
+  const [letterResponse,setLetterResponse]=useState<{ term: string; letters: DispositionLetter[]; error?: string }|null>(null);
   const [delegation,setDelegation]=useState<string[]|null>(null);
   const [parent,setParent]=useState<{id:string;subject:string;result_requirement:ResultRequirement}|null>(null);
   const [open,setOpen]=useState(false);
@@ -118,6 +138,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
   const [status,setStatus]=useState("");
 
   const canCreate=["ROOT_ADMIN","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR"].includes(user.role);
+  const letterTerm=letterQuery.trim();
 
   async function load(){
     try{
@@ -155,33 +176,34 @@ export default function DispositionsClient({user}:{user:SessionUser}){
   },[]);
 
   useEffect(()=>{
-    if(!open) return;
+    if(!open||parent) return;
     const controller=new AbortController();
-    setLetterLoading(true);
-    setLetterError("");
     const timer=window.setTimeout(()=>{
-      const params=new URLSearchParams({for_disposition:"1",limit:"60",q:letterQuery});
+      const params=new URLSearchParams({for_disposition:"1",limit:"60",q:letterTerm});
       void fetch("/api/letters?"+params,{signal:controller.signal,cache:"no-store"})
         .then(async response=>{
           const result=await response.json();
           if(!response.ok) throw new Error(result.error||"Dokumen belum dapat dimuat.");
-          if(!controller.signal.aborted) setLetters(result.data);
+          if(!controller.signal.aborted) setLetterResponse({term:letterTerm, letters:result.data});
         }).catch(error=>{
-          if(!controller.signal.aborted) { setLetters([]);setLetterError(error.message); }
-        }).finally(()=>{if(!controller.signal.aborted)setLetterLoading(false);});
-    },letterQuery?180:0);
+          if(!controller.signal.aborted) setLetterResponse({term:letterTerm, letters:[],
+            error:error instanceof Error?error.message:"Dokumen belum dapat dimuat."});
+        });
+    },letterTerm?180:0);
     return ()=>{window.clearTimeout(timer);controller.abort();};
-  },[open,letterQuery]);
+  },[open,parent,letterTerm]);
 
   useEffect(()=>{
     if(!open||!selectedLetterId||pinnedLetter?.id===selectedLetterId) return;
     const controller=new AbortController();
-    void fetch("/api/letters?limit=1&id="+encodeURIComponent(selectedLetterId),{signal:controller.signal})
+    const params=new URLSearchParams({limit:"1",id:selectedLetterId});
+    if(!parent) params.set("for_disposition","1");
+    void fetch("/api/letters?"+params,{signal:controller.signal,cache:"no-store"})
       .then(response=>response.json()).then(result=>{
         if(!controller.signal.aborted&&result.ok&&result.data[0])setPinnedLetter(result.data[0]);
       }).catch(()=>{});
     return ()=>controller.abort();
-  },[open,selectedLetterId,pinnedLetter?.id]);
+  },[open,parent,selectedLetterId,pinnedLetter?.id]);
 
   const filtered=useMemo(()=>rows.filter(d=>{
     const hay=[
@@ -192,22 +214,15 @@ export default function DispositionsClient({user}:{user:SessionUser}){
     return (!q||hay.includes(q.toLowerCase()))&&(!status||d.status===status);
   }),[rows,q,status]);
 
-  const selectedLetter=letters.find(letter=>letter.id===selectedLetterId) ||
+  const currentResponse=letterResponse?.term===letterTerm?letterResponse:null;
+  const letterChoices=currentResponse?.letters??[];
+  const selectedLetter=letterChoices.find(letter=>letter.id===selectedLetterId) ||
     (pinnedLetter?.id===selectedLetterId?pinnedLetter:undefined);
-  const letterChoices=selectedLetter&&!letters.some(letter=>letter.id===selectedLetterId)
-    ?[selectedLetter,...letters]:letters;
+  const selectedOption=selectedLetter?letterOption(selectedLetter):null;
   const strict=Boolean(v11Enabled||selectedLetter?.v11_kind);
   const scope=users.find(account=>account.id===user.id)?.v11_scope;
   const invoice=selectedLetter?.v11_kind&&selectedLetter.document_type===INVOICE_INCOMING;
-  const notePayment=["PERSEKOT","PAYMENT_REQUEST"].includes(selectedLetter?.v11_kind);
-  function canDisposeLetter(letter:any) {
-    if(letter.direction==="OUTGOING") return letter.status==="ISSUED";
-    if(letter.v11_kind) {
-      return letter.status==="APPROVED" || (letter.direction==="INCOMING" && Boolean(reviewRole(letter.status)) &&
-        (letter.current_owner_user_id===user.id||Boolean(parent&&letter.id===selectedLetterId)));
-    }
-    return ["APPROVED","DISPOSED","IN_PROGRESS","COMPLETED"].includes(letter.status);
-  }
+  const notePayment=selectedLetter?.v11_kind==="PERSEKOT"||selectedLetter?.v11_kind==="PAYMENT_REQUEST";
   const allowed=dispositionTargetRoles(user.role, strict);
   const targetUsers=users.filter(account=>{
     if(account.id===user.id||!allowed.includes(account.role)) return false;
@@ -218,10 +233,26 @@ export default function DispositionsClient({user}:{user:SessionUser}){
         if(!delegation.includes(account.id)) return false;
       } else if(strict&&accountScope&&accountScope!==scope) return false;
     }
-    if(purpose==="INVOICE_VERIFY") return account.role==="STAFF"&&staffCanVerify(selectedLetter?.v11_unit,account.unit_name);
+    if(purpose==="INVOICE_VERIFY") return account.role==="STAFF"&&selectedLetter?.v11_unit&&staffCanVerify(selectedLetter.v11_unit,account.unit_name);
     if(purpose==="INVOICE_PAYMENT"||purpose==="REQUEST_PAYMENT") return account.role==="FINANCE";
     return !(invoice||notePayment)||account.role!=="FINANCE";
   });
+
+  function searchLetters(query:string) {
+    setLetterQuery(query);
+    setSelectedLetterId("");
+    setPinnedLetter(null);
+    setPurpose("GENERAL");
+  }
+
+  function selectLetter(id:string) {
+    const letter=letterChoices.find(choice=>choice.id===id);
+    if(!letter) return;
+    setPinnedLetter(letter);
+    setSelectedLetterId(id);
+    if(id!==selectedLetterId) setPurpose("GENERAL");
+    setLetterQuery("");
+  }
 
   async function create(e:FormEvent<HTMLFormElement>){
     e.preventDefault();
@@ -472,7 +503,13 @@ export default function DispositionsClient({user}:{user:SessionUser}){
       </div>
 
       {canCreate&&
-        <button className="btn btn-primary" onClick={()=>{setParent(null);setSelectedLetterId("");setPurpose("GENERAL");setOpen(true);setCreateFiles([])}}>
+        <button className="btn btn-primary" onClick={()=>{
+          setParent(null);
+          searchLetters("");
+          setLetterResponse(null);
+          setCreateFiles([]);
+          setOpen(true);
+        }}>
           + Buat Disposisi
         </button>
       }
@@ -584,38 +621,17 @@ export default function DispositionsClient({user}:{user:SessionUser}){
           {parent&&<div className="field full notice">
             <b>Delegasi dari</b> {parent.subject}
             <input type="hidden" name="parent_id" value={parent.id}/>
-            <input type="hidden" name="letter_id" value={selectedLetterId}/>
           </div>}
+          <input type="hidden" name="letter_id" value={parent?selectedLetterId:selectedOption?.id||""}/>
 
           <div className="field full">
-            <label htmlFor="disposition-letter">Dokumen</label>
-            {!parent&&<input className="input" type="search" aria-label="Cari dokumen disposisi"
-              placeholder="Cari nomor, perihal, pengirim, atau tujuan…" value={letterQuery}
-              onChange={e=>setLetterQuery(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")e.preventDefault();}}/>}
-            {letterError&&<span className="hint" role="alert">{letterError}</span>}
-            <select id="disposition-letter"
-              className="select"
-              name="letter_id"
-              required
-              value={selectedLetterId}
-              disabled={Boolean(parent)}
-              onChange={e=>{
-                setSelectedLetterId(e.target.value);setPurpose("GENERAL");
-                setPinnedLetter(letterChoices.find(letter=>letter.id===e.target.value)||null);
-              }}
-            >
-              <option value="">{letterLoading?"Mencari dokumen…":letterChoices.length?"Pilih dokumen…":"Tidak ada dokumen yang cocok"}</option>
-
-              {letterChoices.filter(canDisposeLetter).map(l=>
-                <option value={l.id} key={l.id}>
-                  {l.direction==="INCOMING"
-                    ?"Surat Masuk"
-                    :l.direction==="INTERNAL"
-                      ?"Nota Dinas"
-                      :"Surat Keluar"} — {l.display_number||l.letter_number||l.external_number||"-"} — {l.subject}
-                </option>
-              )}
-            </select>
+            {parent ? <>
+              <label htmlFor="disposition-source-letter">Dokumen</label>
+              <input id="disposition-source-letter" className="input" required readOnly
+                value={selectedOption?`${selectedOption.reference} — ${selectedOption.subject}`:parent.subject}/>
+            </> : <DispositionLetterPicker options={letterChoices.map(letterOption)} selected={selectedOption}
+              query={letterQuery} loading={!currentResponse} error={currentResponse?.error}
+              onSearch={searchLetters} onSelect={selectLetter}/>}
 
             {selectedLetter?.confidentiality&&<span className="hint">Sifat surat <ConfidentialityBadge value={selectedLetter.confidentiality}/></span>}
             <span className="hint">
@@ -623,7 +639,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
             </span>
           </div>
 
-          {(invoice||notePayment)&&<label className="field">
+          {selectedLetter&&(invoice||notePayment)&&<label className="field">
             <span>Tujuan Tugas</span>
             <select className="select" name="purpose" required value={purpose} onChange={e=>setPurpose(e.target.value as TaskPurpose)}>
               <option value="GENERAL">{TASK_PURPOSES.GENERAL}</option>

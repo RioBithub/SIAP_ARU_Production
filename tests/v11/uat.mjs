@@ -661,7 +661,12 @@ try {
     const [ledger] = await sql.query("SELECT rendered_number,status,seq_base,variant FROM siap_number_ledger WHERE letter_id IN (?,?)", [state.manual, state.mock]);
     assert.equal(new Set(ledger.map(r => r.rendered_number)).size, 2);
     assert(ledger.every(row => row.status === "ISSUED" && row.seq_base === ledger[0].seq_base));
-    return "Custom/backdate tetap memakai ledger bawaan; nomor terbit unik.";
+    for (const { letter } of rows) {
+      const params = new URLSearchParams({ for_disposition: "1", limit: "1", q: letter.display_number });
+      const [match] = await call("root", "/api/letters?" + params);
+      assert.equal(match?.id, letter.id);
+    }
+    return "Nomor terbit unik. Pencarian disposisi memprioritaskan nomor persis, termasuk varian.";
   });
   await test(48, async () => {
     const build = JSON.parse(await readFile(env.SIAP_V11_BUILD_CHECK_FILE, "utf8"));
@@ -713,6 +718,38 @@ try {
       await mobile.getByRole("row").filter({ hasText: subject("demo-ui-mobile") }).waitFor();
       const desktop = await pageFor("ops", false);
       await desktop.goto(new URL("/dispositions?letter_id=" + row.id, base).href);
+      const documentSearch = desktop.getByRole("combobox", { name: /^Dokumen\b/ });
+      const documentId = desktop.locator('input[name="letter_id"]');
+      await desktop.locator(`input[name="letter_id"][value="${row.id}"]`).waitFor({ state: "attached" });
+      assert((await documentSearch.inputValue()).includes(subject("demo-ui-mobile")));
+      await desktop.getByRole("button", { name: "Batal", exact: true }).click();
+      await desktop.getByRole("button", { name: "+ Buat Disposisi", exact: true }).click();
+      assert.equal(await documentSearch.inputValue(), "");
+
+      await documentSearch.fill(runId + "-dokumen-tidak-ada");
+      await desktop.getByText("Tidak ada dokumen yang cocok.", { exact: true }).waitFor();
+      assert.equal(await documentId.inputValue(), "");
+      assert.equal(await documentSearch.evaluate(input => input.validity.valid), false);
+
+      await desktop.setViewportSize({ width: 390, height: 844 });
+      const matches = desktop.getByRole("listbox", { name: "Hasil pencarian dokumen" });
+      const match = matches.getByRole("option", { name: new RegExp(subject("demo-ui-mobile")) });
+      await documentSearch.fill("demo-ui-mobile");
+      await match.waitFor();
+      assert(await matches.evaluate(list => list.scrollWidth <= list.clientWidth + 1));
+      await match.click();
+      assert.equal(await documentId.inputValue(), row.id);
+      await matches.waitFor({ state: "hidden" });
+
+      await desktop.setViewportSize({ width: 1440, height: 960 });
+      await documentSearch.fill(row.external_number);
+      await match.waitFor();
+      assert.equal(await documentId.inputValue(), "");
+      await documentSearch.press("ArrowDown");
+      await documentSearch.press("Enter");
+      assert.equal(await documentId.inputValue(), row.id);
+      assert.equal(await documentSearch.evaluate(input => input.validity.valid), true);
+      await matches.waitFor({ state: "hidden" });
       await desktop.getByRole("combobox", { name: "Diteruskan kepada" }).selectOption(roles.staff.id);
       await desktop.locator('textarea[name="instruction"]').fill("SIMULASI tindak lanjut dari UI");
       await desktop.screenshot({ path: path.join(out, "02-disposisi-desktop.png") });
@@ -721,6 +758,7 @@ try {
         desktop.getByRole("button", {name:"Kirim Disposisi",exact:true}).click(),
       ]);
       const { data: task } = await taskResponse[0].json();
+      assert.equal((await taskDetail("ops", task.id)).disposition.letter_id, row.id);
       const staff = await pageFor("staff", true);
       await staff.goto(new URL("/dispositions?disposition_id=" + task.id, base).href);
       const taskDialog=staff.getByRole("dialog");
@@ -760,7 +798,7 @@ try {
       await dialog.waitFor({ state: "hidden" });
       await rowFor().waitFor({ state: "hidden" });
       await call("root", "/api/letters/" + cleanup.id, { status: 404 });
-      return "Chromium 390/1440 px: registrasi, invoice lunas, unduh Excel, dan hapus permanen satu surat simulasi dari Sampah.";
+      return "Chromium 390/1440 px: registrasi, pemilihan dokumen via klik dan keyboard, kirim disposisi, invoice lunas, unduh Excel, dan hapus permanen.";
     } finally {
       await browser.close();
     }
