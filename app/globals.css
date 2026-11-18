@@ -306,6 +306,16 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit;
 
 /* SPK and invoice fields */
 .invoice-item{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;padding:11px;border:1px solid var(--line);border-radius:10px}
+.signing-form{border:0;margin:0;min-width:0;padding:0}
+.signing-signer{grid-column:1/-1;min-width:0;margin:0;padding:12px;border:1px solid var(--line);border-radius:11px}
+.signing-signer legend{padding:0 6px;font-weight:750}
+.signing-controls{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:8px}
+.notification-list{display:grid;gap:10px}
+.notification-item{display:grid;gap:6px;width:100%;border:1px solid #c9deef;border-radius:12px;padding:13px;text-align:left;background:#f1f8ff;color:var(--text);overflow-wrap:anywhere}
+.notification-item.read{background:#fff;border-color:var(--line)}
+.notification-item small{color:var(--muted)}
+.notification-trigger{display:flex;align-items:center;gap:6px}
+@media(max-width:600px){.notification-label{display:none}}
 .invoice-item>.btn{justify-self:start}
 .document-checkbox{display:flex;align-items:center;gap:8px}
 .document-details{margin-top:13px;overflow-wrap:anywhere}

@@ -1,0 +1,174 @@
+import { randomUUID } from "node:crypto";
+import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
+import { NextResponse } from "next/server";
+import { auditLog } from "@/lib/audit";
+import { getCurrentUser } from "@/lib/auth";
+import { canHandleSecretariat } from "@/lib/correspondence-workflow";
+import { db, withTransaction } from "@/lib/db";
+import { getAccessibleLetter } from "@/lib/letter-access";
+import { discardUncommittedFiles, type StoredLetterFile } from "@/lib/letter-uploads";
+import {
+  configuredSandboxSigning, MekariError, predictSandboxAnnotations, sandboxAttachmentsEnabled,
+  sandboxCredentials, sandboxPdf, sandboxStatus, sendSandboxSignature,
+} from "@/lib/mekari-sign";
+import type { SessionUser } from "@/lib/types";
+import { readStoredFile } from "@/lib/upload";
+import { saveProof } from "@/lib/v11-data";
+
+export const runtime = "nodejs";
+
+const error = (status: number, message: string) => NextResponse.json({ ok: false, error: message }, { status });
+
+async function sourceFor(user: SessionUser, id: string) {
+  const [rows] = await db.query<RowDataPacket[]>(
+    `SELECT a.id,a.letter_id,a.disposition_id,a.original_name,a.storage_path,a.is_compressed,
+            d.from_user_id,d.to_user_id,d.current_owner_user_id
+     FROM siap_attachments a
+     LEFT JOIN siap_dispositions d ON d.id=a.disposition_id
+     LEFT JOIN siap_disposition_actions da ON da.id=a.disposition_action_id AND da.disposition_id=d.id
+     WHERE a.id=? AND a.letter_id IS NOT NULL AND a.original_size BETWEEN 8 AND 10485760
+       AND (a.attachment_kind IN ('ORIGINAL','ADDITIONAL') OR da.action='SUBMIT_RESULT')`,
+    [id],
+  );
+  const source = rows[0];
+  if (!source || !/\.pdf$/i.test(source.original_name)) return null;
+  if (source.disposition_id) {
+    return user.role === "ROOT_ADMIN" || [source.from_user_id, source.to_user_id, source.current_owner_user_id].includes(user.id)
+      ? source : null;
+  }
+  return canHandleSecretariat(user.role) && await getAccessibleLetter(user, source.letter_id) ? source : null;
+}
+
+async function findJob(conn: Pick<PoolConnection, "query">, id: string, lock = false) {
+  const [rows] = await conn.query<RowDataPacket[]>(
+    "SELECT * FROM siap_v11_attachment_signing WHERE source_attachment_id=?" + (lock ? " FOR UPDATE" : ""), [id],
+  );
+  return rows[0] ?? null;
+}
+
+function response(job: RowDataPacket | null, status = 200, retryAfter?: number) {
+  const data = job && { id: job.source_attachment_id, status: job.status, mode: "sandbox", final_attachment_id: job.final_attachment_id };
+  return NextResponse.json({ ok: true, mode: "sandbox", data, retry_after: retryAfter }, { status });
+}
+
+async function readSourcePdf(source: RowDataPacket) {
+  const bytes = await readStoredFile(source.storage_path, Boolean(source.is_compressed));
+  if (bytes.length > 10 * 1024 * 1024 || bytes.subarray(0, 5).toString() !== "%PDF-" ||
+      !bytes.subarray(-2048).includes(Buffer.from("%%EOF"))) {
+    throw new Error("PDF sumber tidak valid atau melebihi 10 MB.");
+  }
+  return bytes;
+}
+
+export async function GET(_: Request, { params }: { params: { id: string } }) {
+  const user = await getCurrentUser();
+  if (!user) return error(401, "Silakan login.");
+  if (!sandboxAttachmentsEnabled()) return error(409, "Sandbox lampiran belum aktif.");
+  if (!await sourceFor(user, params.id)) return error(403, "Lampiran PDF tidak tersedia untuk akun ini.");
+  return response(await findJob(db, params.id));
+}
+
+export async function POST(request: Request, { params }: { params: { id: string } }) {
+  const user = await getCurrentUser();
+  if (!user) return error(401, "Silakan login.");
+  if (!sandboxAttachmentsEnabled()) return error(409, "Sandbox lampiran belum aktif.");
+  const source = await sourceFor(user, params.id);
+  if (!source) return error(403, "Lampiran PDF tidak tersedia untuk akun ini.");
+  const id = String(source.id);
+  const audit = (action: string, metadata: Record<string, unknown>, conn?: PoolConnection) =>
+    auditLog({ userId: user.id, action, entityType: "ATTACHMENT", entityId: id,
+      metadata: { letterId: source.letter_id, dispositionId: source.disposition_id, ...metadata }, request }, conn);
+  const files: StoredLetterFile[] = [];
+  try {
+    const body = await request.json();
+    if ((body.action === "PREDICT" || body.action === "START") && body.confirm_sandbox !== true) {
+      return error(400, "Konfirmasi bahwa PDF boleh dikirim ke Mekari Sandbox.");
+    }
+    if (body.action === "PREDICT") {
+      if (await findJob(db, id)) return error(409, "Permintaan untuk PDF ini sudah tercatat.");
+      const suggestions = await predictSandboxAnnotations(source.original_name, await readSourcePdf(source), body, "attachment");
+      await audit("ATTACHMENT_MEKARI_PREDICT", { suggestionCount: suggestions.length });
+      return NextResponse.json({ ok: true, data: suggestions });
+    }
+    if (body.action === "START") {
+      const signing = configuredSandboxSigning(body);
+      sandboxCredentials();
+      const pdf = await readSourcePdf(source);
+      const existing = await withTransaction(async conn => {
+        await conn.query("SELECT id FROM siap_attachments WHERE id=? FOR UPDATE", [id]);
+        const job = await findJob(conn, id);
+        if (job) return job;
+        await conn.execute(
+          "INSERT INTO siap_v11_attachment_signing (source_attachment_id,requested_by,status) VALUES (?,?,'REQUESTING')",
+          [id, user.id],
+        );
+        await audit("ATTACHMENT_MEKARI_REQUEST", { signerCount: signing.signers.length, ordered: signing.signing_order }, conn);
+        return null;
+      });
+      if (existing) return response(existing);
+      try {
+        const providerId = await sendSandboxSignature(source.original_name, pdf, signing, null, "attachment");
+        await db.execute("UPDATE siap_v11_attachment_signing SET provider_id=?,status='IN_PROGRESS' WHERE source_attachment_id=?", [providerId, id]);
+      } catch (cause) {
+        const status = cause instanceof MekariError && [400,401,403,404,422].includes(cause.status) ? "FAILED" : "RECONCILE";
+        await db.execute("UPDATE siap_v11_attachment_signing SET status=? WHERE source_attachment_id=?", [status, id]);
+        throw cause;
+      }
+      return response(await findJob(db, id), 201);
+    }
+    if (body.action !== "REFRESH") return error(400, "Aksi Sandbox tidak dikenal.");
+    const [claim] = await db.execute<ResultSetHeader>(
+      `UPDATE siap_v11_attachment_signing SET next_poll_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 15 SECOND)
+       WHERE source_attachment_id=? AND status='IN_PROGRESS' AND (next_poll_at IS NULL OR next_poll_at<=UTC_TIMESTAMP())`,
+      [id],
+    );
+    const current = await findJob(db, id);
+    if (!current) return error(409, "Permintaan untuk PDF ini belum tercatat.");
+    if (!claim.affectedRows) return response(current);
+    const status = await sandboxStatus(current.provider_id, "attachment");
+    if (status === "IN_PROGRESS") return response(current);
+    let pdf: Buffer | null = null;
+    if (status === "COMPLETED") {
+      try {
+        pdf = await sandboxPdf(current.provider_id, "attachment");
+      } catch (cause) {
+        if (!(cause instanceof MekariError) || cause.status !== 424) throw cause;
+        const seconds = cause.retryAfter ?? 15;
+        await db.execute(
+          "UPDATE siap_v11_attachment_signing SET next_poll_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL ? SECOND) WHERE source_attachment_id=? AND status='IN_PROGRESS'",
+          [seconds, id],
+        );
+        return response(current, 202, seconds);
+      }
+    }
+    await withTransaction(async conn => {
+      const job = await findJob(conn, id, true);
+      if (job?.status !== "IN_PROGRESS") return;
+      let finalId: string | null = null;
+      if (pdf) {
+        const file = await saveProof(new File([new Uint8Array(pdf)], "Bukti-uji-Mekari-Sandbox.pdf"), true, "ORIGINAL");
+        files.push(file);
+        finalId = randomUUID();
+        await conn.execute(
+          `INSERT INTO siap_attachments
+           (id,letter_id,disposition_id,attachment_kind,original_name,stored_name,
+            storage_path,mime_type,original_size,stored_size,is_compressed,uploaded_by)
+           VALUES (?,?,?,'PROCESS',?,?,?,?,?,?,?,?)`,
+          [finalId, source.letter_id, source.disposition_id, file.originalName, file.storedName,
+            file.storagePath, file.mimeType, file.originalSize, file.storedSize, Number(file.isCompressed), user.id],
+        );
+      }
+      await conn.execute(
+        "UPDATE siap_v11_attachment_signing SET status=?,final_attachment_id=?,next_poll_at=NULL WHERE source_attachment_id=?",
+        [status, finalId, id],
+      );
+      await audit("ATTACHMENT_MEKARI_STATUS", { status, finalAttachmentId: finalId }, conn);
+    });
+    files.length = 0;
+    return response(await findJob(db, id));
+  } catch (cause) {
+    await discardUncommittedFiles(files);
+    const message = cause instanceof Error && !("code" in cause) ? cause.message : "Permintaan Sandbox gagal diproses.";
+    return error(cause instanceof MekariError && [401,403,404].includes(cause.status) ? 424 : 400, message);
+  }
+}

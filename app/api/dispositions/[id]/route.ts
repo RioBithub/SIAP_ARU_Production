@@ -1,3 +1,4 @@
+import { sandboxAttachmentsEnabled } from "@/lib/mekari-sign";
 import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { getCurrentUser } from "@/lib/auth";
@@ -17,11 +18,13 @@ export async function GET(_:Request,{params}:{params:{id:string}}){
   const [rows]=await db.query<RowDataPacket[]>(
     `SELECT d.*,
       l.subject,l.letter_number,l.external_number,l.direction,l.document_type,
+      v.purpose,v.invoice_revision AS task_revision,
       fu.name AS from_name,fu.role AS from_role,
       tu.name AS to_name,tu.role AS to_role,
       cu.name AS current_owner_name,cu.role AS current_owner_role
      FROM siap_dispositions d
      JOIN siap_letters l ON l.id=d.letter_id
+     LEFT JOIN siap_v11_dispositions v ON v.disposition_id=d.id
      JOIN siap_users fu ON fu.id=d.from_user_id
      JOIN siap_users tu ON tu.id=d.to_user_id
      LEFT JOIN siap_users cu ON cu.id=d.current_owner_user_id
@@ -62,8 +65,16 @@ export async function GET(_:Request,{params}:{params:{id:string}}){
   const history = actions.map(({ result_letter_id, ...action }) => ({
     ...action, result_letter: result_letter_id ? resultById.get(result_letter_id) : undefined,
   }));
+  const [payments] = d.purpose === "INVOICE_PAYMENT"
+    ? await db.query<RowDataPacket[]>(
+      `SELECT id,amount,payment_date,payee,recipient_account,reference,bookkeeping_note,evidence_id,
+        status,approved_at,submitted_action_id FROM siap_v11_payments WHERE disposition_id=? ORDER BY created_at,id`,
+      [params.id],
+    ) : [[]];
   return NextResponse.json({
     ok:true,
-    data:{disposition:d,actions:history,attachments}
+    data:{disposition:d,actions:history,attachments,payments,
+      sandboxSigning: sandboxAttachmentsEnabled() && (user.role === "ROOT_ADMIN" ||
+        [d.from_user_id,d.to_user_id,d.current_owner_user_id].includes(user.id))}
   });
 }

@@ -163,32 +163,7 @@ Migration hanya menambahkan relasi attachment ke action workflow dan tidak mengh
 
 ## Akun awal
 
-### Root Admin
-
-```text
-Email    : root@aruraharja.co.id
-Password : AdminARU!2026
-```
-
-### User operasional
-
-Password awal:
-
-```text
-SiapARU!2026
-```
-
-| User | Email |
-|---|---|
-| Staff Administrasi | staff@aruraharja.co.id |
-| Manager Keu, SDM & Umum | manager@aruraharja.co.id |
-| Manager Operasional | manager.ops@aruraharja.co.id |
-| Manager Gedung | manager.gedung@aruraharja.co.id |
-| Direktur Operasional | dirops@aruraharja.co.id |
-| Direktur Utama | dirut@aruraharja.co.id |
-| Finance | finance@aruraharja.co.id |
-
-Ganti password sebelum go-live.
+Provision akun Root Admin menggunakan konfigurasi privat instalasi. Untuk pengguna operasional, buat akun melalui User & Role di instalasi yang berwenang. Hindari memakai kredensial bootstrap yang pernah tercantum di dokumentasi atau dump lama. Jika digunakan pada instalasi aktif, rotasi melalui pengelola akun.
 
 ## Menjalankan aplikasi
 

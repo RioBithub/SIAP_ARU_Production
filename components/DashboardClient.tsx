@@ -79,11 +79,18 @@ export default function DashboardClient(){
       <div className="stat"><div className="stat-label">Nota Dinas Bulan Ini</div><div className="stat-value">{Number(letters.internal_total||0)}</div><div className="stat-sub">Dokumen Staff ke manajemen</div></div>
       <div className="stat"><div className="stat-label">Menunggu Approval</div><div className="stat-value">{Number(letters.waiting_approval||0)}</div><div className="stat-sub">Manager / Direksi</div></div>
       <div className="stat"><div className="stat-label">Disposisi Unseen</div><div className="stat-value">{Number(disp.unseen||0)}</div><div className="stat-sub">Belum dibuka penerima</div></div>
-      <div className="stat"><div className="stat-label">Disposisi Aktif</div><div className="stat-value">{Number(disp.active||0)}</div><div className="stat-sub">Sedang ditindaklanjuti</div></div>
+      <div className="stat"><div className="stat-label">Disposisi Aktif</div><div className="stat-value">{Number(disp.active||0)}</div><div className="stat-sub">{Number(disp.overdue||0)} tugas lewat tenggat</div></div>
     </div>
+    {Boolean(data?.followups?.length)&&<section className="card" style={{marginBottom:16}}>
+      <div className="card-head"><h3>Tindak Lanjut Terbuka</h3></div>
+      <div className="card-body kpi-list">{data.followups.map((item:any)=><div className="kpi-row" key={item.id}>
+        <a href={"/dispositions?disposition_id="+item.id}>{item.subject}</a>
+        <span>{item.owner_name||"—"} · {item.due_date?String(item.due_date).slice(0,10):"Tanpa tenggat"}</span>
+      </div>)}</div>
+    </section>}
     <div className="grid-2">
       <section className="card"><div className="card-head"><div><h3>Alur Persuratan Utama</h3><p>Workflow approval dan return diberlakukan oleh sistem.</p></div></div><div className="card-body"><div className="kpi-list">
-        <div className="kpi-row"><span>1. Surat Eksternal</span><b>Staff meregistrasi surat yang diterima perusahaan</b></div>
+        <div className="kpi-row"><span>1. Surat Eksternal</span><b>Sekretariat mencatat bukti terima dan mengarahkan surat ke Manager pada alur V11</b></div>
         <div className="kpi-row"><span>2. Nota Dinas</span><b>Staff menyampaikan laporan / permohonan ke Manager atau atasan + lampiran</b></div>
         <div className="kpi-row"><span>3. Manager / Direksi</span><b>Approve, return, atau meneruskan ke level berikutnya</b></div>
         <div className="kpi-row"><span>4. Disposisi</span><b>Digunakan pimpinan untuk instruksi / tindak lanjut setelah dokumen diterima</b></div>

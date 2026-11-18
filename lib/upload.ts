@@ -67,7 +67,7 @@ export async function saveUpload(file: File, kind: "ORIGINAL" | "ADDITIONAL") {
 export async function readStoredFile(storagePath: string, isCompressed: boolean) {
   const absoluteRoot = uploadRoot();
   const resolved = path.resolve(storagePath);
-  if (!resolved.startsWith(absoluteRoot)) throw new Error("Lokasi file tidak valid.");
+  if (!resolved.startsWith(absoluteRoot + path.sep)) throw new Error("Lokasi file tidak valid.");
   const data = await fs.readFile(resolved);
   return isCompressed ? gunzipAsync(data) : data;
 }
@@ -75,7 +75,7 @@ export async function readStoredFile(storagePath: string, isCompressed: boolean)
 export async function deleteStoredFile(storagePath: string) {
   const absoluteRoot = uploadRoot();
   const resolved = path.resolve(storagePath);
-  if (!resolved.startsWith(absoluteRoot)) throw new Error("Lokasi file tidak valid.");
+  if (!resolved.startsWith(absoluteRoot + path.sep)) throw new Error("Lokasi file tidak valid.");
   try {
     await fs.unlink(resolved);
   } catch (error: any) {

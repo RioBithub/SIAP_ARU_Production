@@ -14,6 +14,9 @@ import { activeReviewer, hasActiveSecretariat, outgoingSources } from "@/lib/cor
 import { REVIEW_ROLES, REVIEW_STATUS, canHandleSecretariat } from "@/lib/correspondence-workflow";
 import { discardUncommittedFiles, insertLetterAttachment, type StoredLetterFile } from "@/lib/letter-uploads";
 import { saveUpload } from "@/lib/upload";
+import { checkedDate, invoiceKey, officialManager, persekotChecklist, receiptFields,
+  requestingUnit, saveProof, takeFile, v11Enabled } from "@/lib/v11-data";
+import { jakartaDate } from "@/lib/v11-workflow";
 
 export const runtime = "nodejs";
 
@@ -54,7 +57,7 @@ export async function GET(request: Request) {
 
   params.push(limit);
   const [rows] = await db.query<RowDataPacket[]>(
-    `SELECT l.*,
+    `SELECT l.*, v.kind AS v11_kind,v.requesting_unit AS v11_unit,
       u.name AS creator_name,
       uo.name AS current_owner_name,
       uo.unit_name AS current_owner_unit,
@@ -71,6 +74,7 @@ export async function GET(request: Request) {
       (SELECT COUNT(*) FROM siap_attachments a WHERE a.letter_id=l.id AND a.disposition_id IS NULL) AS attachment_count
      FROM siap_letters l
      JOIN siap_users u ON u.id=l.created_by
+     LEFT JOIN siap_v11_letters v ON v.letter_id=l.id
      LEFT JOIN siap_users uo ON uo.id=l.current_owner_user_id
      LEFT JOIN siap_users rt ON rt.id=l.routing_target_user_id
      LEFT JOIN siap_number_formats nf ON nf.id=l.number_format_id
@@ -89,21 +93,28 @@ export async function POST(request: Request) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
 
-  let original: StoredLetterFile | null = null;
+  const stored: StoredLetterFile[] = [];
   try {
     const multipart = request.headers.get("content-type")?.includes("multipart/form-data");
     const form = multipart ? await request.formData() : null;
     const body = form ? JSON.parse(String(form.get("metadata") || "{}")) : await request.json();
-    const file = form?.get("original_file");
+    const file = takeFile(form?.get("original_file"));
+    const receiptProof = takeFile(form?.get("receipt_file"));
+    const spbFile = takeFile(form?.get("spb_file"));
+    const v11 = v11Enabled();
     const direction = required(body.direction, "Arah dokumen", 20).toUpperCase();
     if (!["INCOMING", "OUTGOING", "INTERNAL"].includes(direction)) throw new Error("Arah dokumen tidak valid.");
 
-    const usesSecretariat = direction !== "INTERNAL" && await hasActiveSecretariat();
+    const hasSecretariat = direction !== "INTERNAL" && await hasActiveSecretariat();
+    if (v11 && direction !== "INTERNAL" && !hasSecretariat) {
+      throw new Error("Aktifkan akun Sekretariat sebelum menerima atau membuat surat V11.");
+    }
+    const usesSecretariat = hasSecretariat;
     if (direction === "INCOMING" && !canRegisterIncoming(user.role) &&
         !(usesSecretariat && REVIEW_ROLES.some(role => role === user.role))) {
       return NextResponse.json({ ok: false, error: "Akun ini tidak dapat menyerahkan Surat Masuk." }, { status: 403 });
     }
-    const needsRegistration = direction === "INCOMING" && usesSecretariat && !canHandleSecretariat(user.role);
+    const needsRegistration = direction === "INCOMING" && usesSecretariat && (v11 || !canHandleSecretariat(user.role));
     const assignedFinance = user.role === "FINANCE" && Boolean(str(body.source_disposition_id, 36));
     if (direction === "OUTGOING" && !canCreateOutgoing(user.role) && !assignedFinance) {
       return NextResponse.json({ ok: false, error: "Surat keluar disusun oleh Staff Administrasi atau Root Admin." }, { status: 403 });
@@ -123,28 +134,38 @@ export async function POST(request: Request) {
         [documentType, direction],
       );
       if (!types[0]) throw new Error("Jenis dokumen tidak ditemukan atau tidak aktif.");
-      requiresSecretariatReview = direction === "OUTGOING" && usesSecretariat && Boolean(types[0].secretariat_review_required);
+      requiresSecretariatReview = direction === "OUTGOING" && usesSecretariat && !v11 && Boolean(types[0].secretariat_review_required);
     }
     if (direction === "INTERNAL" && documentType !== "NOTA_DINAS") {
       throw new Error("Dokumen internal Staff ke atasan harus Nota Dinas.");
     }
-    if (business && direction === "INCOMING" && (!file || typeof file === "string" || file.size === 0)) {
-      throw new Error("Unggah dokumen asli untuk meregistrasi SPK atau invoice masuk.");
+    if ((business || v11) && direction === "INCOMING" && !file) {
+      throw new Error("Unggah dokumen asli untuk menyerahkan Surat Masuk.");
     }
+    const persekot = body.persekot === true;
+    if (persekot && (!v11 || direction !== "INTERNAL")) throw new Error("Persekot tersedia pada Nota Dinas V11.");
+    if (spbFile && !persekot) throw new Error("Berkas SPB hanya diperuntukkan bagi pengajuan persekot.");
+    if (receiptProof && (!v11 || direction !== "INCOMING")) throw new Error("Bukti penerimaan hanya untuk Surat Masuk V11.");
 
     const id = crypto.randomUUID();
     const subject = required(body.subject, "Perihal", 500);
     const letterDate = dateOnly(body.letter_date, "Tanggal dokumen");
-    const target = await activeReviewer(db, required(body.routing_target_user_id, "Tujuan review", 36),
-      direction === "INCOMING" && usesSecretariat ? REVIEW_ROLES : ["MANAGER"]);
+    const targetId = required(body.routing_target_user_id, "Tujuan review", 36);
+    const unit = v11 && direction === "INCOMING" ? requestingUnit(body.requesting_unit) : null;
+    const managerNota = v11 && direction === "INTERNAL" && user.role === "MANAGER";
+    const target = v11 && !managerNota ? await officialManager(db, targetId, unit)
+      : await activeReviewer(db, targetId, managerNota ? ["DIRECTOR_OPS", "PRESIDENT_DIRECTOR"]
+        : direction === "INCOMING" && usesSecretariat ? REVIEW_ROLES : ["MANAGER"]);
+    if (managerNota) await officialManager(db, user.id);
+    const receipt = unit ? receiptFields(body, false) : null;
     const targetLabel = [target.name, target.unit_name].filter(Boolean).join(" — ");
-    const today = new Date().toISOString().slice(0, 10);
+    const today = v11 ? jakartaDate() : new Date().toISOString().slice(0, 10);
     const isBackdated = letterDate < today;
     const summary = str(body.summary, 5000) || null;
     const notes = str(body.notes, 5000) || null;
     const conf = String(body.confidentiality || "").toUpperCase();
     const confidentiality = ["BIASA", "PENTING", "RAHASIA"].includes(conf) ? conf : "BIASA";
-    const isPublic = confidentiality === "RAHASIA" ? 0
+    const isPublic = v11 || confidentiality === "RAHASIA" ? 0
       : direction === "INTERNAL" || business ? Number(body.is_public === true)
       : Number(body.is_public !== false);
     const status = needsRegistration ? "SECRETARIAT_INTAKE"
@@ -157,7 +178,13 @@ export async function POST(request: Request) {
       : direction === "INTERNAL" ? user.unit_name || user.name : null;
     const recipient = direction === "OUTGOING" ? required(body.recipient, "Tujuan dokumen", 255)
       : direction === "INTERNAL" ? targetLabel : str(body.recipient, 255) || null;
-    const receivedDate = direction === "INCOMING" ? dateOnly(body.received_date || today, "Tanggal diterima") : null;
+    const receivedDate = direction === "INCOMING"
+      ? (v11 ? checkedDate : dateOnly)(body.received_date || today, "Tanggal diterima") : null;
+    if (v11 && receivedDate && receivedDate > today) throw new Error("Tanggal penerimaan tidak boleh di masa depan.");
+    if (v11 && documentType === INVOICE_INCOMING) {
+      if (externalNumber!.length > 120) throw new Error("Nomor invoice masuk maksimal 120 karakter.");
+      checkedDate(body.business?.due_date, "Jatuh tempo invoice");
+    }
     const formatId = direction === "OUTGOING" ? required(body.number_format_id, "Format nomor", 36) : null;
     const issuedDate = direction === "OUTGOING" && body.issued_date ? dateOnly(body.issued_date, "Tanggal terbit") : null;
     const customBase = direction === "OUTGOING" && body.custom_number_base != null && String(body.custom_number_base).trim() !== ""
@@ -166,11 +193,15 @@ export async function POST(request: Request) {
       throw new Error("Nomor dasar custom harus angka bulat minimal 1.");
     }
 
-    if (file && typeof file !== "string" && file.size > 0) original = await saveUpload(file, "ORIGINAL");
+    const original = file ? await saveUpload(file, "ORIGINAL") : null;
+    if (original) stored.push(original);
     const data = await withTransaction(async conn => {
       const { sourceLetterId, sourceDispositionId } = direction === "OUTGOING"
         ? await outgoingSources(conn, user, str(body.source_letter_id, 36), str(body.source_disposition_id, 36))
         : { sourceLetterId: null, sourceDispositionId: null };
+      // Take the exclusive format lock before the letter's FK acquires a shared lock.
+      // Concurrent reservations of the same format then serialize without a lock upgrade.
+      if (formatId) await conn.query("SELECT id FROM siap_number_formats WHERE id=? FOR UPDATE", [formatId]);
       await conn.execute(
         `INSERT INTO siap_letters
          (id,direction,document_type,number_format_id,external_number,subject,sender,recipient,
@@ -180,7 +211,7 @@ export async function POST(request: Request) {
          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [id, direction, documentType, formatId, externalNumber, subject, sender, recipient, letterDate,
           receivedDate, issuedDate, confidentiality, summary, notes, status, role,
-          needsRegistration ? null : direction === "INCOMING" ? target.id : direction === "OUTGOING" || business ? user.id : null,
+          needsRegistration ? null : direction === "INCOMING" ? target.id : direction === "OUTGOING" || business || v11 ? user.id : null,
           target.id, isPublic, isBackdated, user.id, user.id, Number(usesSecretariat),
           Number(requiresSecretariatReview), sourceLetterId, sourceDispositionId],
       );
@@ -195,6 +226,27 @@ export async function POST(request: Request) {
       }
       await saveBusinessDocument(conn, user, { id, document_type: documentType, direction }, body.business, true);
       if (original) await insertLetterAttachment(conn, id, user.id, original, "ORIGINAL");
+
+      if (v11) {
+        const extra = async (proof: File | null, pdfOnly = false) => {
+          if (!proof) return null;
+          const saved = await saveProof(proof, pdfOnly);
+          stored.push(saved);
+          return insertLetterAttachment(conn, id, user.id, saved, "ADDITIONAL");
+        };
+        const receiptId = await extra(receiptProof);
+        const spbId = await extra(spbFile, true);
+        await conn.execute(
+          `INSERT INTO siap_v11_letters
+           (letter_id,kind,requesting_unit,received_time,delivery_method,delivered_by,received_by,
+            receipt_note,receipt_attachment_id,invoice_key,persekot_checklist,spb_attachment_id)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [id, persekot ? "PERSEKOT" : "CORRESPONDENCE", unit, receipt?.receivedTime ?? null,
+            receipt?.method ?? null, receipt?.deliveredBy ?? null, receipt?.receivedBy ?? null,
+            receipt?.note ?? null, receiptId, documentType === INVOICE_INCOMING ? invoiceKey(sender!, externalNumber!) : null,
+            persekot ? JSON.stringify(persekotChecklist(body.persekot_checklist)) : null, spbId],
+        );
+      }
 
       const action = needsRegistration ? "RECEIVE_INCOMING"
         : direction === "INCOMING" ? "REGISTER_INCOMING" : direction === "INTERNAL" ? "CREATE_INTERNAL" : "CREATE_OUTGOING";
@@ -211,18 +263,20 @@ export async function POST(request: Request) {
       await auditLog({
         userId: user.id, action: "LETTER_CREATE", entityType: "LETTER", entityId: id,
         metadata: { direction, documentType, subject, routingTargetId: target.id, isBackdated,
-          customNumberBase: customBase, usesSecretariat, sourceLetterId, sourceDispositionId },
+          customNumberBase: customBase, usesSecretariat, sourceLetterId, sourceDispositionId, workflowV11: v11, requestingUnit: unit },
         request,
       }, conn);
       const [rows] = await conn.query<RowDataPacket[]>("SELECT * FROM siap_letters WHERE id=? LIMIT 1", [id]);
       return rows[0];
     });
-    original = null;
+    stored.length = 0;
     return NextResponse.json({ ok: true, data }, { status: 201 });
   } catch (error) {
-    if (original) await discardUncommittedFiles([original]);
+    await discardUncommittedFiles(stored);
     return NextResponse.json({
-      ok: false, error: error instanceof Error ? error.message : "Gagal membuat dokumen.",
+      ok: false, error: (error as { code?: string })?.code === "ER_DUP_ENTRY" && (error as Error).message.includes("invoice_key")
+        ? "Invoice dengan vendor dan nomor tersebut sudah tercatat."
+        : error instanceof Error ? error.message : "Gagal membuat dokumen.",
     }, { status: 400 });
   }
 }

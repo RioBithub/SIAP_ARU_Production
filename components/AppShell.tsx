@@ -4,6 +4,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 import type { SessionUser } from "@/lib/types";
 import { ROLE_LABELS } from "@/lib/types";
+import WorkflowNotifications from "@/components/WorkflowNotifications";
 
 type Item = { href:string; label:string; icon:string; roles?:string[] };
 
@@ -82,6 +83,7 @@ export default function AppShell({ user, children }:{user:SessionUser;children:R
           <div className="top-title"><h1>SIAP ARU</h1><p>Persuratan, Disposisi, dan Informasi Keuangan</p></div>
         </div>
         <div className="top-right">
+          <WorkflowNotifications/>
           <div className="user-chip"><div className="avatar">{user.name.slice(0,2).toUpperCase()}</div><div><b>{user.name}</b><small>{ROLE_LABELS[user.role]}</small></div></div>
           <button className="btn btn-secondary" onClick={logout}>Keluar</button>
         </div>

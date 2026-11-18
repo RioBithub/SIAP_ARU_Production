@@ -8,11 +8,16 @@ import StatusBadge, { statusLabel } from "@/components/StatusBadge";
 import BusinessDocumentFields, { BusinessDocumentSummary, ReferencePicker } from "@/components/BusinessDocumentFields";
 import { INVOICE_INCOMING, INVOICE_OUTGOING, SPK_INCOMING, SPK_OUTGOING, isBusinessDocument, isInvoice, type DocumentReference } from "@/lib/business-documents";
 
+import { DELIVERY_METHODS, MANAGER_SCOPES, staffUnit, type ManagerScope } from "@/lib/v11-workflow";
+import AttachmentSandbox from "@/components/AttachmentSandbox";
+import V11SigningPanel from "@/components/V11SigningPanel";
+import { PersekotFields, ReceiptFields, UnitField, WorkflowSummary } from "@/components/V11LetterFields";
+
 type Direction="INCOMING"|"OUTGOING"|"INTERNAL";
 type Props={direction:Direction;user:SessionUser};
 type PendingAction={action:string;label:string;requiredComment?:boolean;issue?:boolean};
 
-type RoutingUser={id:string;name:string;role:Role;unit_name:string|null};
+type RoutingUser={id:string;name:string;role:Role;unit_name:string|null;v11_scope?:ManagerScope};
 const isReviewer=(account:RoutingUser)=>REVIEW_ROLES.some(role=>role===account.role);
 
 const today=()=>new Date().toISOString().slice(0,10);
@@ -94,14 +99,24 @@ export default function LettersClient({direction,user}:Props){
   const [formats,setFormats]=useState<any[]>([]);
   const [documentTypes,setDocumentTypes]=useState<any[]>([]);
   const [routingUsers,setRoutingUsers]=useState<RoutingUser[]>([]);
+  const [v11Enabled,setV11Enabled]=useState(false);
+  const [persekot,setPersekot]=useState(false);
+  const [signatureMethod,setSignatureMethod]=useState("");
+  const [signingReady,setSigningReady]=useState(false);
   const [queue,setQueue]=useState(direction!=="INTERNAL"&&user.role==="SECRETARIAT");
   const [sourceLetter,setSourceLetter]=useState<DocumentReference[]>([]);
   const [sourceDispositionId,setSourceDispositionId]=useState("");
   const [sourceLoading,setSourceLoading]=useState(false);
   const hasSecretariat=routingUsers.some(account=>account.role==="SECRETARIAT");
-  const incomingToSecretariat=direction==="INCOMING"&&hasSecretariat&&!canHandleSecretariat(user.role);
-  const reviewers=routingUsers.filter(account=>direction==="INCOMING"&&hasSecretariat
-    ? isReviewer(account) : account.role==="MANAGER");
+  const incomingToSecretariat=direction==="INCOMING"&&(v11Enabled||(hasSecretariat&&!canHandleSecretariat(user.role)));
+  const officialManagers=routingUsers.filter(account=>account.role==="MANAGER"&&account.v11_scope);
+  const managerNota=v11Enabled&&direction==="INTERNAL"&&user.role==="MANAGER";
+  const financeManager=officialManagers.some(account=>account.id===user.id&&account.v11_scope==="KSU");
+  const reviewers=v11Enabled
+    ? managerNota ? routingUsers.filter(account=>["DIRECTOR_OPS","PRESIDENT_DIRECTOR"].includes(account.role)) : officialManagers
+    : routingUsers.filter(account=>direction==="INCOMING"&&hasSecretariat ? isReviewer(account) : account.role==="MANAGER");
+  const reviewerLabel=(account:RoutingUser)=>account.v11_scope ? MANAGER_SCOPES[account.v11_scope]
+    : [account.name,account.unit_name].filter(Boolean).join(" — ");
   const canDraftOutgoing=user.role==="STAFF"||user.role==="ROOT_ADMIN";
   const [q,setQ]=useState("");
   const [status,setStatus]=useState("");
@@ -157,7 +172,7 @@ export default function LettersClient({direction,user}:Props){
     const r=await fetch("/api/users/lookup");
     const j=await r.json();
 
-    if(j.ok) setRoutingUsers(j.data);
+    if(j.ok) { setRoutingUsers(j.data); setV11Enabled(Boolean(j.v11Enabled)); }
   }
 
   useEffect(()=>{
@@ -190,6 +205,7 @@ export default function LettersClient({direction,user}:Props){
   },[direction]);
 
   function openCreate(){
+    setPersekot(false);
     setSourceLetter([]);
     setSourceDispositionId("");
     setError("");
@@ -205,14 +221,17 @@ export default function LettersClient({direction,user}:Props){
     ? documentTypes.map((x:any)=>[x.code,x.name] as [string,string])
     : direction==="INCOMING"?INCOMING_TYPE_OPTIONS:FALLBACK_LETTER_TYPE_OPTIONS;
   const businessForm=isBusinessDocument(createType);
-  const incomingFileRequired=direction==="INCOMING"&&businessForm;
+  const incomingFileRequired=direction==="INCOMING"&&(businessForm||v11Enabled);
   const signedIssue=Boolean(pendingAction?.issue&&(detail?.letter.uses_secretariat||(detail?.letter.document_type===SPK_OUTGOING&&detail?.business?.managed)));
-  const actionFileLimit=signedIssue?4:5;
+  const actionFileLimit=signedIssue || (detail?.v11&&["MARK_SENT","REGISTER_INCOMING"].includes(pendingAction?.action||"")) ? 4 : 5;
 
   function formObject(fd:FormData){
     const out:any={};
     fd.forEach((value,key)=>{ out[key]=value; });
     if(typeof out.business==="string") out.business=JSON.parse(out.business);
+    if(fd.has("persekot_checklist")) out.persekot_checklist=fd.getAll("persekot_checklist");
+    delete out.receipt_file;
+    delete out.spb_file;
     return out;
   }
 
@@ -240,19 +259,25 @@ export default function LettersClient({direction,user}:Props){
       body.is_public = body.is_public === "on";
       delete body.original_file;
       delete body.additional_files;
+      if (direction==="INTERNAL" && persekot) {
+        body.persekot=true;
+        body.persekot_checklist=form.getAll("persekot_checklist");
+      }
 
       if(direction==="OUTGOING"){
         body.source_letter_id=sourceLetter[0]?.id;
         body.source_disposition_id=sourceDispositionId||undefined;
       }
-      const atomicOriginal = file;
       const metadata = JSON.stringify(body);
       const upload = new FormData();
-      if (atomicOriginal) {
-        upload.set("metadata", metadata);
-        upload.set("original_file", atomicOriginal);
+      if (file) upload.set("original_file", file);
+      for (const name of ["receipt_file", "spb_file"]) {
+        const attachment=form.get(name);
+        if(attachment&&typeof attachment!=="string"&&attachment.size) upload.set(name,attachment);
       }
-      const response = await fetch("/api/letters", atomicOriginal
+      const multipart = [...upload.keys()].length > 0;
+      if (multipart) upload.set("metadata", metadata);
+      const response = await fetch("/api/letters", multipart
         ? { method: "POST", body: upload }
         : { method: "POST", headers: { "Content-Type": "application/json" }, body: metadata });
       const result = await response.json();
@@ -313,7 +338,7 @@ export default function LettersClient({direction,user}:Props){
   }
 
   function startAction(action:string,label:string,requiredComment=false,issue=false){
-    setActionFiles([]);setError("");
+    setActionFiles([]);setError("");setSignatureMethod("");
     setPendingAction({action,label,requiredComment,issue});
   }
 
@@ -330,13 +355,23 @@ export default function LettersClient({direction,user}:Props){
     if(pendingAction.issue) fd.set("issued_date",String(form.get("issued_date")||today()));
     if(pendingAction.action==="REGISTER_INCOMING") fd.set("routing_target_user_id",String(form.get("routing_target_user_id")||""));
     if(pendingAction.action==="MARK_SENT") fd.set("sent_date",String(form.get("sent_date")||""));
+    if(detail.v11) {
+      for(const key of ["received_date","received_time","delivery_method","delivered_by","received_by","receipt_note",
+        "receipt_file","dispatch_channel","dispatch_recipient","dispatch_file"]) {
+        const value=form.get(key);
+        if(value!==null&&(typeof value==="string"||value.size)) fd.set(key,value);
+      }
+    }
     if(signedIssue){
       const signed = form.get("signed_file");
-      if (!signed || typeof signed === "string" || signed.size === 0) {
-        setError("Unggah naskah yang sudah ditandatangani.");setActionBusy(false);return;
+      const method=String(form.get("signature_method")||"");
+      if (method!=="MEKARI_API") {
+        if (!signed || typeof signed === "string" || signed.size === 0) {
+          setError("Unggah naskah yang sudah ditandatangani.");setActionBusy(false);return;
+        }
+        fd.set("signed_file",signed);
       }
-      fd.set("signed_file",signed);
-      fd.set("signature_method",String(form.get("signature_method")||""));
+      fd.set("signature_method",method);
     }
     actionFiles.slice(0,actionFileLimit).forEach(f=>fd.append("files",f));
     try {
@@ -378,7 +413,15 @@ export default function LettersClient({direction,user}:Props){
     const body=formObject(fd);
     body.is_public=body.is_public==="on";
     if(canChangeSource()) body.source_letter_id=sourceLetter[0]?.id||"";
-    const r=await fetch(`/api/letters/${detail.letter.id}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    if (detail.v11?.kind==="PERSEKOT") body.persekot_checklist=fd.getAll("persekot_checklist");
+    const spb=fd.get("spb_file");
+    const upload=new FormData();
+    if(spb&&typeof spb!=="string"&&spb.size) {
+      upload.set("spb_file",spb);
+      upload.set("metadata",JSON.stringify(body));
+    }
+    const r=await fetch(`/api/letters/${detail.letter.id}`,upload.has("spb_file")
+      ? {method:"PATCH",body:upload} : {method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
     const j=await r.json();
     if(!r.ok){setError(j.error);return}
     setEditOpen(false);setMessage("Data dokumen berhasil diperbarui.");await openDetail(detail.letter.id);await load();
@@ -390,8 +433,8 @@ export default function LettersClient({direction,user}:Props){
     const own=user.role==="ROOT_ADMIN"||letter.created_by===user.id;
     const draft=["DRAFT","RETURNED_STAFF"].includes(letter.status);
     if(letter.uses_secretariat&&letter.status==="SECRETARIAT_INTAKE") return own||canHandleSecretariat(user.role);
-    if(letter.uses_secretariat||detail.business?.managed||isInvoice(letter.document_type)) return own&&draft;
-    return user.role==="ROOT_ADMIN"||(own&&draft)||(user.role==="STAFF"&&letter.status==="RETURNED_STAFF");
+    if(detail.v11||letter.uses_secretariat||detail.business?.managed||isInvoice(letter.document_type)) return own&&draft;
+    return user.role==="ROOT_ADMIN"||(own&&draft);
   }
 
   function canChangeSource(){
@@ -422,7 +465,12 @@ export default function LettersClient({direction,user}:Props){
       return detail.letter.status==="ISSUED";
     }
 
-    return ["APPROVED","DISPOSED","IN_PROGRESS","COMPLETED"].includes(detail.letter.status);
+    const letter=detail.letter;
+    if(detail.v11) {
+      if(letter.direction==="INCOMING"&&reviewRole(letter.status)) return letter.current_owner_user_id===user.id;
+      return letter.status==="APPROVED";
+    }
+    return ["APPROVED","DISPOSED","IN_PROGRESS","COMPLETED"].includes(letter.status);
   }
 
   function actionButtons(){
@@ -436,7 +484,7 @@ export default function LettersClient({direction,user}:Props){
     if(d==="INCOMING"&&s==="SECRETARIAT_INTAKE"&&handlesSecretariat)
       buttons.push(["REGISTER_INCOMING","Registrasi & Teruskan","btn-primary"]);
     if(["DRAFT","RETURNED_STAFF"].includes(s) && (user.role==="ROOT_ADMIN"||detail.letter.created_by===user.id)) {
-      buttons.push(["SUBMIT","Ajukan ke Manager","btn-primary",false,false]);
+      buttons.push(["SUBMIT",detail.v11&&d==="INTERNAL"?"Ajukan Nota Dinas":"Ajukan ke Manager","btn-primary",false,false]);
     }
     const expected=s==="SECRETARIAT_REVIEW"&&secretariat?"SECRETARIAT":reviewRole(s);
     const isAssignedReviewer=user.role==="ROOT_ADMIN"||(user.role===expected&&
@@ -446,16 +494,19 @@ export default function LettersClient({direction,user}:Props){
         const label=s==="PRESIDENT_DIRECTOR_REVIEW"?"ACC Final Dirut":s==="SECRETARIAT_REVIEW"?"Teruskan ke Dirut"
           :s==="DIRECTOR_OPS_REVIEW"&&secretariat&&letter.secretariat_review_required?"Teruskan ke Sekretariat":"Approve & Teruskan";
         buttons.push(["APPROVE",label,"btn-success"],["RETURN","Kembalikan ke Penyusun","btn-secondary",true]);
-        if(s!=="MANAGER_REVIEW") buttons.push(["RETURN_PREVIOUS","Kembalikan Satu Tingkat","btn-secondary",true]);
+        if(!detail.v11&&s!=="MANAGER_REVIEW") buttons.push(["RETURN_PREVIOUS","Kembalikan Satu Tingkat","btn-secondary",true]);
         if(s==="PRESIDENT_DIRECTOR_REVIEW") buttons.push(["REJECT","Tolak Surat","btn-danger",true]);
       }else{
-        if((d==="INTERNAL"||(d==="INCOMING"&&secretariat))&&s!=="PRESIDENT_DIRECTOR_REVIEW")
-          buttons.push(["APPROVE_FINAL","Setujui di Tahap Ini","btn-success"]);
-        buttons.push(["APPROVE",s==="PRESIDENT_DIRECTOR_REVIEW"?"Setujui"
-          :s==="MANAGER_REVIEW"?"Teruskan ke Dirops":"Teruskan ke Dirut","btn-primary"]);
-        const returnLabel=d==="INCOMING"&&secretariat&&letter.current_owner_user_id===letter.routing_target_user_id
-          ?"Kembalikan ke Sekretariat":s==="MANAGER_REVIEW"?"Kembalikan ke Penyusun":"Kembalikan Satu Tingkat";
+        if(!detail.v11?.payment || detail.v11.verified) {
+          if((d==="INTERNAL"||(d==="INCOMING"&&secretariat))&&s!=="PRESIDENT_DIRECTOR_REVIEW")
+            buttons.push(["APPROVE_FINAL","Setujui di Tahap Ini","btn-success"]);
+          buttons.push(["APPROVE",s==="PRESIDENT_DIRECTOR_REVIEW"?"Setujui"
+            :s==="MANAGER_REVIEW"?"Teruskan ke Dirops":"Teruskan ke Dirut","btn-primary"]);
+        }
+        const returnLabel=d==="INCOMING"&&secretariat&&(detail.v11||letter.current_owner_user_id===letter.routing_target_user_id)
+          ?"Kembalikan ke Sekretariat":s==="MANAGER_REVIEW"||detail.v11?"Kembalikan ke Penyusun":"Kembalikan Satu Tingkat";
         buttons.push(["RETURN",returnLabel,"btn-secondary",true]);
+        if(detail.v11) buttons.push(["REJECT","Tolak Final","btn-danger",true]);
       }
     }
     const participated=
@@ -481,6 +532,11 @@ export default function LettersClient({direction,user}:Props){
     if(!["CANCELLED","COMPLETED","ISSUED","REJECTED"].includes(s)&&(user.role==="ROOT_ADMIN"||detail.letter.created_by===user.id)) {
       buttons.push(["CANCEL","Batalkan","btn-danger",true]);
     }
+    if(detail.v11?.payment && financeManager && s==="APPROVED" && detail.v11.payment.status==="PAID")
+      buttons.push(["COMPLETE","Tandai Invoice Selesai","btn-success"]);
+    if(detail.v11&&!detail.v11.payment && (d==="OUTGOING"?s==="ISSUED"&&letter.sent_date:s==="APPROVED") &&
+      (["ROOT_ADMIN","DIRECTOR_OPS","PRESIDENT_DIRECTOR"].includes(user.role)||letter.routing_target_user_id===user.id))
+      buttons.push(["COMPLETE","Tandai Selesai","btn-success"]);
     return buttons.map(b=><button key={b[0]} className={`btn ${b[2]}`} onClick={()=>startAction(b[0],b[1],Boolean(b[3]),Boolean(b[4]))}>{b[1]}</button>);
   }
 
@@ -548,7 +604,10 @@ export default function LettersClient({direction,user}:Props){
         <div className="field">
           <label>Jenis Dokumen</label>
           {direction==="INTERNAL"
-            ? <><input type="hidden" name="document_type" value="NOTA_DINAS"/><div className="input">Nota Dinas</div></>
+            ? <><input type="hidden" name="document_type" value="NOTA_DINAS"/>
+                {v11Enabled ? <select className="select" aria-label="Jenis Nota Dinas" value={persekot?"PERSEKOT":"NOTA"}
+                  onChange={e=>setPersekot(e.target.value==="PERSEKOT")}><option value="NOTA">Nota Dinas</option><option value="PERSEKOT">Pengajuan Persekot</option></select>
+                  : <div className="input">Nota Dinas</div>}</>
             : <select aria-label="Jenis Dokumen" className="select" name={createType==="__CUSTOM__"?undefined:"document_type"} required value={createType} onChange={e=>setCreateType(e.target.value)}>
                 {typeOptions.map(([value,label])=><option key={value} value={value}>{label}</option>)}
                 {direction==="INCOMING"&&<option value="__CUSTOM__">Jenis lainnya</option>}
@@ -563,16 +622,17 @@ export default function LettersClient({direction,user}:Props){
           <div className="field"><label>Ditujukan Kepada</label><input className="input" name="recipient" maxLength={255}/></div>
           <div className="field full">
             <label>Tujuan Review Awal</label>
-            <select className="select" name="routing_target_user_id" required>
+            <select aria-label="Tujuan review" className="select" name="routing_target_user_id" required>
               <option value="">Pilih penerima pertama...</option>
-              {reviewers.map((r:any)=>
+              {reviewers.map(r=>
                 <option key={r.id} value={r.id}>
-                  {r.name}{r.unit_name?` — ${r.unit_name}`:""}
+                  {reviewerLabel(r)}
                 </option>
               )}
             </select>
             <span className="hint">
-              {hasSecretariat?"Pilih pihak yang dituju untuk telaah. Sekretariat dapat memperbarui tujuan saat registrasi.":"Pilih Manager yang menangani surat ini."}
+              {v11Enabled?"Pilih Manager sesuai unit pemohon. Sekretariat memastikan tujuan saat registrasi."
+                :hasSecretariat?"Pilih pihak yang dituju untuk telaah. Sekretariat dapat memperbarui tujuan saat registrasi.":"Pilih Manager yang menangani surat ini."}
             </span>
           </div>
         </>}
@@ -580,11 +640,11 @@ export default function LettersClient({direction,user}:Props){
           <div className="field"><label>Tujuan Surat</label><input className="input" name="recipient" required/></div>
           <div className="field">
             <label>Manager Reviewer</label>
-            <select className="select" name="routing_target_user_id" required>
+            <select aria-label="Tujuan review" className="select" name="routing_target_user_id" required>
               <option value="">Pilih Manager...</option>
-              {reviewers.map((r:any)=>
+              {reviewers.map(r=>
                 <option key={r.id} value={r.id}>
-                  {r.name}{r.unit_name?` — ${r.unit_name}`:""}
+                  {reviewerLabel(r)}
                 </option>
               )}
             </select>
@@ -594,23 +654,25 @@ export default function LettersClient({direction,user}:Props){
         {direction==="INTERNAL"&&
           <div className="field">
             <label>Tujuan Review Awal</label>
-            <select className="select" name="routing_target_user_id" required>
+            <select aria-label="Tujuan review" className="select" name="routing_target_user_id" required>
               <option value="">Pilih penerima...</option>
-              {reviewers.map((r:any)=>
+              {reviewers.map(r=>
                 <option key={r.id} value={r.id}>
-                  {r.name}{r.unit_name?` — ${r.unit_name}`:""}
+                  {reviewerLabel(r)}
                 </option>
               )}
             </select>
             <span className="hint">
-              Nota Dinas selalu masuk ke Manager yang dipilih. Manager dapat menyelesaikan di levelnya atau meneruskan ke Dirops.
+              {managerNota?"Nota yang dibuat Manager dapat diajukan ke Dirops atau Dirut.":"Nota Dinas diajukan ke Manager yang dipilih."}
             </span>
           </div>}
         <div className="field"><label>{direction==="INTERNAL"?"Tanggal Nota Dinas":"Tanggal Surat"}</label><input className="input" type="date" name="letter_date" defaultValue={today()} required/>{direction==="OUTGOING"&&<span className="hint">Backdate diperbolehkan. Nomor existing tidak digeser; collision menghasilkan .1, .2, dst.</span>}</div>
         {direction==="INCOMING"&&<div className="field"><label>Tanggal Diterima</label><input className="input" type="date" name="received_date" defaultValue={today()} required/></div>}
+        {v11Enabled&&direction==="INCOMING"&&<><UnitField value={staffUnit(user.unit_name)||""}/><ReceiptFields upload/></>}
+        {v11Enabled&&direction==="INTERNAL"&&persekot&&<PersekotFields/>}
         <div className="field full"><label>Perihal</label><input className="input" name="subject" required/></div>
         <div className="field"><label>Sifat Dokumen</label><select className="select" name="confidentiality" defaultValue="BIASA"><option>BIASA</option><option>PENTING</option><option>RAHASIA</option></select></div>
-        <div className="field"><label>Visibilitas</label><label style={{display:"flex",alignItems:"center",gap:8,fontWeight:500}}><input type="checkbox" key={businessForm?"private":"regular"} name="is_public" defaultChecked={direction!=="INTERNAL"&&!businessForm&&!sourceDispositionId&&!sourceLetter.length}/> {direction==="INTERNAL"?"Dapat dilihat lebih luas oleh user persuratan":"Public untuk user yang punya akses persuratan"}</label></div>
+        {!v11Enabled&&<div className="field"><label>Visibilitas</label><label style={{display:"flex",alignItems:"center",gap:8,fontWeight:500}}><input type="checkbox" key={businessForm?"private":"regular"} name="is_public" defaultChecked={direction!=="INTERNAL"&&!businessForm&&!sourceDispositionId&&!sourceLetter.length}/> {direction==="INTERNAL"?"Dapat dilihat lebih luas oleh user persuratan":"Public untuk user yang punya akses persuratan"}</label></div>}
         <div className="field full"><label>{direction==="INTERNAL"?"Isi / Ringkasan Nota Dinas":"Ringkasan / Isi Ringkas"}</label><textarea className="textarea" name="summary"/></div>
         <div className="field full"><label>Catatan</label><textarea className="textarea" name="notes" placeholder={direction==="INTERNAL"?"Keterangan tambahan untuk Manager":"Catatan awal proses"}/></div>
         {direction==="OUTGOING"&&(sourceDispositionId
@@ -656,6 +718,11 @@ export default function LettersClient({direction,user}:Props){
           {direction==="OUTGOING"&&detail.letter.status==="RETURNED_STAFF"&&<div className="error" style={{marginTop:13}}><b>Dikembalikan ke Staff.</b> Baca catatan reviewer pada riwayat, revisi draft, lalu ajukan kembali mulai dari Manager.</div>}
           <div style={{marginTop:13}} className="notice">{detail.letter.summary||"Belum ada ringkasan."}</div>
           {detail.business&&<BusinessDocumentSummary details={detail.business} documentType={detail.letter.document_type}/>}
+          <WorkflowSummary data={detail.v11} date={detail.letter.received_date}/>
+          {detail.sandboxSigning && <AttachmentSandbox key={detail.letter.id}
+            files={generalAttachments.filter((file:any) => ["ORIGINAL","ADDITIONAL"].includes(file.attachment_kind))}/>}
+          {!detail.sandboxSigning&&detail.v11&&detail.letter.status==="WAITING_SIGNATURE"&&canHandleSecretariat(user.role)&&
+            <V11SigningPanel key={detail.letter.id} id={detail.letter.id} files={generalAttachments} onReady={setSigningReady}/>}
           <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:13}}>
             {canEditDetail()&&<button className="btn btn-secondary" onClick={openEdit}>Edit Metadata</button>}
             {direction==="OUTGOING"&&detail.business?.invoice&&!["CANCELLED","REJECTED"].includes(detail.letter.status)&&
@@ -663,6 +730,11 @@ export default function LettersClient({direction,user}:Props){
             {direction==="OUTGOING"&&detail.letter.document_type===SPK_OUTGOING&&detail.letter.status===(detail.letter.uses_secretariat?"WAITING_SIGNATURE":"READY_TO_ISSUE")&&
               <a className="btn btn-secondary" href={"/print/letters/"+detail.letter.id} target="_blank" rel="noreferrer">Cetak SPK untuk TTD ↗</a>}
             {canDispositionFromDetail()&&<a className="btn btn-primary" href={`/dispositions?letter_id=${detail.letter.id}`}>+ Buat Disposisi</a>}
+            {detail.v11?.payment && !detail.v11.verified && user.role==="MANAGER" &&
+                detail.letter.current_owner_user_id===user.id && detail.letter.status==="MANAGER_REVIEW" &&
+              <a className="btn btn-primary" href={`/dispositions?letter_id=${detail.letter.id}&purpose=INVOICE_VERIFY`}>Tugaskan Verifikasi Invoice</a>}
+            {detail.v11?.payment && detail.letter.status==="APPROVED" && financeManager && detail.v11.payment.status!=="PAID" &&
+              <a className="btn btn-primary" href={`/dispositions?letter_id=${detail.letter.id}&purpose=INVOICE_PAYMENT`}>Instruksi Bayar & Catat</a>}
             {direction!=="OUTGOING"&&canDraftOutgoing&&!["CANCELLED","REJECTED"].includes(detail.letter.status)&&
               <a className="btn btn-secondary" href={"/letters/outgoing?source_letter_id="+encodeURIComponent(detail.letter.id)}>Buat Draf Surat Keluar</a>}
             {actionButtons()}
@@ -717,10 +789,20 @@ export default function LettersClient({direction,user}:Props){
           <div className="field"><label>Nomor Dokumen Asal</label><input className="input" name="external_number" defaultValue={detail.letter.external_number||""} required/></div>
           <div className="field"><label>Tanggal Diterima</label><input className="input" type="date" name="received_date" defaultValue={String(detail.letter.received_date||"").slice(0,10)} required/></div>
         </>}
+        {detail.v11&&direction==="INCOMING"&&<>
+          <UnitField value={detail.v11.requesting_unit}/>
+          <label className="field"><span>Manager Tujuan</span><select className="select" name="routing_target_user_id"
+            defaultValue={detail.letter.routing_target_user_id||""} required>
+            <option value="">Pilih Manager</option>
+            {officialManagers.map(account=><option key={account.id} value={account.id}>{reviewerLabel(account)}</option>)}
+          </select></label>
+          <ReceiptFields initial={detail.v11}/>
+        </>}
+        {detail.v11?.kind==="PERSEKOT"&&<PersekotFields checklist={detail.v11.persekot_checklist} proof={detail.v11.spb_attachment_id}/>}
         <div className="field"><label>Sifat</label><select className="select" name="confidentiality" defaultValue={detail.letter.confidentiality}><option>BIASA</option><option>PENTING</option><option>RAHASIA</option></select></div>
         <div className="field full"><label>Ringkasan</label><textarea className="textarea" name="summary" defaultValue={detail.letter.summary||""}/></div>
         <div className="field full"><label>Catatan</label><textarea className="textarea" name="notes" defaultValue={detail.letter.notes||""}/></div>
-        <div className="field full"><label style={{display:"flex",alignItems:"center",gap:8,fontWeight:500}}><input type="checkbox" name="is_public" defaultChecked={Boolean(detail.letter.is_public)}/> Public</label><span className="hint">Dokumen RAHASIA tidak dapat dibuat public. Root Admin tetap dapat melihat seluruh data.</span></div>
+        {!detail.v11&&<div className="field full"><label style={{display:"flex",alignItems:"center",gap:8,fontWeight:500}}><input type="checkbox" name="is_public" defaultChecked={Boolean(detail.letter.is_public)}/> Public</label><span className="hint">Dokumen RAHASIA tidak dapat dibuat public. Root Admin tetap dapat melihat seluruh data.</span></div>}
         {canChangeSource()&&<div className="field full">
           <ReferencePicker kind="source" letterId={detail.letter.id} selected={sourceLetter} onChange={setSourceLetter} limit={1}/>
         </div>}
@@ -736,9 +818,19 @@ export default function LettersClient({direction,user}:Props){
           <label>Teruskan Kepada</label>
           <select aria-label="Teruskan kepada" className="select" name="routing_target_user_id" defaultValue={detail.letter.routing_target_user_id||""} required>
             <option value="">Pilih tujuan...</option>
-            {routingUsers.filter(isReviewer).map(account=><option key={account.id} value={account.id}>{account.name}{account.unit_name?" · "+account.unit_name:""}</option>)}
+            {(detail.v11?officialManagers:routingUsers.filter(isReviewer)).map(account=><option key={account.id} value={account.id}>{reviewerLabel(account)}</option>)}
           </select>
         </div>}
+        {pendingAction.action==="REGISTER_INCOMING"&&detail.v11&&
+          <ReceiptFields initial={{...detail.v11,date:String(detail.letter.received_date||"").slice(0,10)}} register upload/>}
+        {pendingAction.action==="MARK_SENT"&&detail.v11&&<>
+          <label className="field"><span>Kanal Pengiriman</span><select className="select" name="dispatch_channel" required>
+            <option value="">Pilih kanal</option>
+            {Object.entries(DELIVERY_METHODS).map(([key,text])=><option value={key} key={key}>{text}</option>)}
+          </select></label>
+          <label className="field"><span>Penerima Pengiriman</span><input className="input" name="dispatch_recipient" defaultValue={detail.letter.recipient||""} required/></label>
+          <label className="field full"><span>Bukti Pengiriman</span><input className="input" name="dispatch_file" type="file" accept=".pdf,.jpg,.jpeg,.png" required/></label>
+        </>}
         {pendingAction.action==="PREPARE_ISSUE"&&<div className="field full notice"><b>Nomor surat</b> {detail.letter.letter_number}</div>}
         {pendingAction.action==="MARK_SENT"&&<div className="field">
           <label>Tanggal Kirim</label><input aria-label="Tanggal kirim" className="input" type="date" name="sent_date" defaultValue={today()}
@@ -747,12 +839,14 @@ export default function LettersClient({direction,user}:Props){
         {pendingAction.issue&&<div className="field"><label>Tanggal Terbit</label><input className="input" type="date" name="issued_date" defaultValue={today()} required/><span className="hint">Setelah diterbitkan, status surat menjadi ISSUED dan nomor ledger dikunci sebagai terbit.</span></div>}
         <div className="field full"><label>{pendingAction.requiredComment?"Catatan / Alasan (wajib)":"Catatan Proses (opsional)"}</label><textarea className="textarea" name="comment" required={pendingAction.requiredComment} placeholder={pendingAction.action==="RETURN"?"Jelaskan apa yang harus direvisi oleh Staff...":pendingAction.action==="ISSUE"?"Contoh: Surat final telah ditandatangani dan siap dikirim.":"Catatan keputusan / arahan tambahan..."}/></div>
         {signedIssue&&<>
-          <div className="field"><label>Metode Tanda Tangan</label><select aria-label="Metode tanda tangan" className="select" name="signature_method" required defaultValue="">
+          <div className="field"><label>Metode Tanda Tangan</label><select aria-label="Metode tanda tangan" className="select" name="signature_method" required value={signatureMethod} onChange={e=>setSignatureMethod(e.target.value)}>
             <option value="">Pilih metode...</option><option value="DIGITAL">Digital</option><option value="BASAH">Basah</option>
+            {detail.v11&&<option value="MEKARI_MANUAL">Unggah PDF Mekari manual</option>}
+            {detail.v11&&signingReady&&<option value="MEKARI_API">Gunakan PDF final Mekari staging</option>}
           </select></div>
-          <div className="field full"><label>Naskah Bertanda Tangan</label><input aria-label="Naskah bertanda tangan" className="input" type="file" name="signed_file" accept=".pdf,.jpg,.jpeg,.png" required/>
+          {signatureMethod!=="MEKARI_API"&&<div className="field full"><label>Naskah Bertanda Tangan</label><input aria-label="Naskah bertanda tangan" className="input" type="file" name="signed_file" accept=".pdf,.jpg,.jpeg,.png" required/>
             <span className="hint">Unggah PDF dari layanan TTD digital atau hasil pindai tanda tangan basah. Maksimal 10 MB.</span>
-          </div>
+          </div>}
         </>}
         <div className="field full"><label>Lampiran Proses <span className="muted">(opsional, maksimal {actionFileLimit} file)</span></label><input className="input" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.txt,.csv" onChange={e=>setActionFiles(Array.from(e.target.files||[]).slice(0,actionFileLimit))}/><span className="hint">Maksimal 10 MB per file. Lampiran proses dikompresi bila hasil kompresi lebih kecil dan tetap dapat di-download dari riwayat.</span>{actionFiles.length>0&&<div className="notice" style={{marginTop:7}}>{actionFiles.map(f=><div key={`${f.name}-${f.size}`}>{f.name} • {size(f.size)}</div>)}</div>}</div>
         <div className="field full" style={{display:"flex",flexDirection:"row",justifyContent:"flex-end",gap:8}}><button type="button" className="btn btn-secondary" disabled={actionBusy} onClick={()=>setPendingAction(null)}>Batal</button><button className={`btn ${["RETURN","RETURN_PREVIOUS","CANCEL","REJECT"].includes(pendingAction.action)?"btn-danger":"btn-primary"}`} disabled={actionBusy}>{actionBusy?"Memproses...":pendingAction.label}</button></div>

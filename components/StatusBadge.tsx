@@ -5,6 +5,9 @@ const labels: Record<string,string> = {
   WAITING_SIGNATURE: "Menunggu Naskah Bertanda Tangan",
   SENT: "Terkirim",
   REJECTED: "Ditolak",
+  APPROVED: "Disetujui",
+  WAITING_VERIFICATION: "Menunggu Verifikasi",
+  CANCELLED: "Dibatalkan",
   REVIEW_ROOT: "Review Root Admin",
 };
 
@@ -21,7 +24,7 @@ export default function StatusBadge({status}:{status:string}) {
     "SEEN","IN_PROGRESS","PARTIAL",
     "REVIEW_MANAGER","REVIEW_DIROPS","REVIEW_DIRUT","REVIEW_ROOT","SECRETARIAT_REVIEW"
   ].includes(s)) color="blue";
-  else if(["SECRETARIAT_INTAKE","WAITING_SIGNATURE","UNSEEN","RETURNED","RETURNED_STAFF","RESERVED","DRAFT","OPEN"].includes(s)) color="orange";
+  else if(["SECRETARIAT_INTAKE","WAITING_SIGNATURE","WAITING_VERIFICATION","UNSEEN","RETURNED","RETURNED_STAFF","RESERVED","DRAFT","OPEN"].includes(s)) color="orange";
   else if(["CANCELLED","REJECTED","OVERDUE","URGENT"].includes(s)) color="red";
   return <span className={`badge ${color}`}>{statusLabel(s)}</span>;
 }

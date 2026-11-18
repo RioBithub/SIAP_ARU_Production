@@ -4,6 +4,8 @@ import { getCurrentUser } from "@/lib/auth";
 import { withTransaction } from "@/lib/db";
 import { saveUpload } from "@/lib/upload";
 import { auditLog } from "@/lib/audit";
+import { INVOICE_INCOMING } from "@/lib/business-documents";
+import { v11Letter } from "@/lib/v11-data";
 import { canHandleSecretariat } from "@/lib/correspondence-workflow";
 import { discardUncommittedFiles, insertLetterAttachment, type StoredLetterFile } from "@/lib/letter-uploads";
 
@@ -25,7 +27,14 @@ export async function POST(request:Request,{params}:{params:{id:string}}){
       );
       const letter = letters[0];
       if (!letter) throw new Error("Surat tidak ditemukan.");
+      const workflow = await v11Letter(params.id, conn);
+      if (workflow && ["COMPLETED","CANCELLED","REJECTED","ISSUED"].includes(letter.status)) {
+        throw new Error("Berkas final hanya dapat dibaca.");
+      }
       if (kind === "ORIGINAL") {
+        if (workflow && !["DRAFT","RETURNED_STAFF","SECRETARIAT_INTAKE"].includes(letter.status)) {
+          throw new Error("Berkas asli hanya dapat diperbarui pada draf atau registrasi.");
+        }
         if (letter.uses_secretariat && letter.direction === "OUTGOING" &&
             !["DRAFT", "RETURNED_STAFF"].includes(letter.status)) {
           throw new Error("Dokumen utama dapat dilengkapi saat penyusunan draf.");
@@ -50,6 +59,9 @@ export async function POST(request:Request,{params}:{params:{id:string}}){
       const saved = await saveUpload(file, kind);
       staged = saved;
       const id = await insertLetterAttachment(conn, params.id, user.id, saved, kind);
+      if (workflow && kind === "ORIGINAL" && letter.document_type === INVOICE_INCOMING) {
+        await conn.execute("UPDATE siap_v11_letters SET invoice_revision=invoice_revision+1 WHERE letter_id=?", [params.id]);
+      }
       await auditLog({
         userId: user.id, action: "ATTACHMENT_UPLOAD", entityType: "ATTACHMENT", entityId: id,
         metadata: { letterId: params.id, kind, name: saved.originalName, size: saved.originalSize, compressed: saved.isCompressed },

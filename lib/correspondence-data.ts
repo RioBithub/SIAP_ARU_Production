@@ -58,17 +58,30 @@ export async function findDispositionResultLetters(
   filters: { id?: string; query?: string } = {},
 ) {
   const access = letterAccess(user);
+  const [v11Rows] = await conn.query<RowDataPacket[]>(
+    "SELECT 1 FROM siap_v11_dispositions WHERE disposition_id=?", [disposition.id],
+  );
   const where = [
     access.clause,
     "l.direction='OUTGOING' AND l.issued_date IS NOT NULL AND l.status IN ('ISSUED','COMPLETED')",
-    `(l.source_disposition_id=? OR (
+  ];
+  const params: string[] = [...access.params];
+  if (v11Rows.length) {
+    where.push(`l.source_letter_id=? AND (l.source_disposition_id=? OR EXISTS (
+      SELECT 1 FROM siap_dispositions child
+      JOIN siap_v11_dispositions v ON v.disposition_id=child.id
+      WHERE child.parent_id=? AND child.status='COMPLETED' AND v.result_letter_id=l.id
+    ))`);
+    params.push(disposition.letter_id, disposition.id, disposition.id);
+  } else {
+    where.push(`(l.source_disposition_id=? OR (
       l.source_disposition_id IS NULL AND l.created_by=? AND (l.source_letter_id IS NULL OR l.source_letter_id=?)
     ) OR EXISTS (
       SELECT 1 FROM siap_dispositions child WHERE child.id=l.source_disposition_id
         AND child.parent_id=? AND child.status='COMPLETED'
-    ))`,
-  ];
-  const params: string[] = [...access.params, disposition.id, disposition.to_user_id, disposition.letter_id, disposition.id];
+    ))`);
+    params.push(disposition.id, disposition.to_user_id, disposition.letter_id, disposition.id);
+  }
   if (filters.id) {
     where.push("l.id=?");
     params.push(filters.id);
