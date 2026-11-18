@@ -13,8 +13,13 @@ Jalankan dari sesi operator VPS yang mengelola PM2 `siap-aru`. Langkah ini untuk
   git fetch --no-tags origin main
   target="$(git rev-parse FETCH_HEAD)"
   git merge-base --is-ancestor HEAD "$target"
-  migration=database/migrations/2026-11-18-persuratan-production.sql
-  git cat-file -e "$target:$migration"
+  migrations=(
+    database/migrations/2026-11-18-persuratan-production.sql
+    database/migrations/2026-11-18-letter-purge.sql
+  )
+  for migration in "${migrations[@]}"; do
+    git cat-file -e "$target:$migration"
+  done
   git log -1 --oneline "$target"
 
   unset MYSQL_PWD
@@ -42,7 +47,7 @@ Jalankan dari sesi operator VPS yang mengelola PM2 `siap-aru`. Langkah ini untuk
   npm run typecheck
   npm run build
 
-  mariadb "${db_args[@]}" aru_siap < "$migration"
+  cat "${migrations[@]}" | mariadb "${db_args[@]}" aru_siap
   if [ -d .next/standalone ]; then
     cp -a public .next/standalone/
     cp -a .next/static .next/standalone/.next/
@@ -55,10 +60,11 @@ Jalankan dari sesi operator VPS yang mengelola PM2 `siap-aru`. Langkah ini untuk
 )
 ```
 
-Ketik password admin MariaDB saat muncul prompt. Jika backup basis data atau lampiran gagal, periksa penyebabnya sebelum meneruskan rilis. Jika proses berhenti di migrasi atau build, lihat baris error pertama. Migrasi ini bisa dijalankan ulang. Setelah restart, health yang diharapkan ialah `{"ok":true,"status":"healthy","database":"connected"}`.
+Ketik password admin MariaDB saat muncul prompt. Jika backup basis data atau lampiran gagal, periksa penyebabnya sebelum meneruskan rilis. Jika proses berhenti di migrasi atau build, lihat baris error pertama. Kedua migrasi bisa dijalankan ulang. Setelah restart, health yang diharapkan ialah `{"ok":true,"status":"healthy","database":"connected"}`.
 
 ## Verifikasi dari situs utama
 
 - Sebagai Sekretariat, buka Surat Masuk dan Surat Keluar. Daftar awal memuat semua surat yang dapat diakses. Gunakan **Antrian Sekretariat** untuk memfilter ke pekerjaan yang masih berada di Sekretariat.
 - Buka satu lampiran PDF simulasi lewat **Pratinjau**. Untuk menguji undangan, gunakan dokumen dan email penguji yang disetujui mengikuti [panduan Mekari Sandbox](MEKARI-SANDBOX.md).
-- Sebagai Root Admin, buka **Pengaturan Persuratan** lalu pastikan pilihan tujuan Surat Masuk dan PIC sesuai akun dan unit perusahaan. **Sampah** dapat dipakai pada surat demo dan menyediakan pemulihan, dengan alasan tercatat pada Audit Log.
+- Sebagai Root Admin, buka **Pengaturan Persuratan** lalu pastikan pilihan tujuan Surat Masuk dan PIC sesuai akun dan unit perusahaan. **Sampah** menyediakan **Pulihkan** dan **Hapus Permanen**. Uji hapus permanen hanya pada surat simulasi yang dibuat untuk uji tersebut. Masukkan alasan dan ketik `HAPUS PERMANEN`. Status tanda tangan aktif, catatan Finance yang terhubung, dan rujukan bisnis dapat mencegah penghapusan.
+- Buka detail disposisi simulasi dan pilih **Unduh Riwayat (.xlsx)**. Periksa sifat surat pada Ringkasan serta urutan penugasan dan hasil pada Log Proses.

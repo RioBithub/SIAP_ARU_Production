@@ -2,6 +2,7 @@
 
 import { FormEvent,useEffect,useMemo,useState } from "react";
 import type { SessionUser } from "@/lib/types";
+import ConfidentialityBadge from "@/components/ConfidentialityBadge";
 import AttachmentActions from "@/components/AttachmentActions";
 import PaymentDocumentsPanel from "@/components/PaymentDocumentsPanel";
 import SearchableSelect from "@/components/SearchableSelect";
@@ -9,7 +10,7 @@ import { dispositionDeadline, formatWorkflowTime } from "@/lib/workflow-time";
 import AttachmentSandbox from "@/components/AttachmentSandbox";
 import Modal from "@/components/Modal";
 import StatusBadge from "@/components/StatusBadge";
-import { RESULT_REQUIREMENTS, reviewRole, type ResultRequirement } from "@/lib/correspondence-workflow";
+import { dispositionActionLabel, RESULT_REQUIREMENTS, reviewRole, type ResultRequirement } from "@/lib/correspondence-workflow";
 import { INVOICE_INCOMING, formatInvoiceAmount, type DocumentReference } from "@/lib/business-documents";
 import { dispositionTargetRoles, jakartaDate, staffCanVerify, staffUnit, TASK_PURPOSES, TERMINAL_TASK_STATES,
   unitManagerScope, type TaskPurpose } from "@/lib/v11-workflow";
@@ -18,17 +19,6 @@ const size=(n:number)=>
   n<1024*1024
     ? `${Math.max(1,Math.round(n/1024))} KB`
     : `${(n/1024/1024).toFixed(2)} MB`;
-
-const actionLabel=(a:string)=>({
-  CREATE:"Disposisi dibuat",
-  SEEN:"Dilihat",
-  START:"Mulai ditindaklanjuti",
-  SUBMIT_RESULT:"Hasil dikirim",
-  APPROVE_RESULT:"Hasil disetujui",
-  RETURN_RESULT:"Hasil dikembalikan",
-  RETURN_TASK:"Disposisi dikembalikan",
-  CANCEL_TASK:"Disposisi dibatalkan"
-}[a]||a.replace(/_/g," "));
 
 const docClass=(t:any)=>({
   PERJANJIAN_KERJA_SAMA:"letter-pks",
@@ -196,7 +186,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
   const filtered=useMemo(()=>rows.filter(d=>{
     const hay=[
       d.subject,d.letter_number,d.external_number,d.instruction,
-      d.from_name,d.to_name,d.current_owner_name
+      d.from_name,d.to_name,d.current_owner_name,d.confidentiality
     ].join(" ").toLowerCase();
 
     return (!q||hay.includes(q.toLowerCase()))&&(!status||d.status===status);
@@ -538,6 +528,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
               <th>PIC Awal</th>
               <th>Posisi Saat Ini</th>
               <th>Instruksi</th>
+              <th>Sifat Surat</th>
               <th>Status</th>
               <th>Deadline</th>
               <th>Aksi</th>
@@ -558,6 +549,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
                 <td>{d.to_name}</td>
                 <td><b>{d.current_owner_name||d.to_name}</b></td>
                 <td style={{maxWidth:260}}>{d.instruction}</td>
+                <td><ConfidentialityBadge value={d.confidentiality}/></td>
                 <td><StatusBadge status={d.status}/></td>
                 <td>{dispositionDeadline(d.due_date,d.due_time)}</td>
 
@@ -572,7 +564,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
 
             {!filtered.length&&
               <tr>
-                <td colSpan={8}>
+                <td colSpan={9}>
                   <div className="empty">Tidak ada disposisi yang sesuai filter.</div>
                 </td>
               </tr>
@@ -625,6 +617,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
               )}
             </select>
 
+            {selectedLetter?.confidentiality&&<span className="hint">Sifat surat <ConfidentialityBadge value={selectedLetter.confidentiality}/></span>}
             <span className="hint">
               Reviewer aktif dapat memberi tugas saat Surat Masuk V11 masih diperiksa.
             </span>
@@ -649,7 +642,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
 
           <div className="field">
             <label>Visibilitas</label>
-            <select className="select" name="visibility" defaultValue="ROUTE" required>
+            <select key={selectedLetter?.confidentiality==="RAHASIA"?"restricted":"normal"} className="select" name="visibility" defaultValue="ROUTE" required>
               <option value="PUBLIC">PUBLIC — semua user persuratan</option>
               <option value="ROUTE">ROUTE — pihak dalam jalur</option>
               <option value="PRIVATE">PRIVATE — pihak terkait</option>
@@ -734,6 +727,10 @@ export default function DispositionsClient({user}:{user:SessionUser}){
               <div className="kpi-row">
                 <span>Status</span>
                 <StatusBadge status={detail.disposition.status}/>
+              </div>
+
+              <div className="kpi-row">
+                <span>Sifat Surat</span><ConfidentialityBadge value={detail.disposition.confidentiality}/>
               </div>
 
               <div className="kpi-row">
@@ -849,7 +846,12 @@ export default function DispositionsClient({user}:{user:SessionUser}){
           </div>
 
           <div>
-            <h3 style={{fontSize:13}}>Riwayat Proses</h3>
+            <div className="disposition-history-heading">
+              <h3 style={{fontSize:13}}>Riwayat Proses</h3>
+              <a className="btn btn-secondary" href={`/api/dispositions/${detail.disposition.id}/export`} download>
+                Unduh Riwayat (.xlsx)
+              </a>
+            </div>
             <p className="muted" style={{fontSize:11}}>
               Seluruh Seen, Mulai, Kirim Hasil, Review, Return, catatan, dan lampiran proses tercatat.
             </p>
@@ -862,7 +864,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
                   <div className="timeline-dot">{i+1}</div>
 
                   <div style={{width:"100%"}}>
-                    <b>{actionLabel(a.action)} • {a.actor_name}</b><p className="muted">{formatWorkflowTime(a.created_at)}</p>
+                    <b>{dispositionActionLabel(a.action)} • {a.actor_name}</b><p className="muted">{formatWorkflowTime(a.created_at)}</p>
                     <p>
                       {a.from_status?`${a.from_status} → ${a.to_status}`:a.to_status}
                       {a.note?` • ${a.note}`:""}

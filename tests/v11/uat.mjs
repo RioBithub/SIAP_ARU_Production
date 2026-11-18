@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { createHmac, randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rmdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import mysql from "mysql2/promise";
 import { chromium } from "playwright";
+import XLSX from "xlsx";
 import { fixturePdf } from "./fixture-pdf.mjs";
 import { hmacHeaders, mockSignedPdf } from "../../lib/mekari-sign.ts";
 
@@ -80,11 +81,11 @@ const receipt = {
   delivered_by: "Kurir Simulasi", received_by: "Petugas Simulasi", receipt_note: "Dokumen uji",
 };
 async function incoming(label, { type = "SURAT_MASUK_UMUM", manager = "ops", unit = "OPS", business, actor = "staff",
-  receiptFile = false } = {}) {
+  receiptFile = false, confidentiality = "BIASA" } = {}) {
   return post(actor, "/api/letters", letterForm({
     direction: "INCOMING", document_type: type, routing_target_user_id: roles[manager].id,
     subject: subject(label), external_number: runId + "-" + label, sender: "Vendor Fiktif " + runId,
-    letter_date: old, requesting_unit: unit, ...receipt, business,
+    letter_date: old, requesting_unit: unit, ...receipt, business, confidentiality,
   }, receiptFile ? ["original_file", "receipt_file"] : ["original_file"]), 201);
 }
 async function register(id, manager = "ops", withProof = true, fields = {}, status = 200) {
@@ -737,7 +738,29 @@ try {
       const paid = fin.getByText("Bayar di-ACC", { exact: true });
       await paid.evaluate(el=>el.scrollIntoView({block:"center"}));
       await fin.screenshot({ path: path.join(out, "04-invoice-lunas.png") });
-      return "Chromium 390 px dan 1440 px: registrasi, dua Manager, pembuatan tugas, form hasil dan invoice lunas.";
+      await desktop.goto(new URL("/dispositions?disposition_id=" + task.id, base).href);
+      const downloaded = desktop.waitForEvent("download");
+      await desktop.getByRole("link", { name: "Unduh Riwayat (.xlsx)", exact: true }).click();
+      assert.match((await downloaded).suggestedFilename(), /^riwayat-disposisi-BIASA-.*\.xlsx$/);
+
+      const cleanup = await incoming("hapus-permanen-ui");
+      const admin = await pageFor("root", false);
+      await admin.goto(new URL("/letters/incoming", base).href);
+      const rowFor = () => admin.getByRole("row").filter({ hasText: subject("hapus-permanen-ui") });
+      await rowFor().getByRole("button", { name: "Pindah ke Sampah", exact: true }).click();
+      const dialog = admin.getByRole("dialog");
+      await dialog.getByLabel("Alasan").fill("SIMULASI pindah ke Sampah");
+      await dialog.getByRole("button", { name: "Pindah ke Sampah", exact: true }).click();
+      await dialog.waitFor({ state: "hidden" });
+      await admin.getByRole("button", { name: "Sampah", exact: true }).click();
+      await rowFor().getByRole("button", { name: "Hapus Permanen", exact: true }).click();
+      await dialog.getByLabel("Alasan").fill("SIMULASI hapus permanen dari browser");
+      await dialog.getByLabel("Ketik HAPUS PERMANEN").fill("HAPUS PERMANEN");
+      await dialog.getByRole("button", { name: "Hapus Permanen", exact: true }).click();
+      await dialog.waitFor({ state: "hidden" });
+      await rowFor().waitFor({ state: "hidden" });
+      await call("root", "/api/letters/" + cleanup.id, { status: 404 });
+      return "Chromium 390/1440 px: registrasi, invoice lunas, unduh Excel, dan hapus permanen satu surat simulasi dari Sampah.";
     } finally {
       await browser.close();
     }
@@ -882,10 +905,133 @@ try {
     assert((await call("ksu", "/api/notifications")).items.every(item => item.read_at));
     return "Tandai semua telah dibaca bekerja hanya untuk notifikasi akun aktif.";
   });
+  await test(57, async () => {
+    const sheet = (workbook, name) => XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, defval: "" });
+    const report = async (role, id) => {
+      const { bytes, response } = await call(role, "/api/dispositions/" + id + "/export", { raw: true });
+      assert.match(response.headers.get("content-type"), /spreadsheetml/);
+      assert.match(response.headers.get("cache-control"), /no-store/);
+      return XLSX.read(bytes, { type: "buffer" });
+    };
+    const reference = "=SIMULASI Teks, bukan formula";
+    const secret = await incoming("ekspor-rahasia", { confidentiality: "RAHASIA" });
+    await register(secret.id);
+    await letterAction("ops", secret.id, "APPROVE");
+    const parent = await assign("dirops", secret.id, "ops", { visibility: "PUBLIC", due_date: due, due_time: "13:45" });
+    assert.equal((await taskDetail("ops", parent.id)).disposition.visibility, "ROUTE");
+    await start("ops", parent.id);
+    const child = await assign("ops", secret.id, "staff", { parent_id: parent.id, visibility: "PRIVATE" });
+    await start("staff", child.id);
+    await submit("staff", child.id, reference, ["files"]);
+    assert.equal(sheet(await report("dirops", parent.id), "Tugas").length, 2, "Jangan ekspor tugas turunan privat bagi Dirops.");
+    const full = await report("ops", parent.id);
+    assert.equal(sheet(full, "Ringkasan").find(row => row[0] === "Sifat surat")[1], "RAHASIA");
+    assert.equal(sheet(full, "Tugas").length, 3);
+    assert.match(sheet(full, "Tugas")[1][9], /13:45 WIB/);
+    assert(sheet(full, "Lampiran").some(row => row[0] === "1.1" && row[2] === "SIMULASI-dokumen.pdf"));
+    const log = sheet(full, "Log Proses");
+    const resultIndex = log.findIndex(row => row[8] === reference);
+    assert(resultIndex > 0);
+    assert.equal(log[resultIndex][3], "Hasil dikirim");
+    assert.match(log[resultIndex][2], /WIB$/);
+    const resultCell = full.Sheets["Log Proses"]["I" + (resultIndex + 1)];
+    assert.equal(resultCell.t, "s");
+    assert.equal(resultCell.f, undefined);
+
+    // Simulate an old PUBLIC disposition linked to a confidential letter.
+    await sql.execute("UPDATE siap_dispositions SET visibility='PUBLIC' WHERE id=?", [parent.id]);
+    await call("staffkeu", "/api/dispositions/" + parent.id, { status: 404 });
+    await call("staffkeu", "/api/dispositions/" + parent.id + "/export", { status: 404 });
+    for (const confidentiality of ["BIASA", "PENTING"]) {
+      const row = await incoming("ekspor-" + confidentiality, { confidentiality });
+      await register(row.id);
+      const task = await assign("ops", row.id, "staff");
+      const sheetRows = sheet(await report("staff", task.id), "Ringkasan");
+      assert.equal(sheetRows.find(row => row[0] === "Sifat surat")[1], confidentiality);
+    }
+    const [[audit]] = await sql.query(
+      "SELECT user_id FROM siap_audit_logs WHERE action='DISPOSITION_EXPORT' AND entity_id=? ORDER BY id DESC LIMIT 1", [parent.id],
+    );
+    assert.equal(audit.user_id, roles.ops.id);
+    return "Excel berisi tiga sifat surat, tenggat, log, dan daftar lampiran. Hak akses, data rahasia, teks sebagai data, dan Audit Log lulus.";
+  });
+  await test(58, async () => {
+    const reason = "SIMULASI uji penghapusan permanen";
+    const request = { operation: "purge", reason, confirmation: "HAPUS PERMANEN" };
+    const row = await incoming("purge-aktif", { receiptFile: true });
+    await register(row.id, "ops", false);
+    const task = await assign("ops", row.id, "staff");
+    await start("staff", task.id);
+    await post("staff", "/api/dispositions/" + task.id + "/attachments", multipart({}, ["file"]), 201);
+    const url = "/api/letters/" + row.id + "/trash";
+    await post("root", url, request, 409);
+    await post("root", url, { operation: "trash", reason });
+    await post("ops", url, request, 403);
+    await post("root", url, { ...request, confirmation: "HAPUS" }, 400);
+    const [activeFiles] = await sql.query("SELECT id,storage_path FROM siap_attachments WHERE letter_id=?", [row.id]);
+    assert(activeFiles.length >= 3);
+    const [a,b] = await Promise.all([post("root", url, request, [200,404]), post("root", url, request, [200,404])]);
+    assert.equal([a,b].filter(item=>item.pending===0).length, 1);
+    for (const file of activeFiles) {
+      await call("root", "/api/attachments/" + file.id, { status: 404 });
+      await assert.rejects(readFile(file.storage_path), { code: "ENOENT" });
+    }
+    await call("root", "/api/dispositions/" + task.id + "/export", { status: 404 });
+    await post("root", url, { operation: "restore", reason }, 404);
+    const [[audit]] = await sql.query("SELECT COUNT(*) total FROM siap_audit_logs WHERE action='LETTER_PURGE' AND entity_id=?", [row.id]);
+    assert.equal(audit.total, 1);
+    const [[actions]] = await sql.query("SELECT COUNT(*) total FROM siap_disposition_actions WHERE disposition_id=?", [task.id]);
+    assert.equal(actions.total, 0);
+
+    const issued = await detail("root", state.mock);
+    const [signedFiles] = await sql.query("SELECT storage_path FROM siap_attachments WHERE letter_id=?", [state.mock]);
+    const [[number]] = await sql.query("SELECT id,status FROM siap_number_ledger WHERE letter_id=?", [state.mock]);
+    await post("root", "/api/letters/" + state.mock + "/trash", { operation: "trash", reason });
+    await sql.execute("UPDATE siap_v11_signing SET status='IN_PROGRESS' WHERE letter_id=?", [state.mock]);
+    assert.match((await post("root", "/api/letters/" + state.mock + "/trash", request, 409)).error, /tanda tangan/);
+    await sql.execute("UPDATE siap_v11_signing SET status='COMPLETED' WHERE letter_id=?", [state.mock]);
+    await post("root", "/api/letters/" + state.mock + "/trash", request);
+    const [[kept]] = await sql.query("SELECT letter_id,rendered_number,status FROM siap_number_ledger WHERE id=?", [number.id]);
+    assert.equal(kept.letter_id, null);
+    assert.equal(kept.rendered_number, issued.letter.letter_number);
+    assert.equal(kept.status, "ISSUED");
+    for (const file of signedFiles) await assert.rejects(readFile(file.storage_path), { code: "ENOENT" });
+    return "Root menghapus surat aktif dan terbit. Catatan audit dan nomor terbit tetap tersedia. Surat, tugas, bukti, dan pekerjaan tanda tangan selesai terhapus.";
+  });
+  await test(59, async () => {
+    const reason = "SIMULASI proteksi dan retry hapus";
+    const request = { operation: "purge", reason, confirmation: "HAPUS PERMANEN" };
+    const invoice = "/api/letters/" + state.invoice + "/trash";
+    await post("root", invoice, { operation: "trash", reason });
+    assert.match((await post("root", invoice, request, 409)).error, /Finance/);
+    await post("root", invoice, { operation: "restore", reason });
+    assert.equal((await detail("ksu", state.invoice)).v11.payment.status, "PAID");
+
+    const raw = await incoming("purge-retry");
+    const route = "/api/letters/" + raw.id + "/trash";
+    const [[file]] = await sql.query("SELECT storage_path FROM siap_attachments WHERE letter_id=?", [raw.id]);
+    assert(file.storage_path.startsWith(env.UPLOAD_DIR + path.sep));
+    const pendingUrl = "/api/admin/letter-purge-files";
+    const testPath = file.storage_path + ".simulasi";
+    await rename(file.storage_path, testPath);
+    await mkdir(file.storage_path);
+    try {
+      await post("root", route, { operation: "trash", reason });
+      assert.equal((await post("root", route, request)).pending, 1);
+      assert.equal((await call("root", pendingUrl)).pending, 1);
+      await post("staff", pendingUrl, {}, 403);
+    } finally {
+      await rmdir(file.storage_path);
+      await rename(testPath, file.storage_path);
+    }
+    assert.equal((await post("root", pendingUrl)).pending, 0);
+    await assert.rejects(readFile(file.storage_path), { code: "ENOENT" });
+    return "Dokumen terhubung Finance terlindungi. Jika penyimpanan gagal, pembersihan berkas dapat diulang setelah purge sudah tercatat.";
+  });
 } finally {
   await sql.end();
   await writeFile(path.join(out, "uat.json"), JSON.stringify({ runId, db: profile.version, cases: result }, null, 2));
 }
 const totals = Object.fromEntries(["PASS","FAIL","SKIP"].map(status => [status,result.filter(row=>row.status===status).length]));
 console.log(JSON.stringify(totals));
-if (totals.FAIL || result.length !== 56) process.exitCode=1;
+if (totals.FAIL || result.length !== 59) process.exitCode=1;

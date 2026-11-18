@@ -2,7 +2,7 @@
 
 import { FormEvent,useEffect,useMemo,useRef,useState } from "react";
 import type { Role, SessionUser } from "@/lib/types";
-import { REVIEW_ROLES, canHandleSecretariat, reviewRole } from "@/lib/correspondence-workflow";
+import { PURGE_CONFIRMATION, REVIEW_ROLES, canHandleSecretariat, reviewRole } from "@/lib/correspondence-workflow";
 import Modal from "@/components/Modal";
 import StatusBadge, { statusLabel } from "@/components/StatusBadge";
 import BusinessDocumentFields, { BusinessDocumentSummary, ReferencePicker } from "@/components/BusinessDocumentFields";
@@ -10,6 +10,7 @@ import { INVOICE_INCOMING, INVOICE_OUTGOING, SPK_INCOMING, SPK_OUTGOING, isBusin
 
 import { DELIVERY_METHODS, MANAGER_SCOPES, staffUnit, type ManagerScope } from "@/lib/v11-workflow";
 import PaymentDocumentsPanel from "@/components/PaymentDocumentsPanel";
+import ConfidentialityBadge from "@/components/ConfidentialityBadge";
 import AttachmentActions from "@/components/AttachmentActions";
 import SearchableSelect from "@/components/SearchableSelect";
 import { formatWorkflowTime } from "@/lib/workflow-time";
@@ -17,6 +18,7 @@ import AttachmentSandbox from "@/components/AttachmentSandbox";
 import V11SigningPanel from "@/components/V11SigningPanel";
 import { PersekotFields, ReceiptFields, UnitField, WorkflowSummary } from "@/components/V11LetterFields";
 
+type TrashOperation = "trash" | "restore" | "purge";
 type Direction="INCOMING"|"OUTGOING"|"INTERNAL";
 type Props={direction:Direction;user:SessionUser};
 type PendingAction={action:string;label:string;requiredComment?:boolean;issue?:boolean};
@@ -111,7 +113,9 @@ export default function LettersClient({direction,user}:Props){
   const [queue,setQueue]=useState(false);
   const isRoot=user.role==="ROOT_ADMIN";
   const [trash,setTrash]=useState(false);
-  const [trashTarget,setTrashTarget]=useState<any>(null);
+  const [trashTarget,setTrashTarget]=useState<{id:string;subject:string;operation:TrashOperation}|null>(null);
+  const [pendingCleanup,setPendingCleanup]=useState(0);
+  const [cleanupBusy,setCleanupBusy]=useState(false);
   const [trashBusy,setTrashBusy]=useState(false);
   const listRequest=useRef<AbortController|null>(null);
   const [recipients,setRecipients]=useState({defaultRecipient:"PT Aru Raharja",recipients:["PT Aru Raharja"]});
@@ -617,25 +621,61 @@ export default function LettersClient({direction,user}:Props){
     void load({q:"",status:"",docType:"",year:"",queue:false,trash:nextTrash});
   }
 
+  useEffect(()=>{
+    if(!trash||!isRoot) return;
+    const controller=new AbortController();
+    void fetch("/api/admin/letter-purge-files",{signal:controller.signal})
+      .then(r=>r.ok?r.json():null)
+      .then(result=>{if(result?.ok&&!controller.signal.aborted)setPendingCleanup(result.data.pending);})
+      .catch(()=>{});
+    return ()=>controller.abort();
+  },[trash,isRoot]);
+
+  function showTrashAction(row:{id:string;subject:string}, operation:TrashOperation) {
+    setError("");
+    setTrashTarget({id:row.id,subject:row.subject,operation});
+  }
+
   async function moveLetter(e:FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if(!trashTarget) return;
     setTrashBusy(true);setError("");
-    const reason=new FormData(e.currentTarget).get("reason");
+    const fields=new FormData(e.currentTarget);
+    const {operation,id}=trashTarget;
     try {
-      const response=await fetch("/api/letters/"+trashTarget.id+"/trash",{
+      const response=await fetch("/api/letters/"+id+"/trash",{
         method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({operation:trash?"restore":"trash",reason}),
+        body:JSON.stringify({operation,reason:fields.get("reason"),confirmation:fields.get("confirmation")}),
       });
       const result=await response.json();
       if(!response.ok) throw new Error(result.error||"Surat belum dapat diproses.");
       setTrashTarget(null);setDetailOpen(false);
-      setMessage(trash?"Surat dipulihkan.":"Surat dipindahkan ke Sampah.");
+      setMessage(operation==="purge"?"Surat sudah dihapus permanen."
+        :operation==="restore"?"Surat dipulihkan.":"Surat dipindahkan ke Sampah.");
+      if(operation==="purge" && result.data?.pending!==0) {
+        setPendingCleanup(count=>count+Math.max(1,result.data?.pending||1));
+      }
       await load();
     } catch(error) {
       setError(error instanceof Error?error.message:"Surat belum dapat diproses.");
     } finally {setTrashBusy(false);}
   }
+
+  async function cleanupFiles() {
+    setCleanupBusy(true);setError("");
+    try {
+      const response=await fetch("/api/admin/letter-purge-files",{method:"POST"});
+      const result=await response.json();
+      if(!response.ok)throw new Error(result.error||"Pembersihan lampiran belum berhasil.");
+      setPendingCleanup(result.data.pending);
+      if(!result.data.pending)setMessage("Pembersihan lampiran selesai.");
+    } catch(error) {
+      setError(error instanceof Error?error.message:"Pembersihan lampiran belum berhasil.");
+    } finally {setCleanupBusy(false);}
+  }
+
+  const trashActionLabel=trashTarget?.operation==="purge"?"Hapus Permanen"
+    :trashTarget?.operation==="restore"?"Pulihkan Surat":"Pindah ke Sampah";
 
   return <main className="page">
     <div className="page-head"><div><h2>{titleFor(direction)}</h2><p>{pageDescription}</p></div><div style={{display:"flex",gap:8,flexWrap:"wrap",justifyContent:"flex-end"}}>{direction==="OUTGOING"&&<a className="btn btn-secondary" href="/api/letters/outgoing-excel">↓ Export Excel</a>}{direction==="OUTGOING"&&user.role==="ROOT_ADMIN"&&<button className="btn btn-secondary" onClick={()=>{setImportOpen(true);setImportResult(null);setImportFile(null)}}>↑ Import Excel Lama</button>}{isRoot&&<button className="btn btn-secondary" aria-pressed={trash}
@@ -668,27 +708,47 @@ export default function LettersClient({direction,user}:Props){
       {(q||status||docType||year||queue)&&<button className="btn btn-secondary" onClick={()=>resetFilters()}>Reset</button>}
     </div>
     {queue&&<p className="hint" role="status">Antrean Sekretariat menampilkan surat yang saat ini berada di Sekretariat.</p>}
-    {trash&&<p className="hint">Sampah memuat surat yang telah disembunyikan. Pulihkan untuk melanjutkan alurnya.</p>}
+    {trash&&<p className="hint">Pulihkan surat untuk melanjutkan alurnya atau pilih Hapus Permanen.</p>}
+    {trash&&pendingCleanup>0&&<div className="notice attachment-actions">
+      <span>Masih ada lampiran dari surat yang dihapus yang perlu dibersihkan.</span>
+      <button type="button" className="btn btn-secondary" disabled={cleanupBusy} onClick={()=>void cleanupFiles()}>
+        {cleanupBusy?"Membersihkan…":"Coba Bersihkan Lampiran"}
+      </button>
+    </div>}
     <div className="card"><div className="table-wrap"><table className="table"><thead><tr>{direction!=="INTERNAL"&&<th>{direction==="INCOMING"?"Nomor Surat":"No."}</th>}<th>Jenis Dokumen</th><th>Perihal</th><th>{direction==="INCOMING"?"Pengirim":"Tujuan"}</th><th>Tanggal</th><th>Status</th><th>Tujuan Saat Ini</th><th>Sifat</th><th>Lampiran</th><th>{trash?"Dipindahkan":"Aktivitas"}</th><th>Aksi</th></tr></thead><tbody>
-      {!loading&&rows.map(r=><tr key={r.id} className={`letter-row ${docTypeClass(r.document_type)}`}>{direction!=="INTERNAL"&&<td className="mono"><b>{direction==="OUTGOING"?(outgoingNumber(r)||"-"):(r.external_number||"-")}</b></td>}<td><span className={`badge letter-type-badge ${docTypeClass(r.document_type)}`}>{docLabel(r)}</span></td><td><b>{r.subject}</b>{r.legacy_import_key&&<span className="muted" style={{display:"block",fontSize:9.5,marginTop:3}}>Data Excel lama{r.legacy_number_conflict?" • cek nomor historis":""}</span>}</td><td>{direction==="INCOMING"?r.sender:r.recipient}</td><td>{fmtDate(r.letter_date)}</td><td><StatusBadge status={r.sent_date&&r.status==="ISSUED"?"SENT":r.status}/></td><td><b style={{fontSize:11}}>{currentTargetLabel(r)}</b></td><td><span className={`badge ${r.confidentiality==="RAHASIA"?"red":r.confidentiality==="PENTING"?"orange":"gray"}`}>{r.confidentiality}</span></td><td>{r.attachment_count}</td>
+      {!loading&&rows.map(r=><tr key={r.id} className={`letter-row ${docTypeClass(r.document_type)}`}>{direction!=="INTERNAL"&&<td className="mono"><b>{direction==="OUTGOING"?(outgoingNumber(r)||"-"):(r.external_number||"-")}</b></td>}<td><span className={`badge letter-type-badge ${docTypeClass(r.document_type)}`}>{docLabel(r)}</span></td><td><b>{r.subject}</b>{r.legacy_import_key&&<span className="muted" style={{display:"block",fontSize:9.5,marginTop:3}}>Data Excel lama{r.legacy_number_conflict?" • cek nomor historis":""}</span>}</td><td>{direction==="INCOMING"?r.sender:r.recipient}</td><td>{fmtDate(r.letter_date)}</td><td><StatusBadge status={r.sent_date&&r.status==="ISSUED"?"SENT":r.status}/></td><td><b style={{fontSize:11}}>{currentTargetLabel(r)}</b></td><td><ConfidentialityBadge value={r.confidentiality}/></td><td>{r.attachment_count}</td>
         <td className="letter-activity">{trash?<><span>{formatWorkflowTime(r.deleted_at)}</span><span className="muted">{r.deletion_reason}</span></>
           :<><span>Dibuat {formatWorkflowTime(r.created_at)}</span><span className="muted">Diperbarui {formatWorkflowTime(r.updated_at)}</span></>}</td>
         <td><div className="attachment-actions">{!trash&&<button className="btn btn-secondary" onClick={()=>openDetail(r.id)}>Detail</button>}
-          {isRoot&&<button className="btn btn-secondary" onClick={()=>{setError("");setTrashTarget(r);}}>{trash?"Pulihkan":"Pindah ke Sampah"}</button>}</div></td></tr>)}
+          {isRoot&&<button className="btn btn-secondary" onClick={()=>showTrashAction(r,trash?"restore":"trash")}>
+            {trash?"Pulihkan":"Pindah ke Sampah"}
+          </button>}
+          {isRoot&&trash&&<button className="btn btn-danger" onClick={()=>showTrashAction(r,"purge")}>Hapus Permanen</button>}
+        </div></td></tr>)}
       {!loading&&rows.length===0&&<tr><td colSpan={direction==="INTERNAL"?10:11}><div className="empty">{trash?"Sampah kosong.":queue?"Tidak ada surat di antrean Sekretariat.":"Tidak ada surat yang cocok."}</div></td></tr>}
       {loading&&<tr><td colSpan={direction==="INTERNAL"?10:11}><div className="empty">Memuat...</div></td></tr>}
     </tbody></table></div></div>
 
-    {trashTarget&&<Modal title={trash?"Pulihkan Surat":"Pindahkan Surat ke Sampah"} subtitle={trashTarget.subject}
+    {trashTarget&&<Modal title={trashActionLabel} subtitle={trashTarget.subject}
       onClose={()=>!trashBusy&&setTrashTarget(null)}>
       <form className="form-grid workflow-form" onSubmit={moveLetter}>
         {error&&<div className="field full error" role="alert">{error}</div>}
-        <p className="field full notice">{trash?"Surat dan proses terkait akan muncul kembali."
-          :"Surat, disposisi, dan lampirannya disembunyikan. Nomor surat dan pencatatan keuangan tetap tercatat."}</p>
+        <p className={`field full ${trashTarget.operation==="purge"?"error":"notice"}`}>
+          {trashTarget.operation==="purge"
+            ?"Surat, riwayat disposisi, dan lampiran terkait akan dihapus dan tidak bisa dipulihkan dari SIAP ARU. Alasan penghapusan dicatat dalam Audit Log."
+            :trashTarget.operation==="restore"?"Surat dan proses terkait akan muncul kembali."
+            :"Surat, disposisi, dan lampirannya disembunyikan. Nomor surat dan pencatatan keuangan tetap tercatat."}
+        </p>
         <label className="field full"><span>Alasan</span><textarea className="textarea" name="reason" maxLength={1000} required/></label>
+        {trashTarget.operation==="purge"&&<label className="field full">
+          <span>Ketik {PURGE_CONFIRMATION}</span>
+          <input className="input" name="confirmation" pattern={PURGE_CONFIRMATION} autoComplete="off" required/>
+        </label>}
         <div className="field full modal-actions">
           <button type="button" className="btn btn-secondary" disabled={trashBusy} onClick={()=>setTrashTarget(null)}>Batal</button>
-          <button className={"btn "+(trash?"btn-primary":"btn-danger")} disabled={trashBusy}>{trash?"Pulihkan Surat":"Pindah ke Sampah"}</button>
+          <button className={"btn "+(trashTarget.operation==="restore"?"btn-primary":"btn-danger")} disabled={trashBusy}>
+            {trashBusy?"Memproses…":trashActionLabel}
+          </button>
         </div>
       </form>
     </Modal>}

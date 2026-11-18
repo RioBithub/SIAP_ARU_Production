@@ -19,7 +19,7 @@ export async function GET(_:Request,{params}:{params:{id:string}}){
   const access = dispositionAccess(user);
   const [rows]=await db.query<RowDataPacket[]>(
     `SELECT d.*,
-      l.subject,l.letter_number,l.external_number,l.direction,l.document_type,
+      l.subject,l.letter_number,l.external_number,l.direction,l.document_type,l.confidentiality,
       v.purpose,v.invoice_revision AS task_revision,
       fu.name AS from_name,fu.role AS from_role,
       tu.name AS to_name,tu.role AS to_role,
