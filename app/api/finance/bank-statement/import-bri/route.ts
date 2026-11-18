@@ -103,7 +103,7 @@ export async function POST(request:Request){
     committed=true;
 
     await auditLog({
-      userId:user.id,action:"BANK_BRI_PDF_IMPORT",entityType:"BANK_IMPORT",entityId:batchId,request,
+      user,action:"BANK_BRI_PDF_IMPORT",entityType:"BANK_IMPORT",entityId:batchId,request,
       metadata:{accountId:String(account.id),accountNumber:parsed.account_number,statementDate:parsed.statement_date,periodFrom:parsed.period_from,periodTo:parsed.period_to,inserted:result.inserted,duplicates:result.duplicates,openingBalance:parsed.opening_balance,closingBalance:parsed.closing_balance}
     }).catch(error=>console.error("BANK_BRI_PDF_IMPORT audit failed",error));
 

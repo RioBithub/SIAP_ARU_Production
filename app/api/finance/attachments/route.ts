@@ -94,7 +94,7 @@ export async function POST(request:Request){
       `INSERT INTO siap_finance_attachments(id,summary_id,receivable_id,payable_id,ledger_summary_id,adjustment_id,position_adjustment_id,attachment_kind,original_name,stored_name,storage_path,mime_type,original_size,stored_size,is_compressed,uploaded_by)
        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [id,cols.summary_id,cols.receivable_id,cols.payable_id,cols.ledger_summary_id,cols.adjustment_id,cols.position_adjustment_id,kind,saved.originalName,saved.storedName,saved.storagePath,saved.mimeType,saved.originalSize,saved.storedSize,saved.isCompressed?1:0,user.id]);
-    await auditLog({userId:user.id,action:"FINANCE_ATTACHMENT_UPLOAD",entityType:type,entityId,metadata:{attachment_id:id,name:saved.originalName,compressed:saved.isCompressed,original_size:saved.originalSize,stored_size:saved.storedSize},request});
+    await auditLog({user,action:"FINANCE_ATTACHMENT_UPLOAD",entityType:type,entityId,metadata:{attachment_id:id,name:saved.originalName,compressed:saved.isCompressed,original_size:saved.originalSize,stored_size:saved.storedSize},request});
     return NextResponse.json({ok:true,data:{id,entity_id:entityId}},{status:201});
   }catch(e){return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Upload gagal."},{status:400});}
 }

@@ -25,7 +25,7 @@ export async function PATCH(request:Request,{params}:{params:{id:string}}){
        SET manual_opening_balance=?,manual_closing_balance=?,corrected_by=?,corrected_at=UTC_TIMESTAMP()
        WHERE id=?`,[opening,closing,user.id,params.id]
     );
-    await auditLog({userId:user.id,action:"BANK_IMPORT_BALANCE_CORRECTION",entityType:"BANK_IMPORT",entityId:params.id,request,metadata:{accountId:String(batch.bank_account_id),sourceOpening:Number(batch.statement_opening_balance),sourceClosing:Number(batch.statement_closing_balance),manualOpening:opening,manualClosing:closing}});
+    await auditLog({user,action:"BANK_IMPORT_BALANCE_CORRECTION",entityType:"BANK_IMPORT",entityId:params.id,request,metadata:{accountId:String(batch.bank_account_id),sourceOpening:Number(batch.statement_opening_balance),sourceClosing:Number(batch.statement_closing_balance),manualOpening:opening,manualClosing:closing}});
     return NextResponse.json({ok:true});
   }catch(e){
     return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Gagal mengoreksi saldo import."},{status:400});

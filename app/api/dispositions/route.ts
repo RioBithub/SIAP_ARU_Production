@@ -221,7 +221,7 @@ export async function POST(request:Request) {
       }
 
       await auditLog({
-        userId:user.id,
+        user,
         action:"DISPOSITION_CREATE",
         entityType:"DISPOSITION",
         entityId:id,

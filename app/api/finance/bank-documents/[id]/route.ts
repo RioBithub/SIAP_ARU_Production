@@ -32,7 +32,7 @@ export async function DELETE(request:Request,{params}:{params:{id:string}}){
     }
 
     await auditLog({
-      userId:user.id,
+      user,
       action:"BANK_DOCUMENT_DELETE",
       entityType:"BANK_DOCUMENT",
       entityId:params.id,

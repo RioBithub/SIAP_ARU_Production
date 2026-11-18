@@ -146,7 +146,7 @@ export async function PUT(request:Request){
       }
       return {id,before:{income:Number(current.income_amount||0),expense:Number(current.expense_amount||0),budget:Number(current.budget_amount||0),data_date:dateOnly(current.data_date),include_in_ytd:Boolean(current.include_in_ytd),publish_status:String(current.publish_status||"DRAFT")},after:{income:nextIncome,expense:nextExpense,budget:nextBudget,data_date:dataDate,include_in_ytd:Boolean(includeInYtd),publish_status:publishStatus},changes};
     });
-    await auditLog({userId:user.id,action:"FINANCE_SUMMARY_UPDATE",entityType:"FINANCE_MONTHLY_SUMMARY",entityId:result.id,metadata:{period,before:result.before,after:result.after,changed_metrics:result.changes.map(c=>c.metric)},request});
+    await auditLog({user,action:"FINANCE_SUMMARY_UPDATE",entityType:"FINANCE_MONTHLY_SUMMARY",entityId:result.id,metadata:{period,before:result.before,after:result.after,changed_metrics:result.changes.map(c=>c.metric)},request});
     return NextResponse.json({ok:true,data:{id:result.id}});
   }catch(e){
     return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Gagal menyimpan ringkasan."},{status:400});

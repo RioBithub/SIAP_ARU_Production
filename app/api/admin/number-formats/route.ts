@@ -33,7 +33,7 @@ export async function POST(request:Request){
       `INSERT INTO siap_number_formats(id,code,name,document_type,pattern,description,sequence_start,is_active,created_by)
        VALUES(?,?,?,?,?,?,?,1,?)`,
       [id,required(b.code,"Kode",40).toUpperCase(),required(b.name,"Nama",150),documentType,pattern,str(b.description,500)||null,sequenceStart,user.id]);
-    await auditLog({userId:user.id,action:"NUMBER_FORMAT_CREATE",entityType:"NUMBER_FORMAT",entityId:id,metadata:{pattern,sequenceStart},request});
+    await auditLog({user,action:"NUMBER_FORMAT_CREATE",entityType:"NUMBER_FORMAT",entityId:id,metadata:{pattern,sequenceStart},request});
     return NextResponse.json({ok:true,data:{id}},{status:201});
   }catch(e){return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Gagal membuat format."},{status:400});}
 }

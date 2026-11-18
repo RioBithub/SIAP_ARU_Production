@@ -70,7 +70,7 @@ export async function POST(request:Request){
        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [id,accountId,documentDate,periodFrom,periodTo,kind,description,saved.originalName,saved.storedName,saved.storagePath,saved.mimeType,saved.originalSize,saved.storedSize,saved.isCompressed?1:0,user.id]
     );
-    await auditLog({userId:user.id,action:"BANK_DOCUMENT_UPLOAD",entityType:"BANK_DOCUMENT",entityId:id,metadata:{accountId,documentDate,periodFrom,periodTo,kind,name:saved.originalName},request});
+    await auditLog({user,action:"BANK_DOCUMENT_UPLOAD",entityType:"BANK_DOCUMENT",entityId:id,metadata:{accountId,documentDate,periodFrom,periodTo,kind,name:saved.originalName},request});
     return NextResponse.json({ok:true,data:{id}},{status:201});
   }catch(e){
     if(saved) await deleteStoredFile(saved.storagePath).catch(()=>{});

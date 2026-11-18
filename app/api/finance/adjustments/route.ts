@@ -78,7 +78,7 @@ export async function POST(request: Request) {
       return { adjustmentId,summaryId,before,after,includeInYtd:Boolean(summary.include_in_ytd),publishStatus:String(summary.publish_status||"DRAFT") };
     });
 
-    await auditLog({userId:user.id,action:"FINANCE_ADJUSTMENT_CREATE",entityType:"FINANCE_ADJUSTMENT",entityId:result.adjustmentId,metadata:{
+    await auditLog({user,action:"FINANCE_ADJUSTMENT_CREATE",entityType:"FINANCE_ADJUSTMENT",entityId:result.adjustmentId,metadata:{
       period,metric,adjustment_type:adjustmentType,amount,value_before:result.before,value_after:result.after,data_date:dataDate,note,include_in_ytd:result.includeInYtd,publish_status:result.publishStatus
     },request});
     return NextResponse.json({ok:true,data:result},{status:201});

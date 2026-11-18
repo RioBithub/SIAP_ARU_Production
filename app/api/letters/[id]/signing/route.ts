@@ -84,7 +84,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
         return signingPdf(conn, params.id, body.attachment_id);
       });
       const suggestions = await predictSandboxAnnotations(source.name, source.bytes, body);
-      await auditLog({ userId: user.id, action: "LETTER_MEKARI_PREDICT", entityType: "LETTER", entityId: params.id,
+      await auditLog({ user, action: "LETTER_MEKARI_PREDICT", entityType: "LETTER", entityId: params.id,
         metadata: { sourceAttachmentId: source.id, suggestionCount: suggestions.length }, request });
       return NextResponse.json({ ok: true, data: suggestions });
     }
@@ -103,7 +103,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
           "INSERT INTO siap_v11_signing (id,letter_id,mode,provider_id,status,requested_by,source_attachment_id) VALUES (?,?,?,?,?,?,?)",
           [id, params.id, mode, mode === "mock" ? "mock-" + id : null, status, user.id, source.id],
         );
-        await auditLog({ userId: user.id, action: "LETTER_MEKARI_REQUEST", entityType: "LETTER", entityId: params.id,
+        await auditLog({ user, action: "LETTER_MEKARI_REQUEST", entityType: "LETTER", entityId: params.id,
           metadata: { signingId: id, mode, status, ...(signing ? {
             signerCount: signing.signers.length, signingOrder: signing.signing_order,
           } : {}) }, request }, conn);
@@ -167,7 +167,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
         attachmentId = await insertLetterAttachment(conn, params.id, user.id, file, "PROCESS", actionId);
       }
       await conn.execute("UPDATE siap_v11_signing SET status=?,final_attachment_id=?,next_poll_at=NULL WHERE id=?", [status, attachmentId, current.id]);
-      await auditLog({ userId: user.id, action: "LETTER_MEKARI_STATUS", entityType: "LETTER", entityId: params.id,
+      await auditLog({ user, action: "LETTER_MEKARI_STATUS", entityType: "LETTER", entityId: params.id,
         metadata: { signingId: current.id, mode, status, finalAttachmentId: attachmentId }, request }, conn);
       return publicJob({ ...latest, status, final_attachment_id: attachmentId } as RowDataPacket);
     });

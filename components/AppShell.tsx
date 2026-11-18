@@ -1,17 +1,39 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { SessionUser } from "@/lib/types";
 import { ROLE_LABELS } from "@/lib/types";
 import WorkflowNotifications from "@/components/WorkflowNotifications";
+import AccountSwitcher, { ACCOUNT_SWITCH_EVENT, RestoreAccountButton } from "@/components/AccountSwitcher";
 
 type Item = { href:string; label:string; icon:string; roles?:string[] };
 
-export default function AppShell({ user, children }:{user:SessionUser;children:React.ReactNode}) {
+export default function AppShell({ user, rootName, targetId, children }: {
+  user: SessionUser;
+  rootName: string | null;
+  targetId: string | null;
+  children: React.ReactNode;
+}) {
   const pathname=usePathname();
   const router=useRouter();
   const [open,setOpen]=useState(false);
+
+  useEffect(() => {
+    if (!rootName) return;
+    function accountChanged(event: StorageEvent) {
+      if (event.key === ACCOUNT_SWITCH_EVENT) window.location.reload();
+    }
+    function restoreFromHistory(event: PageTransitionEvent) {
+      if (event.persisted) window.location.reload();
+    }
+    window.addEventListener("storage", accountChanged);
+    window.addEventListener("pageshow", restoreFromHistory);
+    return () => {
+      window.removeEventListener("storage", accountChanged);
+      window.removeEventListener("pageshow", restoreFromHistory);
+    };
+  }, [rootName]);
 
   const groups:{label:string;items:Item[]}[]=[
     {label:"Utama",items:[{href:"/dashboard",label:"Dashboard",icon:"⌂"}]},
@@ -77,17 +99,25 @@ export default function AppShell({ user, children }:{user:SessionUser;children:R
       </div>
     </aside>
     <div className="main-area">
-      <header className="topbar">
+      <header className={rootName ? "topbar account-switch-enabled" : "topbar"}>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
           <button className="icon-btn mobile-menu" onClick={()=>setOpen(true)}>☰</button>
           <div className="top-title"><h1>SIAP ARU</h1><p>Persuratan, Disposisi, dan Informasi Keuangan</p></div>
         </div>
         <div className="top-right">
           <WorkflowNotifications/>
+          {rootName && <AccountSwitcher targetId={targetId}/>}
           <div className="user-chip"><div className="avatar">{user.name.slice(0,2).toUpperCase()}</div><div><b>{user.name}</b><small>{ROLE_LABELS[user.role]}</small></div></div>
           <button className="btn btn-secondary" onClick={logout}>Keluar</button>
         </div>
       </header>
+      {targetId && <div className="account-mode-banner">
+        <div>
+          <div><strong>Mode akun</strong> · {user.name} · {ROLE_LABELS[user.role]}{user.unit_name ? ` · ${user.unit_name}` : ""}</div>
+          <small>{user.email} · Diakses oleh {rootName}</small>
+        </div>
+        <RestoreAccountButton targetId={targetId}>Kembali ke Root Admin</RestoreAccountButton>
+      </div>}
       {children}
     </div>
   </div>;

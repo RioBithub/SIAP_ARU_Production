@@ -63,7 +63,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}){
         await conn.execute("UPDATE siap_v11_letters SET invoice_revision=invoice_revision+1 WHERE letter_id=?", [params.id]);
       }
       await auditLog({
-        userId: user.id, action: "ATTACHMENT_UPLOAD", entityType: "ATTACHMENT", entityId: id,
+        user, action: "ATTACHMENT_UPLOAD", entityType: "ATTACHMENT", entityId: id,
         metadata: { letterId: params.id, kind, name: saved.originalName, size: saved.originalSize, compressed: saved.isCompressed },
         request,
       }, conn);

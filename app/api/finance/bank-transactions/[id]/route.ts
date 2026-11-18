@@ -53,7 +53,7 @@ export async function PATCH(request:Request,{params}:{params:{id:string}}){
       [transactionAt,description,str(b.teller_id,120)||null,str(b.reference_no,120)||null,debit,credit,str(b.notes,1000)||null,user.id,params.id]
     );
     if(!result.affectedRows) return NextResponse.json({ok:false,error:"Transaksi tidak ditemukan atau sudah dibatalkan."},{status:404});
-    await auditLog({userId:user.id,action:"BANK_TRANSACTION_UPDATE",entityType:"BANK_TRANSACTION",entityId:params.id,metadata:{accountId:String(current.bank_account_id),transactionAt,debit,credit,description},request});
+    await auditLog({user,action:"BANK_TRANSACTION_UPDATE",entityType:"BANK_TRANSACTION",entityId:params.id,metadata:{accountId:String(current.bank_account_id),transactionAt,debit,credit,description},request});
     return NextResponse.json({ok:true});
   }catch(e){
     return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Gagal mengubah transaksi."},{status:400});
@@ -75,7 +75,7 @@ export async function DELETE(request:Request,{params}:{params:{id:string}}){
       `UPDATE siap_bank_transactions SET status='VOIDED',void_reason=?,voided_by=?,voided_at=UTC_TIMESTAMP(),updated_by=? WHERE id=?`,
       [reason,user.id,user.id,params.id]
     );
-    await auditLog({userId:user.id,action:"BANK_TRANSACTION_VOID",entityType:"BANK_TRANSACTION",entityId:params.id,metadata:{reason,accountId:String(tx.bank_account_id),transactionAt:String(tx.transaction_at),debit:Number(tx.debit_amount||0),credit:Number(tx.credit_amount||0),description:String(tx.description)},request});
+    await auditLog({user,action:"BANK_TRANSACTION_VOID",entityType:"BANK_TRANSACTION",entityId:params.id,metadata:{reason,accountId:String(tx.bank_account_id),transactionAt:String(tx.transaction_at),debit:Number(tx.debit_amount||0),credit:Number(tx.credit_amount||0),description:String(tx.description)},request});
     return NextResponse.json({ok:true});
   }catch(e){
     return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Gagal membatalkan transaksi."},{status:400});

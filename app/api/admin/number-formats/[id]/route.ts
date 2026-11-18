@@ -21,7 +21,7 @@ export async function PATCH(request:Request,{params}:{params:{id:string}}){
        is_active=COALESCE(?,is_active)
        WHERE id=?`,
       [str(b.name,150),pattern,str(b.description,500)||null,sequenceStart,typeof b.is_active==="boolean"?(b.is_active?1:0):null,params.id]);
-    await auditLog({userId:user.id,action:"NUMBER_FORMAT_UPDATE",entityType:"NUMBER_FORMAT",entityId:params.id,metadata:{pattern,sequence_start:sequenceStart,is_active:b.is_active},request});
+    await auditLog({user,action:"NUMBER_FORMAT_UPDATE",entityType:"NUMBER_FORMAT",entityId:params.id,metadata:{pattern,sequence_start:sequenceStart,is_active:b.is_active},request});
     return NextResponse.json({ok:true});
   }catch(e){return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Gagal update format."},{status:400});}
 }

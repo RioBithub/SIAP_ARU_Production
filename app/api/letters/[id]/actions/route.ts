@@ -541,7 +541,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
       if (next === "CANCELLED" || next === "REJECTED") await cancelLedgerForLetter(params.id, comment.slice(0, 1000), conn);
 
       await auditLog({
-        userId: user.id, action: "LETTER_" + action, entityType: "LETTER", entityId: params.id,
+        user, action: "LETTER_" + action, entityType: "LETTER", entityId: params.id,
         metadata: {
           from: status, to: next, comment, direction, issuedDate, sentDate, routingTargetId,
           processAttachments: stored.map(file => file.originalName), signatureMethod: signature, signatureProvenance,
