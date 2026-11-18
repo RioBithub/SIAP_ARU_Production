@@ -31,7 +31,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, error: "Email atau password salah." }, { status: 401 });
     }
     await createSession(user.id, request);
-    await auditLog({ userId: user.id, action: "LOGIN", entityType: "AUTH", entityId: user.id, request });
+    await auditLog({ user, action: "LOGIN", entityType: "AUTH", entityId: user.id, request });
     return NextResponse.json({ ok: true, data: user });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "Login gagal." }, { status: 500 });

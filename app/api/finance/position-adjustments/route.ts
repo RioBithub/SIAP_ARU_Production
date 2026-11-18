@@ -94,7 +94,7 @@ export async function POST(request: Request) {
       return {adjustmentId,summaryId:String(summary.id),ledgerType,metric,before,after,dataDate};
     });
 
-    await auditLog({userId:user.id,action:"FINANCE_POSITION_ADJUSTMENT_CREATE",entityType:"FINANCE_POSITION_ADJUSTMENT",entityId:result.adjustmentId,metadata:{...result,kind,adjustment_type:adjustmentType,amount,note},request});
+    await auditLog({user,action:"FINANCE_POSITION_ADJUSTMENT_CREATE",entityType:"FINANCE_POSITION_ADJUSTMENT",entityId:result.adjustmentId,metadata:{...result,kind,adjustment_type:adjustmentType,amount,note},request});
     return NextResponse.json({ok:true,data:result},{status:201});
   } catch (e) {
     return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Gagal membuat penyesuaian."},{status:400});

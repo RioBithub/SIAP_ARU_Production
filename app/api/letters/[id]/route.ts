@@ -198,7 +198,7 @@ export async function PATCH(request: Request, { params }: { params: { id: string
         );
       }
       await auditLog({
-        userId: user.id, action: "LETTER_UPDATE", entityType: "LETTER", entityId: params.id,
+        user, action: "LETTER_UPDATE", entityType: "LETTER", entityId: params.id,
         metadata: v11 ? { documentType: letter.document_type, beforeRevision: v11.invoice_revision, invoiceRevision: revision }
           : business ? { documentType: letter.document_type } : null, request,
       }, conn);

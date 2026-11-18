@@ -28,7 +28,7 @@ export async function POST(request:Request){
        VALUES(?,?,?,?,?,?,?,?,?,?)`,
       [id,type,dateOnly(b.entry_date,"Tanggal"),required(b.category,"Kategori",120),required(b.description,"Deskripsi",500),amount(b.amount),str(b.status,30)||"POSTED",str(b.reference_no,120)||null,user.id,user.id]
     );
-    await auditLog({userId:user.id,action:"FINANCE_ENTRY_CREATE",entityType:"FINANCE_ENTRY",entityId:id,metadata:{type,amount:Number(b.amount)},request});
+    await auditLog({user,action:"FINANCE_ENTRY_CREATE",entityType:"FINANCE_ENTRY",entityId:id,metadata:{type,amount:Number(b.amount)},request});
     return NextResponse.json({ok:true,data:{id}},{status:201});
   }catch(e){return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Input gagal."},{status:400});}
 }

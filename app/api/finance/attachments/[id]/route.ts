@@ -15,7 +15,7 @@ export async function GET(request:Request,{params}:{params:{id:string}}){
   const a=rows[0]; if(!a)return NextResponse.json({ok:false,error:"Lampiran tidak ditemukan."},{status:404});
   try{
     const data=await readStoredFile(String(a.storage_path),Boolean(a.is_compressed));
-    await auditLog({userId:user.id,action:"FINANCE_ATTACHMENT_DOWNLOAD",entityType:"FINANCE_ATTACHMENT",entityId:params.id,request});
+    await auditLog({user,action:"FINANCE_ATTACHMENT_DOWNLOAD",entityType:"FINANCE_ATTACHMENT",entityId:params.id,request});
     return new Response(data,{headers:{
       "Content-Type":String(a.mime_type||"application/octet-stream"),
       "Content-Disposition":`attachment; filename*=UTF-8''${encodeURIComponent(safeFilename(String(a.original_name)))}`,
@@ -32,7 +32,7 @@ export async function DELETE(request:Request,{params}:{params:{id:string}}){
     const a=rows[0]; if(!a)return NextResponse.json({ok:false,error:"Lampiran tidak ditemukan."},{status:404});
     await deleteStoredFile(String(a.storage_path));
     await db.execute(`DELETE FROM siap_finance_attachments WHERE id=?`,[params.id]);
-    await auditLog({userId:user.id,action:"FINANCE_ATTACHMENT_DELETE",entityType:"FINANCE_ATTACHMENT",entityId:params.id,metadata:{
+    await auditLog({user,action:"FINANCE_ATTACHMENT_DELETE",entityType:"FINANCE_ATTACHMENT",entityId:params.id,metadata:{
       original_name:String(a.original_name||""),attachment_kind:String(a.attachment_kind||""),summary_id:a.summary_id||null,receivable_id:a.receivable_id||null,payable_id:a.payable_id||null,ledger_summary_id:a.ledger_summary_id||null,adjustment_id:a.adjustment_id||null,position_adjustment_id:a.position_adjustment_id||null
     },request});
     return NextResponse.json({ok:true});

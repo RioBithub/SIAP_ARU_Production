@@ -170,7 +170,7 @@ export async function GET(request:Request){
     XLSX.utils.book_append_sheet(book,ws,cfg.sheet);
   }
   const out=XLSX.write(book,{type:"buffer",bookType:"xlsx",cellDates:true});
-  await auditLog({userId:user.id,action:"OUTGOING_EXCEL_EXPORT",entityType:"LETTER",metadata:{rows:rows.length,sheets:SHEETS.map(x=>x.sheet)},request});
+  await auditLog({user,action:"OUTGOING_EXCEL_EXPORT",entityType:"LETTER",metadata:{rows:rows.length,sheets:SHEETS.map(x=>x.sheet)},request});
   const filename=`Form Persuratan ARU ${new Date().toISOString().slice(0,10)}.xlsx`;
   return new Response(out,{headers:{
     "Content-Type":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -280,7 +280,7 @@ export async function POST(request:Request){
       return {inserted,updated,ledgerLinked,conflicts};
     });
 
-    await auditLog({userId:user.id,action:"OUTGOING_EXCEL_IMPORT",entityType:"LETTER",metadata:{file:file.name,rows:sourceRows.length,skipped,...result,issues:issues.slice(0,50)},request});
+    await auditLog({user,action:"OUTGOING_EXCEL_IMPORT",entityType:"LETTER",metadata:{file:file.name,rows:sourceRows.length,skipped,...result,issues:issues.slice(0,50)},request});
     return NextResponse.json({ok:true,data:{file:file.name,processed:sourceRows.length,skipped,...result,issues:issues.slice(0,40),moreIssues:Math.max(0,issues.length-40)}});
   }catch(error){
     return NextResponse.json({ok:false,error:error instanceof Error?error.message:"Import Excel gagal."},{status:400});

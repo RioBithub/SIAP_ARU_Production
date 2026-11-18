@@ -13,6 +13,7 @@ export type SessionUser = {
   email: string;
   role: Role;
   unit_name: string | null;
+  impersonatedByUserId?: string;
 };
 
 export const ROLE_LABELS: Record<Role, string> = {

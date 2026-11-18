@@ -24,7 +24,7 @@ export async function PATCH(request:Request,{params}:{params:{id:string}}){
       [bankName,accountName,accountNumber,str(b.product_name,150)||null,(str(b.currency,10)||"IDR").toUpperCase(),str(b.branch_name,180)||null,str(b.unit_name,180)||null,str(b.company_address,500)||null,openingBalance,openingBalanceDate,user.id,params.id]
     );
     if(!result.affectedRows) return NextResponse.json({ok:false,error:"Rekening tidak ditemukan."},{status:404});
-    await auditLog({userId:user.id,action:"BANK_ACCOUNT_UPDATE",entityType:"BANK_ACCOUNT",entityId:params.id,metadata:{bankName,accountName,accountNumber,openingBalance,openingBalanceDate},request});
+    await auditLog({user,action:"BANK_ACCOUNT_UPDATE",entityType:"BANK_ACCOUNT",entityId:params.id,metadata:{bankName,accountName,accountNumber,openingBalance,openingBalanceDate},request});
     return NextResponse.json({ok:true});
   }catch(e){
     return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Gagal mengubah rekening."},{status:400});

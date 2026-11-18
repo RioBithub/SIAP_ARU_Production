@@ -47,7 +47,7 @@ export async function PATCH(request:Request,{params}:{params:{id:string}}){
     );
 
     await auditLog({
-      userId:user.id,
+      user,
       action:"DOCUMENT_TYPE_UPDATE",
       entityType:"DOCUMENT_TYPE",
       entityId:params.id,

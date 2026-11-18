@@ -51,7 +51,7 @@ export async function POST(request:Request){
        VALUES(?,?,?,?,?,?,?,?,?,'ACTIVE',?,?)`,
       [id,accountId,transactionAt,description,str(b.teller_id,120)||null,str(b.reference_no,120)||null,debit,credit,str(b.notes,1000)||null,user.id,user.id]
     );
-    await auditLog({userId:user.id,action:"BANK_TRANSACTION_CREATE",entityType:"BANK_TRANSACTION",entityId:id,metadata:{accountId,transactionAt,debit,credit,description},request});
+    await auditLog({user,action:"BANK_TRANSACTION_CREATE",entityType:"BANK_TRANSACTION",entityId:id,metadata:{accountId,transactionAt,debit,credit,description},request});
     return NextResponse.json({ok:true,data:{id}},{status:201});
   }catch(e){
     return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Gagal menambah transaksi."},{status:400});

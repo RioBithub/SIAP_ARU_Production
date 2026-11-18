@@ -54,7 +54,7 @@ export async function PATCH(request: Request, { params }: { params: { kind: stri
        ON DUPLICATE KEY UPDATE data_mode=VALUES(data_mode),updated_by=VALUES(updated_by),updated_at=CURRENT_TIMESTAMP`,
       [ledgerType,mode,user.id]
     );
-    await auditLog({ userId:user.id,action:"FINANCE_SOURCE_MODE_UPDATE",entityType:"FINANCE_POSITION",entityId:ledgerType,metadata:{mode},request });
+    await auditLog({ user,action:"FINANCE_SOURCE_MODE_UPDATE",entityType:"FINANCE_POSITION",entityId:ledgerType,metadata:{mode},request });
     return NextResponse.json({ ok:true,data:{mode} });
   } catch (e) {
     return NextResponse.json({ ok:false,error:e instanceof Error?e.message:"Gagal mengubah mode." }, { status:400 });
@@ -102,7 +102,7 @@ export async function PUT(request: Request, { params }: { params: { kind: string
         [id,ledgerType,asOfDate,outstanding,due30Amount,due30Count,a1,a2,a3,a4,notes,user.id,user.id]
       );
     }
-    await auditLog({ userId:user.id,action:"FINANCE_POSITION_SUMMARY_UPDATE",entityType:"FINANCE_POSITION",entityId:id,metadata:{ledger_type:ledgerType,as_of_date:asOfDate,outstanding,overdue,due_30_amount:due30Amount,due_30_count:due30Count},request });
+    await auditLog({ user,action:"FINANCE_POSITION_SUMMARY_UPDATE",entityType:"FINANCE_POSITION",entityId:id,metadata:{ledger_type:ledgerType,as_of_date:asOfDate,outstanding,overdue,due_30_amount:due30Amount,due_30_count:due30Count},request });
     return NextResponse.json({ ok:true,data:{id} });
   } catch (e) {
     return NextResponse.json({ ok:false,error:e instanceof Error?e.message:"Gagal menyimpan posisi." }, { status:400 });

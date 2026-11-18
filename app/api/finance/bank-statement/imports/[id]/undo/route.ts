@@ -29,7 +29,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}){
       );
       return {accountId:String(batch.bank_account_id),removed,originalName:String(batch.original_name)};
     });
-    await auditLog({userId:user.id,action:"BANK_BRI_IMPORT_UNDO",entityType:"BANK_IMPORT",entityId:params.id,request,metadata:{accountId:result.accountId,removedTransactions:result.removed,originalName:result.originalName,reason}});
+    await auditLog({user,action:"BANK_BRI_IMPORT_UNDO",entityType:"BANK_IMPORT",entityId:params.id,request,metadata:{accountId:result.accountId,removedTransactions:result.removed,originalName:result.originalName,reason}});
     return NextResponse.json({ok:true,data:{removed_transactions:result.removed}});
   }catch(e){
     return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Undo import gagal."},{status:400});

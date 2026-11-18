@@ -32,6 +32,7 @@ await bootstrap.end();
 const conn = await mysql.createConnection({ host, port, user, password, database, multipleStatements: true });
 const schema = fs.readFileSync(path.resolve("database/siap_aru_mysql.sql"), "utf8");
 await conn.query(schema);
+await conn.query(fs.readFileSync(path.resolve("database/migrations/2026-11-18-root-admin-account-switch.sql"), "utf8"));
 
 // v1.6.1 Finance: YTD modes, daily adjustment ledger, publish/period control.
 const financeV161Migration = fs.readFileSync(path.resolve("database/migration_v1.6_to_v1.6.1_finance_daily_ytd_adjustments.sql"), "utf8");

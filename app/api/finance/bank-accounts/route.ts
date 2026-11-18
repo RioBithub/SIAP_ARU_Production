@@ -41,7 +41,7 @@ export async function POST(request:Request){
        VALUES(?,?,?,?,?,?,?,?,?,?,?,1,?,?)`,
       [id,bankName,accountName,accountNumber,str(b.product_name,150)||null,(str(b.currency,10)||"IDR").toUpperCase(),str(b.branch_name,180)||null,str(b.unit_name,180)||null,str(b.company_address,500)||null,openingBalance,openingBalanceDate,user.id,user.id]
     );
-    await auditLog({userId:user.id,action:"BANK_ACCOUNT_CREATE",entityType:"BANK_ACCOUNT",entityId:id,metadata:{bankName,accountName,accountNumber,openingBalance,openingBalanceDate},request});
+    await auditLog({user,action:"BANK_ACCOUNT_CREATE",entityType:"BANK_ACCOUNT",entityId:id,metadata:{bankName,accountName,accountNumber,openingBalance,openingBalanceDate},request});
     return NextResponse.json({ok:true,data:{id}},{status:201});
   }catch(e){
     return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Gagal menambah rekening."},{status:400});

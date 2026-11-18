@@ -63,7 +63,7 @@ export async function POST(request: Request,{params}:{params:{id:string}}) {
       );
       return {reversalId,originalId:id,summaryId:String(original.summary_id),ledgerType:String(original.ledger_type),metric:String(original.metric),before:current,after};
     });
-    await auditLog({userId:user.id,action:"FINANCE_POSITION_ADJUSTMENT_REVERSE",entityType:"FINANCE_POSITION_ADJUSTMENT",entityId:result.reversalId,metadata:{...result,note},request});
+    await auditLog({user,action:"FINANCE_POSITION_ADJUSTMENT_REVERSE",entityType:"FINANCE_POSITION_ADJUSTMENT",entityId:result.reversalId,metadata:{...result,note},request});
     return NextResponse.json({ok:true,data:result});
   } catch (e) {
     return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Gagal membatalkan penyesuaian."},{status:400});

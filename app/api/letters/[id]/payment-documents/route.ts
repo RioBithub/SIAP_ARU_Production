@@ -45,7 +45,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
           `INSERT INTO siap_v11_payment_recipients (letter_id,recipient_type) VALUES (?,?)
            ON DUPLICATE KEY UPDATE recipient_type=VALUES(recipient_type)`, [params.id, recipient],
         );
-        await auditLog({ userId: user.id, action: "LETTER_PAYMENT_RECIPIENT", entityType: "LETTER",
+        await auditLog({ user, action: "LETTER_PAYMENT_RECIPIENT", entityType: "LETTER",
           entityId: params.id, metadata: { recipient }, request }, conn);
         return { recipient };
       }
@@ -61,7 +61,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
            ON DUPLICATE KEY UPDATE attachment_id=VALUES(attachment_id)`, [params.id, code, id],
         );
       }
-      await auditLog({ userId: user.id, action: "LETTER_PAYMENT_DOCUMENT", entityType: "LETTER",
+      await auditLog({ user, action: "LETTER_PAYMENT_DOCUMENT", entityType: "LETTER",
         entityId: params.id, metadata: { documentCode: code, attachmentId: id }, request }, conn);
       return { id };
     });

@@ -8,10 +8,12 @@ export async function GET(request:Request){
   if(user.role!=="ROOT_ADMIN") return NextResponse.json({ok:false,error:"Forbidden"},{status:403});
   const url=new URL(request.url); const q=(url.searchParams.get("q")||"").slice(0,100); const like=`%${q}%`;
   const [rows]=await db.query<RowDataPacket[]>(
-    `SELECT a.*,u.name user_name,u.email user_email
+    `SELECT a.*,u.name user_name,u.email user_email,admin.name impersonator_name
      FROM siap_audit_logs a LEFT JOIN siap_users u ON u.id=a.user_id
-     WHERE (?='' OR a.action LIKE ? OR a.entity_type LIKE ? OR u.name LIKE ? OR u.email LIKE ?)
+     LEFT JOIN siap_users admin ON admin.id=JSON_UNQUOTE(JSON_EXTRACT(a.metadata_json,'$.impersonatedByUserId'))
+     WHERE (?='' OR a.action LIKE ? OR a.entity_type LIKE ? OR u.name LIKE ? OR u.email LIKE ?
+       OR admin.name LIKE ? OR admin.email LIKE ?)
      ORDER BY a.created_at DESC LIMIT 500`,
-    [q,like,like,like,like]);
+    [q,like,like,like,like,like,like]);
   return NextResponse.json({ok:true,data:rows});
 }

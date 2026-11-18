@@ -264,7 +264,7 @@ export async function POST(request: Request) {
         [crypto.randomUUID(), id, user.id, action, null, status, comment],
       );
       await auditLog({
-        userId: user.id, action: "LETTER_CREATE", entityType: "LETTER", entityId: id,
+        user, action: "LETTER_CREATE", entityType: "LETTER", entityId: id,
         metadata: { direction, documentType, subject, routingTargetId: target.id, isBackdated,
           customNumberBase: customBase, usesSecretariat, sourceLetterId, sourceDispositionId, workflowV11: v11, requestingUnit: unit },
         request,

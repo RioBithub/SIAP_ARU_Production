@@ -54,7 +54,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}){
     );
 
     await auditLog({
-      userId:user.id,
+      user,
       action:"DISPOSITION_ATTACHMENT_UPLOAD",
       entityType:"ATTACHMENT",
       entityId:id,

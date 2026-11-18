@@ -76,7 +76,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
   if (!source) return error(403, "Lampiran PDF tidak tersedia untuk akun ini.");
   const id = String(source.id);
   const audit = (action: string, metadata: Record<string, unknown>, conn?: PoolConnection) =>
-    auditLog({ userId: user.id, action, entityType: "ATTACHMENT", entityId: id,
+    auditLog({ user, action, entityType: "ATTACHMENT", entityId: id,
       metadata: { letterId: source.letter_id, dispositionId: source.disposition_id, ...metadata }, request }, conn);
   const files: StoredLetterFile[] = [];
   try {

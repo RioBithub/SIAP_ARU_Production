@@ -43,7 +43,7 @@ export async function GET(request:Request,{params}:{params:{id:string}}){
     const data=await readStoredFile(String(a.storage_path),Boolean(a.is_compressed));
 
     await auditLog({
-      userId:user.id,
+      user,
       action:"ATTACHMENT_DOWNLOAD",
       entityType:"ATTACHMENT",
       entityId:params.id,

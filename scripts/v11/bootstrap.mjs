@@ -110,6 +110,9 @@ try {
   const paymentDocuments = await readFile("database/migrations/2026-11-18-v11-payment-documents.sql", "utf8");
   await cn.query(paymentDocuments);
   await cn.query(paymentDocuments);
+  const accountSwitch = await readFile("database/migrations/2026-11-18-root-admin-account-switch.sql", "utf8");
+  await cn.query(accountSwitch);
+  await cn.query(accountSwitch);
   if (before !== await snapshotRows()) throw new Error("Migrasi V11 mengubah baris lama.");
   await cn.execute("INSERT INTO siap_v11_managers (scope,user_id) VALUES ('OPS',?),('KSU',?)",
     [accounts.ops.id, accounts.ksu.id]);

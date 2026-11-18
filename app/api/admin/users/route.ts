@@ -23,7 +23,7 @@ export async function POST(request:Request){
     const id=crypto.randomUUID(); const email=required(b.email,"Email",190).toLowerCase(); const password=required(b.password,"Password",200);
     await db.execute(`INSERT INTO siap_users(id,name,email,password_hash,role,unit_name,is_active) VALUES(?,?,?,?,?,?,1)`,
       [id,required(b.name,"Nama",150),email,await hashPassword(password),role,str(b.unit_name,120)||null]);
-    await auditLog({userId:user.id,action:"USER_CREATE",entityType:"USER",entityId:id,metadata:{email,role},request});
+    await auditLog({user,action:"USER_CREATE",entityType:"USER",entityId:id,metadata:{email,role},request});
     return NextResponse.json({ok:true,data:{id}},{status:201});
   }catch(e){return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Gagal membuat user."},{status:400});}
 }

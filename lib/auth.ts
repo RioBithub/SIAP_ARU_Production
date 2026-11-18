@@ -2,7 +2,7 @@ import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import type { ResultSetHeader, RowDataPacket } from "mysql2";
+import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { db } from "@/lib/db";
 import type { Role, SessionUser } from "@/lib/types";
 
@@ -82,36 +82,60 @@ export async function destroySession() {
   });
 }
 
-export async function getCurrentUser(): Promise<SessionUser | null> {
+export async function getAuthSession(transaction?: PoolConnection) {
   const raw = cookies().get(COOKIE_NAME)?.value;
   if (!raw) return null;
-  const [rows] = await db.query<RowDataPacket[]>(
-    `SELECT u.id,u.name,u.email,u.role,u.unit_name,u.is_active,s.id AS session_id
+  const conn = transaction ?? db;
+  const [rows] = await conn.query<RowDataPacket[]>(
+    `SELECT u.id,u.name,u.email,u.role,u.unit_name,s.id AS session_id,s.impersonated_user_id,
+            target.id AS target_id,target.name AS target_name,target.email AS target_email,
+            target.role AS target_role,target.unit_name AS target_unit_name
      FROM siap_sessions s
-     JOIN siap_users u ON u.id=s.user_id
+     JOIN siap_users u ON u.id=s.user_id AND u.is_active=1
+     LEFT JOIN siap_users target ON target.id=s.impersonated_user_id AND target.is_active=1
      WHERE s.token_hash=? AND s.expires_at>UTC_TIMESTAMP()
-     LIMIT 1`,
+     LIMIT 1${transaction ? " FOR UPDATE" : ""}`,
     [tokenHash(raw)]
   );
   const row = rows[0];
-  if (!row || !row.is_active) return null;
-  await db.execute(`UPDATE siap_sessions SET last_seen_at=UTC_TIMESTAMP() WHERE id=?`, [row.session_id]);
-  return {
+  if (!row) return null;
+  await conn.execute(`UPDATE siap_sessions SET last_seen_at=UTC_TIMESTAMP() WHERE id=?`, [row.session_id]);
+  const owner: SessionUser = {
     id: String(row.id),
     name: String(row.name),
     email: String(row.email),
     role: row.role as Role,
     unit_name: row.unit_name ? String(row.unit_name) : null,
   };
+  const targetId = row.impersonated_user_id ? String(row.impersonated_user_id) : null;
+  let user: SessionUser | null = owner;
+  if (targetId) {
+    // A revoked delegation must never silently execute a stale request as Root Admin.
+    user = owner.role === "ROOT_ADMIN" && row.target_id ? {
+      id: String(row.target_id),
+      name: String(row.target_name),
+      email: String(row.target_email),
+      role: row.target_role as Role,
+      unit_name: row.target_unit_name ? String(row.target_unit_name) : null,
+      impersonatedByUserId: owner.id,
+    } : null;
+  }
+  return { id: String(row.session_id), owner, targetId, user };
+}
+
+export async function getCurrentUser(): Promise<SessionUser | null> {
+  return (await getAuthSession())?.user ?? null;
+}
+
+export async function requireSession() {
+  const session = await getAuthSession();
+  if (!session) redirect("/login");
+  if (!session.user) redirect("/account/restore");
+  return { ...session, user: session.user };
 }
 
 export async function requireUser(): Promise<SessionUser> {
-  const user = await getCurrentUser();
-  if (!user) {
-    redirect("/login");
-    throw new Error("UNREACHABLE");
-  }
-  return user;
+  return (await requireSession()).user;
 }
 
 export async function requireRoles(roles: Role[]): Promise<SessionUser> {

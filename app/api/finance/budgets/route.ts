@@ -26,7 +26,7 @@ export async function POST(request:Request){
        VALUES(?,?,?,?,?,?,?)
        ON DUPLICATE KEY UPDATE amount=VALUES(amount),notes=VALUES(notes),updated_by=VALUES(updated_by)`,
       [id,year,category,val,str(b.notes,500)||null,user.id,user.id]);
-    await auditLog({userId:user.id,action:"BUDGET_UPSERT",entityType:"BUDGET",entityId:id,metadata:{year,category,amount:val},request});
+    await auditLog({user,action:"BUDGET_UPSERT",entityType:"BUDGET",entityId:id,metadata:{year,category,amount:val},request});
     return NextResponse.json({ok:true,data:{id}});
   }catch(e){return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Gagal menyimpan anggaran."},{status:400});}
 }

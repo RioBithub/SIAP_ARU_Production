@@ -375,7 +375,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
       }
 
       await auditLog({
-        userId:user.id,
+        user,
         action:`DISPOSITION_${action}`,
         entityType:"DISPOSITION",
         entityId:params.id,

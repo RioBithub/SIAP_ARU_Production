@@ -104,7 +104,7 @@ export async function PUT(request: Request) {
         [id,year,mode,baseThrough,baseIncome,baseExpense,annualBudget,asOfDate,notes,publishStatus,user.id,user.id]
       );
     }
-    await auditLog({ userId:user.id,action:"FINANCE_YTD_SETTINGS_UPDATE",entityType:"FINANCE_YEARLY_SUMMARY",entityId:id,metadata:{
+    await auditLog({ user,action:"FINANCE_YTD_SETTINGS_UPDATE",entityType:"FINANCE_YEARLY_SUMMARY",entityId:id,metadata:{
       year,
       before: before ? {calculation_mode:before.calculation_mode,base_through_month:before.base_through_month,base_income_amount:Number(before.base_income_amount||0),base_expense_amount:Number(before.base_expense_amount||0),annual_budget_amount:Number(before.annual_budget_amount||0),as_of_date:before.as_of_date,publish_status:before.publish_status} : null,
       after:{calculation_mode:mode,base_through_month:baseThrough,base_income_amount:baseIncome,base_expense_amount:baseExpense,annual_budget_amount:annualBudget,as_of_date:asOfDate,publish_status:publishStatus}

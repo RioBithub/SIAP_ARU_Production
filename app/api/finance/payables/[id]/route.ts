@@ -31,7 +31,7 @@ export async function PATCH(request:Request,{params}:{params:{id:string}}){
       `UPDATE siap_payables SET counterparty=?,invoice_no=?,invoice_date=?,due_date=?,amount=?,paid_amount=?,status=?,notes=?,updated_by=? WHERE id=?`,
       [counterparty,invoiceNo,invoiceDate,dueDate,total,paid,status,notes||null,user.id,params.id]
     );
-    await auditLog({userId:user.id,action:"PAYABLE_UPDATE",entityType:"PAYABLE",entityId:params.id,metadata:{invoice_no:invoiceNo,total,paid,status,due_date:dueDate},request});
+    await auditLog({user,action:"PAYABLE_UPDATE",entityType:"PAYABLE",entityId:params.id,metadata:{invoice_no:invoiceNo,total,paid,status,due_date:dueDate},request});
     return NextResponse.json({ok:true});
   }catch(e){return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Update gagal."},{status:400});}
 }
@@ -42,7 +42,7 @@ export async function DELETE(request:Request,{params}:{params:{id:string}}){
   if(await linkedPayable(params.id)) return NextResponse.json({ok:false,error:"Utang terhubung invoice V11 dan bukti pembayaran."},{status:409});
   const [rows]=await db.query<RowDataPacket[]>(`SELECT * FROM siap_payables WHERE id=? LIMIT 1`,[params.id]);
   if(!rows[0])return NextResponse.json({ok:false,error:"Data tidak ditemukan."},{status:404});
-  await auditLog({userId:user.id,action:"PAYABLE_DELETE",entityType:"PAYABLE",entityId:params.id,metadata:{invoice_no:rows[0].invoice_no,amount:rows[0].amount},request});
+  await auditLog({user,action:"PAYABLE_DELETE",entityType:"PAYABLE",entityId:params.id,metadata:{invoice_no:rows[0].invoice_no,amount:rows[0].amount},request});
   await db.execute(`DELETE FROM siap_payables WHERE id=?`,[params.id]);
   return NextResponse.json({ok:true});
 }

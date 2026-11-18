@@ -30,7 +30,7 @@ export async function POST(request:Request){
        (id,counterparty,invoice_no,invoice_date,due_date,amount,paid_amount,status,notes,created_by,updated_by)
        VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
       [id,required(b.counterparty,"Pihak",255),required(b.invoice_no,"Nomor invoice",120),dateOnly(b.invoice_date,"Tanggal invoice"),dateOnly(b.due_date,"Jatuh tempo"),total,paid,status,str(b.notes,1000)||null,user.id,user.id]);
-    await auditLog({userId:user.id,action:"RECEIVABLE_CREATE",entityType:"RECEIVABLE",entityId:id,metadata:{amount:total,paid},request});
+    await auditLog({user,action:"RECEIVABLE_CREATE",entityType:"RECEIVABLE",entityId:id,metadata:{amount:total,paid},request});
     return NextResponse.json({ok:true,data:{id}},{status:201});
   }catch(e){return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Input gagal."},{status:400});}
 }
