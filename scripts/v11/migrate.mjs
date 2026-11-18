@@ -17,7 +17,8 @@ try {
   if (marker.id !== profile.marker) throw new Error("Marker staging berbeda.");
   await connection.query(await readFile("database/migrations/2026-11-18-v11-notifications.sql", "utf8"));
   await connection.query(await readFile("database/migrations/2026-11-18-v11-mekari-attachments.sql", "utf8"));
-  console.log("Migrasi notifikasi dan Sandbox lampiran staging selesai.");
+  await connection.query(await readFile("database/migrations/2026-11-18-v11-payment-documents.sql", "utf8"));
+  console.log("Migrasi notifikasi, Sandbox lampiran, dan persyaratan pembayaran staging selesai.");
 } finally {
   await connection.end();
 }

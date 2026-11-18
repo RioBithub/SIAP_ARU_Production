@@ -73,3 +73,9 @@ Typecheck dan build lulus pada Node 20.20.2. Skema lokal menerima migrasi tambah
 Tes API dan Chromium di database terisolasi dengan gateway Mekari simulasi memproses dua PDF independen pada satu Surat Keluar dan satu laporan hasil disposisi. API menolak akun yang tidak berwenang, email di luar daftar, dan permintaan tanpa konfirmasi. Prediksi, kedua penandatangan, deduplikasi pengajuan serentak, polling dan unduhan lulus. Persetujuan disposisi dan penerbitan surat tidak berubah ketika PDF Sandbox selesai. UAT-045 lewat undangan Mekari eksternal masih menunggu uji dari VPS.
 
 [Panduan deploy dan uji Sandbox per lampiran](MEKARI-SANDBOX.md)
+
+## Validasi dokumen sebelum Finance
+
+Build dan typecheck lulus pada Node 20.20.2. Regresi lokal mencatat 48 lulus, tanpa kegagalan. Dua skenario Sandbox eksternal dilewati oleh runner lokal.
+
+UAT-019 memblokir instruksi pembayaran Invoice Masuk dengan SPK tertaut ketika dokumen dasar belum lengkap. UAT-024 menunjukkan bahwa Invoice Masuk tanpa referensi wajib memiliki berkas SPK, tanpa SPB. UAT-026 menguji Persekot dengan SPB lama dan syarat rekening vendor, serta Nota Dinas pembayaran nonpersekot tanpa SPB. Finance hanya menerima disposisi setelah Manager KSU membuat instruksi yang memenuhi syarat. Migrasi dapat diterapkan dua kali. Backup dan restore lokal mencocokkan 39 tabel.

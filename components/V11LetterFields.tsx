@@ -1,6 +1,6 @@
 "use client";
 
-import { DELIVERY_METHODS, PERSEKOT_DOCUMENTS, REQUESTING_UNITS, jakartaDate, type RequestingUnit } from "@/lib/v11-workflow";
+import { DELIVERY_METHODS, REQUESTING_UNITS, jakartaDate, type RequestingUnit } from "@/lib/v11-workflow";
 import { formatInvoiceAmount } from "@/lib/business-documents";
 import StatusBadge from "@/components/StatusBadge";
 
@@ -44,16 +44,12 @@ export function ReceiptFields({ initial, register = false, upload = false }: {
   </>;
 }
 
-export function PersekotFields({ checklist = [], proof }: { checklist?: string[]; proof?: string }) {
-  return <fieldset className="field full">
-    <legend>Dokumen Pengajuan Persekot</legend>
-    <p className="muted">SPB PDF wajib saat pengajuan. Tandai dokumen lain yang tersedia sesuai kebutuhan dan unggah pada Lampiran Tambahan.</p>
-    {Object.entries(PERSEKOT_DOCUMENTS).map(([key, name]) =>
-      key === "SPB"
-        ? <label key={key} className="field"><span>{name} {proof ? "(sudah ada)" : "(wajib saat diajukan)"}</span>
-          <input className="input" type="file" name="spb_file" accept=".pdf"/></label>
-        : <label key={key}><input type="checkbox" name="persekot_checklist" value={key} defaultChecked={checklist.includes(key)}/> {name}</label>)}
-  </fieldset>;
+export function PersekotFields({ proof }: { proof?: string }) {
+  return <label className="field full">
+    <span>SPB Persekot {proof ? "(sudah ada)" : "(wajib saat diajukan)"}</span>
+    <input className="input" type="file" name="spb_file" accept=".pdf"/>
+    <small className="hint">Setelah draf tersimpan, unggah dokumen lain melalui Persyaratan sebelum Finance.</small>
+  </label>;
 }
 
 function Evidence({ id, label }: { id?: string; label: string }) {
@@ -78,10 +74,6 @@ export function WorkflowSummary({ data, date }: { data: any; date?: string }) {
       <div className="kpi-row"><span>Bayar di-ACC</span><b>{formatInvoiceAmount(data.payment.paid)}</b></div>
       <div className="kpi-row"><span>Sisa tagihan</span><b>{formatInvoiceAmount(data.payment.outstanding)}</b></div>
     </>}
-    {data.kind === "PERSEKOT" && <div className="kpi-row"><span>Persekot</span><div>
-      {data.persekot_checklist?.map((key: keyof typeof PERSEKOT_DOCUMENTS) => <div key={key}>{PERSEKOT_DOCUMENTS[key]}</div>)}
-      <Evidence id={data.spb_attachment_id} label="Unduh SPB"/>
-    </div></div>}
     {data.signature_provenance && <div className="kpi-row"><span>Sumber Tanda Tangan</span><div>
       {({ MEKARI_MANUAL: "PDF Mekari diunggah manual", MEKARI_MOCK: "Simulasi Mekari", MEKARI_SANDBOX: "Mekari sandbox" } as Record<string, string>)[data.signature_provenance] || data.signature_provenance}
       {" · "}<Evidence id={data.signature_attachment_id} label="PDF final"/>

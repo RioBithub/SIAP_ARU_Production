@@ -4,6 +4,7 @@ import { getBusinessDocumentRow } from "@/lib/business-document-data";
 import { db } from "@/lib/db";
 import { required } from "@/lib/http";
 import { checkedDate, invoiceVerified, officialManager } from "@/lib/v11-data";
+import { requirePaymentDocuments } from "@/lib/v11-payment-documents";
 import { jakartaDate } from "@/lib/v11-workflow";
 
 type Queryable = Pick<PoolConnection, "query">;
@@ -46,6 +47,7 @@ export async function preparePaymentTask(conn: PoolConnection, letter: RowDataPa
       !await invoiceVerified(conn, letter.id, workflow.invoice_revision, letter.routing_target_user_id)) {
     throw new Error("Invoice harus terverifikasi dan disetujui sebelum pembayaran.");
   }
+  await requirePaymentDocuments(conn, letter.id, workflow, letter.document_type);
   const [active] = await conn.query<RowDataPacket[]>(
     `SELECT 1 FROM siap_dispositions d JOIN siap_v11_dispositions v ON v.disposition_id=d.id
      WHERE d.letter_id=? AND v.purpose='INVOICE_PAYMENT'

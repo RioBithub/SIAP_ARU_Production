@@ -94,6 +94,8 @@ try {
   const verificationBadge=managerPage.getByRole("dialog").locator(".kpi-row").filter({hasText:"Verifikasi revisi"});
   await managerPage.goto(new URL(invoice.href,base).href);
   await verificationBadge.getByText("Menunggu Verifikasi",{exact:true}).waitFor();
+  await managerPage.getByRole("heading",{name:"Persyaratan sebelum Finance",exact:true}).waitFor();
+  await managerPage.getByText("Berkas persyaratan lengkap.",{exact:true}).waitFor();
   assert(await managerPage.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
   await managerPage.screenshot({path:path.join(out,"01-invoice-menunggu.png")});
   await managerPage.getByRole("button",{name:"Tutup dialog",exact:true}).click();

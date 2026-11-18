@@ -11,7 +11,7 @@ export async function notifyWorkflow(conn: Connection, event: {
   if (event.entityType === "LETTER" &&
       /^LETTER_(CREATE|REGISTER_INCOMING|SUBMIT|APPROVE|APPROVE_FINAL|RETURN|RETURN_PREVIOUS|REJECT|ISSUE|MARK_SENT)$/.test(event.action)) {
     const [rows] = await conn.query<RowDataPacket[]>(
-      "SELECT l.* FROM siap_letters l JOIN siap_v11_letters v ON v.letter_id=l.id WHERE l.id=?", [event.entityId],
+      "SELECT l.*,v.kind AS workflow_kind FROM siap_letters l JOIN siap_v11_letters v ON v.letter_id=l.id WHERE l.id=?", [event.entityId],
     );
     const letter = rows[0];
     if (!letter) return;
@@ -19,11 +19,11 @@ export async function notifyWorkflow(conn: Connection, event: {
       `SELECT u.id FROM siap_users u WHERE u.is_active=1 AND (
         u.id=? OR (? IS NULL AND u.role=?)
         OR (? IN ('APPROVED','REJECTED','ISSUED') AND u.id=?)
-        OR (?='APPROVED' AND ?='INVOICE_MASUK' AND EXISTS (
+        OR (?='APPROVED' AND (?='INVOICE_MASUK' OR ? IN ('PERSEKOT','PAYMENT_REQUEST')) AND EXISTS (
           SELECT 1 FROM siap_v11_managers m WHERE m.scope='KSU' AND m.user_id=u.id
         )))`,
       [letter.current_owner_user_id, letter.current_owner_user_id, letter.current_role,
-        letter.status, letter.created_by, letter.status, letter.document_type],
+        letter.status, letter.created_by, letter.status, letter.document_type, letter.workflow_kind],
     );
     for (const user of users) recipients.add(String(user.id));
     title = ({

@@ -1,3 +1,4 @@
+import { paymentKind, requirePaymentDocuments } from "@/lib/v11-payment-documents";
 import crypto from "crypto";
 import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
@@ -92,8 +93,13 @@ export async function POST(request:Request) {
       if (!letter) return null;
       const workflow = await v11Letter(letterId, conn);
       const strict = Boolean(workflow) || v11Enabled();
-      if (purpose !== "GENERAL" && (!workflow || letter.document_type !== INVOICE_INCOMING)) {
-        throw new Error("Tujuan verifikasi atau pembayaran hanya berlaku pada Invoice Masuk V11.");
+      const requestKind = paymentKind(workflow, letter.document_type);
+      const notePayment = requestKind === "PERSEKOT" || requestKind === "PAYMENT_REQUEST";
+      if ((purpose === "INVOICE_VERIFY" || purpose === "INVOICE_PAYMENT") && requestKind !== "INVOICE") {
+        throw new Error("Tujuan verifikasi atau pembayaran invoice hanya berlaku pada Invoice Masuk V11.");
+      }
+      if (purpose === "REQUEST_PAYMENT" && !notePayment) {
+        throw new Error("Pilih Nota Dinas pengajuan pembayaran atau persekot.");
       }
 
       const letterStatus=String(letter.status);
@@ -160,6 +166,23 @@ export async function POST(request:Request) {
           throw new Error("Manager Keuangan menugaskan pembayaran langsung kepada Finance.");
         }
         await preparePaymentTask(conn, letter, workflow!, user.id);
+      }
+      if (notePayment && target.role === "FINANCE" && purpose !== "REQUEST_PAYMENT") {
+        throw new Error("Pilih instruksi pembayaran pengajuan untuk menugaskan Finance.");
+      }
+      if (purpose === "REQUEST_PAYMENT") {
+        if (parentId || user.role !== "MANAGER" || target.role !== "FINANCE" || letterStatus !== "APPROVED") {
+          throw new Error("Manager KSU menugaskan Nota Dinas yang telah disetujui langsung kepada Finance.");
+        }
+        const manager = await officialManager(conn, user.id);
+        if (manager.scope !== "KSU") throw new Error("Instruksi bayar hanya dapat dibuat Manager KSU.");
+        await requirePaymentDocuments(conn, letterId, workflow!, letter.document_type);
+        const [prior] = await conn.query<RowDataPacket[]>(
+          `SELECT 1 FROM siap_dispositions d JOIN siap_v11_dispositions v ON v.disposition_id=d.id
+           WHERE d.letter_id=? AND v.purpose='REQUEST_PAYMENT' AND d.status NOT IN ('RETURNED','CANCELLED') LIMIT 1`,
+          [letterId],
+        );
+        if (prior.length) throw new Error("Sudah ada instruksi pembayaran untuk pengajuan ini.");
       }
       const taskVisibility = purpose !== "GENERAL" ? "PRIVATE"
         : workflow && visibility === "PUBLIC" ? "ROUTE" : visibility;

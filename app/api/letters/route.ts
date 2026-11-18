@@ -143,7 +143,10 @@ export async function POST(request: Request) {
       throw new Error("Unggah dokumen asli untuk menyerahkan Surat Masuk.");
     }
     const persekot = body.persekot === true;
-    if (persekot && (!v11 || direction !== "INTERNAL")) throw new Error("Persekot tersedia pada Nota Dinas V11.");
+    const paymentRequest = body.payment_request === true;
+    if ((persekot || paymentRequest) && (!v11 || direction !== "INTERNAL" || (persekot && paymentRequest))) {
+      throw new Error("Pilih satu jenis pengajuan pembayaran yang sesuai pada Nota Dinas V11.");
+    }
     if (spbFile && !persekot) throw new Error("Berkas SPB hanya diperuntukkan bagi pengajuan persekot.");
     if (receiptProof && (!v11 || direction !== "INCOMING")) throw new Error("Bukti penerimaan hanya untuk Surat Masuk V11.");
 
@@ -241,7 +244,7 @@ export async function POST(request: Request) {
            (letter_id,kind,requesting_unit,received_time,delivery_method,delivered_by,received_by,
             receipt_note,receipt_attachment_id,invoice_key,persekot_checklist,spb_attachment_id)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-          [id, persekot ? "PERSEKOT" : "CORRESPONDENCE", unit, receipt?.receivedTime ?? null,
+          [id, persekot ? "PERSEKOT" : paymentRequest ? "PAYMENT_REQUEST" : "CORRESPONDENCE", unit, receipt?.receivedTime ?? null,
             receipt?.method ?? null, receipt?.deliveredBy ?? null, receipt?.receivedBy ?? null,
             receipt?.note ?? null, receiptId, documentType === INVOICE_INCOMING ? invoiceKey(sender!, externalNumber!) : null,
             persekot ? JSON.stringify(persekotChecklist(body.persekot_checklist)) : null, spbId],
