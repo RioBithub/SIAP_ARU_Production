@@ -2,6 +2,10 @@
 
 import { FormEvent,useEffect,useMemo,useState } from "react";
 import type { SessionUser } from "@/lib/types";
+import AttachmentActions from "@/components/AttachmentActions";
+import PaymentDocumentsPanel from "@/components/PaymentDocumentsPanel";
+import SearchableSelect from "@/components/SearchableSelect";
+import { dispositionDeadline, formatWorkflowTime } from "@/lib/workflow-time";
 import AttachmentSandbox from "@/components/AttachmentSandbox";
 import Modal from "@/components/Modal";
 import StatusBadge from "@/components/StatusBadge";
@@ -104,6 +108,11 @@ export default function DispositionsClient({user}:{user:SessionUser}){
   const [purpose,setPurpose]=useState<TaskPurpose>("GENERAL");
   const [letters,setLetters]=useState<any[]>([]);
   const [selectedLetterId,setSelectedLetterId]=useState("");
+  const [pinnedLetter,setPinnedLetter]=useState<any>(null);
+  const [letterQuery,setLetterQuery]=useState("");
+  const [letterLoading,setLetterLoading]=useState(false);
+  const [letterError,setLetterError]=useState("");
+  const [delegation,setDelegation]=useState<string[]|null>(null);
   const [parent,setParent]=useState<{id:string;subject:string;result_requirement:ResultRequirement}|null>(null);
   const [open,setOpen]=useState(false);
   const [error,setError]=useState("");
@@ -124,17 +133,17 @@ export default function DispositionsClient({user}:{user:SessionUser}){
     try{
       setError("");
 
-      const [dr,ur,lr]=await Promise.all([
+      const [dr,ur,sr]=await Promise.all([
         fetch("/api/dispositions",{cache:"no-store"}),
         fetch("/api/users/lookup",{cache:"no-store"}),
-        fetch("/api/letters?limit=500",{cache:"no-store"})
+        user.role==="MANAGER"?fetch("/api/admin/correspondence-settings",{cache:"no-store"}):Promise.resolve(null),
       ]);
 
-      const [d,u,l]=await Promise.all([dr.json(),ur.json(),lr.json()]);
+      const [d,u,settings]=await Promise.all([dr.json(),ur.json(),sr?.json()]);
 
       if(d.ok) setRows(d.data); else setError(d.error||"Gagal memuat disposisi.");
       if(u.ok) { setUsers(u.data); setV11Enabled(Boolean(u.v11Enabled)); }
-      if(l.ok) setLetters(l.data);
+      if(settings?.ok) setDelegation(settings.data.delegation);
 
     }catch(e){
       setError(e instanceof Error?e.message:"Gagal memuat data disposisi.");
@@ -155,6 +164,35 @@ export default function DispositionsClient({user}:{user:SessionUser}){
     void load();
   },[]);
 
+  useEffect(()=>{
+    if(!open) return;
+    const controller=new AbortController();
+    setLetterLoading(true);
+    setLetterError("");
+    const timer=window.setTimeout(()=>{
+      const params=new URLSearchParams({for_disposition:"1",limit:"60",q:letterQuery});
+      void fetch("/api/letters?"+params,{signal:controller.signal,cache:"no-store"})
+        .then(async response=>{
+          const result=await response.json();
+          if(!response.ok) throw new Error(result.error||"Dokumen belum dapat dimuat.");
+          if(!controller.signal.aborted) setLetters(result.data);
+        }).catch(error=>{
+          if(!controller.signal.aborted) { setLetters([]);setLetterError(error.message); }
+        }).finally(()=>{if(!controller.signal.aborted)setLetterLoading(false);});
+    },letterQuery?180:0);
+    return ()=>{window.clearTimeout(timer);controller.abort();};
+  },[open,letterQuery]);
+
+  useEffect(()=>{
+    if(!open||!selectedLetterId||pinnedLetter?.id===selectedLetterId) return;
+    const controller=new AbortController();
+    void fetch("/api/letters?limit=1&id="+encodeURIComponent(selectedLetterId),{signal:controller.signal})
+      .then(response=>response.json()).then(result=>{
+        if(!controller.signal.aborted&&result.ok&&result.data[0])setPinnedLetter(result.data[0]);
+      }).catch(()=>{});
+    return ()=>controller.abort();
+  },[open,selectedLetterId,pinnedLetter?.id]);
+
   const filtered=useMemo(()=>rows.filter(d=>{
     const hay=[
       d.subject,d.letter_number,d.external_number,d.instruction,
@@ -164,7 +202,10 @@ export default function DispositionsClient({user}:{user:SessionUser}){
     return (!q||hay.includes(q.toLowerCase()))&&(!status||d.status===status);
   }),[rows,q,status]);
 
-  const selectedLetter=letters.find(letter=>letter.id===selectedLetterId);
+  const selectedLetter=letters.find(letter=>letter.id===selectedLetterId) ||
+    (pinnedLetter?.id===selectedLetterId?pinnedLetter:undefined);
+  const letterChoices=selectedLetter&&!letters.some(letter=>letter.id===selectedLetterId)
+    ?[selectedLetter,...letters]:letters;
   const strict=Boolean(v11Enabled||selectedLetter?.v11_kind);
   const scope=users.find(account=>account.id===user.id)?.v11_scope;
   const invoice=selectedLetter?.v11_kind&&selectedLetter.document_type===INVOICE_INCOMING;
@@ -182,7 +223,11 @@ export default function DispositionsClient({user}:{user:SessionUser}){
     if(account.id===user.id||!allowed.includes(account.role)) return false;
     if(strict&&account.role==="MANAGER"&&!account.v11_scope) return false;
     const accountScope=account.role==="FINANCE"?"KSU":unitManagerScope(staffUnit(account.unit_name));
-    if(strict&&user.role==="MANAGER"&&accountScope&&accountScope!==scope) return false;
+    if(user.role==="MANAGER"){
+      if(purpose==="GENERAL"&&delegation!==null){
+        if(!delegation.includes(account.id)) return false;
+      } else if(strict&&accountScope&&accountScope!==scope) return false;
+    }
     if(purpose==="INVOICE_VERIFY") return account.role==="STAFF"&&staffCanVerify(selectedLetter?.v11_unit,account.unit_name);
     if(purpose==="INVOICE_PAYMENT"||purpose==="REQUEST_PAYMENT") return account.role==="FINANCE";
     return !(invoice||notePayment)||account.role!=="FINANCE";
@@ -415,7 +460,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
        (user.role==="ROOT_ADMIN" || String(d.to_user_id)===String(user.id))){
       out.push(
         <button key="return-task" className="btn btn-secondary" onClick={()=>startProcess(d,"RETURN_TASK","Kembalikan Disposisi",true,"danger")}>
-          Return
+          Kembalikan Disposisi
         </button>
       );
     }
@@ -514,7 +559,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
                 <td><b>{d.current_owner_name||d.to_name}</b></td>
                 <td style={{maxWidth:260}}>{d.instruction}</td>
                 <td><StatusBadge status={d.status}/></td>
-                <td>{d.due_date?String(d.due_date).slice(0,10):"-"}</td>
+                <td>{dispositionDeadline(d.due_date,d.due_time)}</td>
 
                 <td>
                   <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
@@ -543,7 +588,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
         subtitle="Pilih dokumen dan penanggung jawab sesuai tahap review."
         onClose={()=>!createBusy&&setOpen(false)}
       >
-        <form onSubmit={create} className="form-grid">
+        <form onSubmit={create} className="form-grid workflow-form">
           {parent&&<div className="field full notice">
             <b>Delegasi dari</b> {parent.subject}
             <input type="hidden" name="parent_id" value={parent.id}/>
@@ -551,18 +596,25 @@ export default function DispositionsClient({user}:{user:SessionUser}){
           </div>}
 
           <div className="field full">
-            <label>Dokumen</label>
-            <select
+            <label htmlFor="disposition-letter">Dokumen</label>
+            {!parent&&<input className="input" type="search" aria-label="Cari dokumen disposisi"
+              placeholder="Cari nomor, perihal, pengirim, atau tujuan…" value={letterQuery}
+              onChange={e=>setLetterQuery(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")e.preventDefault();}}/>}
+            {letterError&&<span className="hint" role="alert">{letterError}</span>}
+            <select id="disposition-letter"
               className="select"
               name="letter_id"
               required
               value={selectedLetterId}
               disabled={Boolean(parent)}
-              onChange={e=>{setSelectedLetterId(e.target.value);setPurpose("GENERAL");}}
+              onChange={e=>{
+                setSelectedLetterId(e.target.value);setPurpose("GENERAL");
+                setPinnedLetter(letterChoices.find(letter=>letter.id===e.target.value)||null);
+              }}
             >
-              <option value="">Pilih dokumen...</option>
+              <option value="">{letterLoading?"Mencari dokumen…":letterChoices.length?"Pilih dokumen…":"Tidak ada dokumen yang cocok"}</option>
 
-              {letters.filter(canDisposeLetter).map(l=>
+              {letterChoices.filter(canDisposeLetter).map(l=>
                 <option value={l.id} key={l.id}>
                   {l.direction==="INCOMING"
                     ?"Surat Masuk"
@@ -580,7 +632,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
 
           {(invoice||notePayment)&&<label className="field">
             <span>Tujuan Tugas</span>
-            <select className="select" name="purpose" value={purpose} onChange={e=>setPurpose(e.target.value as TaskPurpose)}>
+            <select className="select" name="purpose" required value={purpose} onChange={e=>setPurpose(e.target.value as TaskPurpose)}>
               <option value="GENERAL">{TASK_PURPOSES.GENERAL}</option>
               {invoice&&user.role==="MANAGER"&&selectedLetter.status==="MANAGER_REVIEW"&&selectedLetter.current_owner_user_id===user.id&&
                 <option value="INVOICE_VERIFY">{TASK_PURPOSES.INVOICE_VERIFY}</option>}
@@ -590,20 +642,14 @@ export default function DispositionsClient({user}:{user:SessionUser}){
             </select>
           </label>}
           <div className="field">
-            <label>Diteruskan Kepada</label>
-            <select aria-label="Diteruskan kepada" key={purpose} className="select" name="to_user_id" required>
-              <option value="">Pilih PIC...</option>
-              {targetUsers.map(u=>
-                <option key={u.id} value={u.id}>
-                  {u.name} — {u.unit_name||u.role}
-                </option>
-              )}
-            </select>
+            <SearchableSelect key={purpose} label="Diteruskan Kepada" ariaLabel="Diteruskan kepada" name="to_user_id" required
+              options={targetUsers.map(u=>({value:u.id,label:u.name+" — "+(u.unit_name||u.role),search:u.email}))}
+              placeholder="Pilih PIC…" sizeThreshold={3}/>
           </div>
 
           <div className="field">
-            <label>Visibility</label>
-            <select className="select" name="visibility" defaultValue="ROUTE">
+            <label>Visibilitas</label>
+            <select className="select" name="visibility" defaultValue="ROUTE" required>
               <option value="PUBLIC">PUBLIC — semua user persuratan</option>
               <option value="ROUTE">ROUTE — pihak dalam jalur</option>
               <option value="PRIVATE">PRIVATE — pihak terkait</option>
@@ -612,7 +658,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
 
           <div className="field">
             <label>Prioritas</label>
-            <select className="select" name="priority" defaultValue="NORMAL">
+            <select className="select" name="priority" defaultValue="NORMAL" required>
               <option value="NORMAL">Normal</option>
               <option value="HIGH">High</option>
               <option value="URGENT">Urgent</option>
@@ -620,14 +666,19 @@ export default function DispositionsClient({user}:{user:SessionUser}){
           </div>
 
           <div className="field">
-            <label>Target Selesai</label>
-            <input className="input" type="date" name="due_date"/>
+            <label htmlFor="disposition-due-date">Tanggal Target Selesai</label>
+            <input id="disposition-due-date" className="input" type="date" name="due_date"/>
+          </div>
+          <div className="field">
+            <label htmlFor="disposition-due-time">Jam Target Selesai (WIB)</label>
+            <input id="disposition-due-time" className="input" type="time" name="due_time"/>
+            <span className="hint">Isi tanggal jika menetapkan jam. Tanpa jam, tenggat berlaku sampai akhir hari.</span>
           </div>
 
           <div className="field">
             <label>Hasil yang Diminta</label>
             {purpose!=="GENERAL" ? <span className="input">Ringkasan dan bukti PDF atau gambar</span> :
-            <select aria-label="Hasil yang diminta" className="select" name="result_requirement" defaultValue={parent?.result_requirement||"SUMMARY"}>
+            <select aria-label="Hasil yang diminta" className="select" name="result_requirement" required defaultValue={parent?.result_requirement||"SUMMARY"}>
               {Object.entries(RESULT_REQUIREMENTS).map(([value,label])=><option key={value} value={value}>{label}</option>)}
             </select>}
           </div>
@@ -707,7 +758,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
 
               <div className="kpi-row">
                 <span>Deadline</span>
-                <b>{detail.disposition.due_date?String(detail.disposition.due_date).slice(0,10):"-"}</b>
+                <b>{dispositionDeadline(detail.disposition.due_date,detail.disposition.due_time)}</b>
               </div>
             </div>
 
@@ -739,6 +790,9 @@ export default function DispositionsClient({user}:{user:SessionUser}){
               </>}
             </div>
 
+            {detail.paymentDocuments&&<PaymentDocumentsPanel id={detail.disposition.letter_id}
+              data={{...detail.paymentDocuments,editable:false}}/>}
+
             {detail.sandboxSigning && <AttachmentSandbox key={detail.disposition.id}
               files={detail.attachments.filter((file:any) =>
                 ["ORIGINAL","ADDITIONAL"].includes(file.attachment_kind) ||
@@ -765,9 +819,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
                       </span>
                     </div>
 
-                    <a className="btn btn-secondary" href={`/api/attachments/${a.id}`} download>
-                      ↓ Unduh
-                    </a>
+                    <AttachmentActions id={a.id} name={a.original_name}/>
                   </div>
                 )}
 
@@ -810,7 +862,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
                   <div className="timeline-dot">{i+1}</div>
 
                   <div style={{width:"100%"}}>
-                    <b>{actionLabel(a.action)} • {a.actor_name}</b>
+                    <b>{actionLabel(a.action)} • {a.actor_name}</b><p className="muted">{formatWorkflowTime(a.created_at)}</p>
                     <p>
                       {a.from_status?`${a.from_status} → ${a.to_status}`:a.to_status}
                       {a.note?` • ${a.note}`:""}
@@ -832,9 +884,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
                               </span>
                             </div>
 
-                            <a className="btn btn-secondary" href={`/api/attachments/${f.id}`} download>
-                              ↓ Unduh
-                            </a>
+                            <AttachmentActions id={f.id} name={f.original_name}/>
                           </div>
                         )}
                       </div>
@@ -854,7 +904,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
         subtitle="Catatan dan lampiran proses akan masuk ke riwayat dan Audit Log."
         onClose={()=>!processBusy&&setProcess(null)}
       >
-        <form className="form-grid" onSubmit={submitProcess}>
+        <form className="form-grid workflow-form" onSubmit={submitProcess}>
           {error&&<div className="field full error" role="alert">{error}</div>}
           <div className="field full">
             <label>
@@ -907,7 +957,10 @@ export default function DispositionsClient({user}:{user:SessionUser}){
               {detail.payments.filter((item:any)=>item.status==="PENDING").map((item:any)=><div key={item.id}>
                 <b>{formatInvoiceAmount(item.amount)} · {String(item.payment_date).slice(0,10)}</b>
                 <div>{item.payee} · {item.recipient_account} · {item.reference}</div>
-                <div>{item.bookkeeping_note}</div><a href={"/api/attachments/"+item.evidence_id} download>Bukti pembayaran</a>
+                <div>{item.bookkeeping_note}</div>{item.evidence_id&&
+                  <AttachmentActions id={item.evidence_id}
+                    name={detail.attachments.find((file:any)=>file.id===item.evidence_id)?.original_name||"Bukti pembayaran.pdf"}
+                    downloadLabel="Unduh bukti pembayaran"/>}
               </div>)}
             </div>}
           <div className="field full modal-actions">

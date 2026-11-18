@@ -30,7 +30,7 @@ export async function paymentDocuments(conn: Queryable, letterId: string, workfl
   const recipient = target ?? (kind === "INVOICE" ? "VENDOR" : null);
 
   const [links] = kind === "INVOICE" ? await conn.query<RowDataPacket[]>(
-    `SELECT 1 FROM siap_business_documents b JOIN siap_letters spk ON spk.id=b.invoice_spk_id
+    `SELECT 1 FROM siap_business_documents b JOIN siap_letters spk ON spk.id=b.invoice_spk_id AND spk.deleted_at IS NULL
      WHERE b.letter_id=? AND spk.document_type IN (?,?)
        AND spk.status NOT IN ('CANCELLED','REJECTED')
        AND EXISTS (

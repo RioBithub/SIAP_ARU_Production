@@ -3,9 +3,9 @@ import { db } from "@/lib/db";
 import type { SessionUser } from "@/lib/types";
 
 export function letterAccess(user: SessionUser) {
-  if (user.role === "ROOT_ADMIN") return { clause: "1=1", params: [] };
+  if (user.role === "ROOT_ADMIN") return { clause: "l.deleted_at IS NULL", params: [] };
   return {
-    clause: `(
+    clause: `(l.deleted_at IS NULL AND (
       l.is_public=1 OR l.created_by=? OR l.current_owner_user_id=?
       OR (l.current_owner_user_id IS NULL AND l.\`current_role\`=?)
       OR EXISTS (SELECT 1 FROM siap_dispositions d WHERE d.letter_id=l.id
@@ -25,7 +25,7 @@ export function letterAccess(user: SessionUser) {
               OR (l.direction='INTERNAL' AND v.kind IN ('PERSEKOT','PAYMENT_REQUEST')))
         ))
       OR EXISTS (SELECT 1 FROM siap_letter_actions a WHERE a.letter_id=l.id AND a.actor_user_id=?)
-    )`,
+    ))`,
     params: [user.id, user.id, user.role, user.id, user.id, user.id,
       user.id, user.id, user.id, user.id, user.id, user.role, user.id],
   };

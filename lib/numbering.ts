@@ -26,6 +26,54 @@ function nextVariant(rows: RowDataPacket[], seqBase: number) {
   return Math.max(...same.map(r => Number(r.variant))) + 1;
 }
 
+function numberPlan(rows: RowDataPacket[], pattern: string, sequenceStart: number,
+  letterDate: string, documentType: string, requestedSeqBase?: number | null) {
+  const isBackdated = letterDate < new Date().toISOString().slice(0, 10);
+  const highestBase = rows.reduce((max, row) => Math.max(max, Number(row.seq_base)), 0);
+  let seqBase: number;
+  let variant = 0;
+
+  if (requestedSeqBase != null) {
+    if (!Number.isInteger(requestedSeqBase) || requestedSeqBase < 1) throw new Error("Nomor dasar custom harus berupa angka bulat minimal 1.");
+    seqBase = requestedSeqBase;
+    variant = nextVariant(rows, seqBase);
+  } else if (!rows.length) {
+    seqBase = sequenceStart;
+  } else if (!isBackdated) {
+    seqBase = Math.max(sequenceStart, highestBase + 1);
+  } else {
+    // Historical insertion: keep existing numbering intact, use .1/.2 if the
+    // historical base already exists.
+    const candidates = rows.filter(r => String(r.letter_date) <= letterDate);
+    if (candidates.length) {
+      seqBase = Math.max(...candidates.map(r => Number(r.seq_base)));
+    } else {
+      seqBase = sequenceStart;
+    }
+    variant = nextVariant(rows, seqBase);
+  }
+
+  // Defensive collision loop. Usually unique slot already guarantees this,
+  // but this keeps custom/backdate behavior deterministic.
+  while (rows.some(r => Number(r.seq_base)===seqBase && Number(r.variant)===variant)) variant += 1;
+
+  const rendered = renderPattern(pattern, seqBase, variant, letterDate, documentType);
+  return { rendered, seqBase, variant, highestBase, displayNumber: variant > 0 ? `${seqBase}.${variant}` : String(seqBase) };
+}
+
+export async function previewOutgoingNumber(formatId: string, date: string, customBase?: number) {
+  const year = Number(date.slice(0, 4));
+  const [rows] = await db.query<RowDataPacket[]>(
+    `SELECT f.pattern, f.document_type, f.sequence_start, n.seq_base, n.variant,
+            DATE_FORMAT(n.letter_date,'%Y-%m-%d') AS letter_date
+     FROM siap_number_formats f LEFT JOIN siap_number_ledger n ON n.format_id=f.id AND n.number_year=?
+     WHERE f.id=? AND f.is_active=1`, [year, formatId],
+  );
+  if (!rows.length) throw new Error("Format nomor surat tidak ditemukan atau tidak aktif.");
+  return { year, ...numberPlan(rows.filter(row => row.seq_base !== null), rows[0].pattern,
+    Math.max(1, Number(rows[0].sequence_start || 1)), date, rows[0].document_type, customBase) };
+}
+
 /**
  * Numbering policy:
  * - Each number format is an independent numbering series.
@@ -48,8 +96,6 @@ export async function reserveOutgoingNumber(params: {
 }) {
   const { conn, formatId, letterId, letterDate, userId, documentType, requestedSeqBase } = params;
   const year = Number(letterDate.slice(0, 4));
-  const today = new Date().toISOString().slice(0,10);
-  const isBackdated = letterDate < today;
 
   // Serialize generation inside the current transaction for this format.
   const [formats] = await conn.query<RowDataPacket[]>(
@@ -70,35 +116,8 @@ export async function reserveOutgoingNumber(params: {
     [formatId, year]
   );
 
-  let seqBase: number;
-  let variant = 0;
-
-  if (requestedSeqBase != null) {
-    if (!Number.isInteger(requestedSeqBase) || requestedSeqBase < 1) throw new Error("Nomor dasar custom harus berupa angka bulat minimal 1.");
-    seqBase = requestedSeqBase;
-    variant = nextVariant(rows, seqBase);
-  } else if (!rows.length) {
-    seqBase = sequenceStart;
-  } else if (!isBackdated) {
-    const maxBase = Math.max(...rows.map(r => Number(r.seq_base)));
-    seqBase = Math.max(sequenceStart, maxBase + 1);
-  } else {
-    // Historical insertion: keep existing numbering intact, use .1/.2 if the
-    // historical base already exists.
-    const candidates = rows.filter(r => String(r.letter_date) <= letterDate);
-    if (candidates.length) {
-      seqBase = Math.max(...candidates.map(r => Number(r.seq_base)));
-    } else {
-      seqBase = sequenceStart;
-    }
-    variant = nextVariant(rows, seqBase);
-  }
-
-  // Defensive collision loop. Usually unique slot already guarantees this,
-  // but this keeps custom/backdate behavior deterministic.
-  while (rows.some(r => Number(r.seq_base)===seqBase && Number(r.variant)===variant)) variant += 1;
-
-  const rendered = renderPattern(pattern, seqBase, variant, letterDate, documentType);
+  const plan = numberPlan(rows, pattern, sequenceStart, letterDate, documentType, requestedSeqBase);
+  const { seqBase, variant, rendered } = plan;
   const ledgerId = crypto.randomUUID();
   await conn.execute(
     `INSERT INTO siap_number_ledger
@@ -106,7 +125,7 @@ export async function reserveOutgoingNumber(params: {
      VALUES (?,?,?,?,?,?,?,?, 'RESERVED', ?)`,
     [ledgerId, formatId, letterId, year, letterDate, seqBase, variant, rendered, userId]
   );
-  return { ledgerId, rendered, seqBase, variant, displayNumber: variant > 0 ? `${seqBase}.${variant}` : String(seqBase) };
+  return { ledgerId, ...plan };
 }
 
 export async function cancelLedgerForLetter(letterId: string, reason: string, conn: Pick<PoolConnection, "execute"> = db) {

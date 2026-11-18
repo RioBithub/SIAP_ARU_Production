@@ -4,7 +4,7 @@ Sandbox dapat digunakan berulang kali pada PDF yang layak di Surat Masuk, Surat 
 
 ## Menyiapkan versi di VPS
 
-1. Setelah penerapan disetujui, cocokkan commit rilis pada `main`, buat backup database dan penyimpanan lampiran, lalu ikuti [langkah deployment](STAGING.md#penerapan-yang-perlu-ditinjau-operator). Jalankan migrasi V11, notifikasi, dan Sandbox lampiran pada database SIAP ARU. Verifikasi Manager OPS dan KSU serta akun Sekretariat yang aktif.
+1. Setelah penerapan disetujui, cocokkan commit rilis pada `main`, buat backup database dan penyimpanan lampiran, lalu ikuti [langkah deployment](STAGING.md#penerapan-yang-perlu-ditinjau-operator). Jalankan migrasi V11, notifikasi, Sandbox lampiran, dokumen pembayaran, dan persuratan pada database SIAP ARU. Verifikasi Manager OPS dan KSU serta akun Sekretariat yang aktif.
 2. Di konfigurasi privat service `siap-aru`, isi variabel berikut. `SIAP_V11_ENABLED=1` mengaktifkan alur V11 pada dokumen baru. Integrasi Sandbox juga dapat digunakan pada lampiran lama yang memenuhi akses dan format.
 3. Build, restart PM2, cek `/api/health` dan buka detail surat serta disposisi dengan akun penguji.
 
@@ -12,7 +12,6 @@ Sandbox dapat digunakan berulang kali pada PDF yang layak di Surat Masuk, Surat 
 | --- | --- |
 | `SIAP_V11_MEKARI_MODE` | `sandbox` |
 | `SIAP_V11_MEKARI_ATTACHMENT_SANDBOX` | `1` |
-| `SIAP_V11_MEKARI_TEST_RECIPIENTS` | Email penguji yang disetujui, dipisahkan koma |
 | `SIAP_V11_MEKARI_ALLOW_SEND` | `1` untuk mengaktifkan pengiriman undangan Sandbox |
 | `MEKARI_CLIENT_ID` | Client ID HMAC Sandbox yang lulus smoke test |
 | `MEKARI_CLIENT_SECRET` | Client Secret HMAC Sandbox |
@@ -32,7 +31,7 @@ npm run typecheck
 npm run build
 ```
 
-Sebelum restart, jalankan tiga file SQL yang tercantum di [langkah deployment](STAGING.md#penerapan-yang-perlu-ditinjau-operator) pada skema `aru_siap` memakai akun admin database. Gunakan prompt password atau konfigurasi privat administrator, sesuai metode autentikasi VPS. Jika build gagal, pertahankan proses berjalan dan selesaikan error sebelum restart.
+Sebelum restart, jalankan file SQL yang tercantum di [langkah deployment](STAGING.md#penerapan-yang-perlu-ditinjau-operator) pada skema `aru_siap` memakai akun admin database. Gunakan prompt password atau konfigurasi privat administrator, sesuai metode autentikasi VPS. Jika build gagal, pertahankan proses berjalan dan selesaikan error sebelum restart.
 
 Setelah migrasi, pemetaan Manager dan konfigurasi service siap, jalankan:
 
@@ -48,8 +47,8 @@ Buka situs utama dan verifikasi login, antrean Sekretariat, serta panel Sandbox 
 
 1. Buka detail surat atau disposisi. Pilih **PDF untuk tanda tangan Sandbox**. Daftar memuat PDF asli atau tambahan dan PDF hasil disposisi, maksimal 10 MB.
 2. Pastikan pengiriman PDF tersebut ke Mekari Sandbox diizinkan. Untuk demo, gunakan dokumen fiktif. Centang konfirmasi pada panel.
-3. Isi nama dan email tiap penandatangan. Gunakan **Tambah Penandatangan** dan pilih **Paralel** atau **Berurutan** sesuai kebutuhan.
-4. Klik **Prediksi Posisi Tanda Tangan**, pilih saran untuk tiap penandatangan dan periksa posisi. Jika akses fitur belum tersedia atau tidak ada saran yang valid, isi koordinat manual.
+3. Isi nama dan email tiap penandatangan yang bersedia menerima undangan uji. Email dimasukkan langsung di formulir. Gunakan **Tambah Penandatangan** dan pilih **Paralel** atau **Berurutan** sesuai kebutuhan.
+4. Buka **Atur Posisi di PDF**, pilih penandatangan dan halaman, lalu pasang kotak. Geser kotak atau tarik sudutnya untuk mengubah ukuran. Formulir otomatis mengisi halaman, X/Y, ukuran kotak, dan ukuran halaman. Ulangi untuk setiap penandatangan. **Prediksi Posisi Tanda Tangan** tersedia sesuai akses akun Mekari.
 5. Klik **Ajukan Tanda Tangan Sandbox**. Penandatangan membuka undangan dari Mekari. Klik **Segarkan Status Mekari** untuk mengambil status dari Mekari setelah penandatangan bertindak.
 6. Setelah `COMPLETED`, klik **Unduh PDF bukti Sandbox**. Setiap lampiran hasil tetap memakai aturan akses dokumen asal. Persetujuan disposisi, finalisasi, pencatatan pengiriman, dan penerbitan resmi dikerjakan melalui aksi SIAP ARU masing-masing.
 

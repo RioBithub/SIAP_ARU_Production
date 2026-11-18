@@ -10,6 +10,7 @@ import { reserveOutgoingNumber } from "@/lib/numbering";
 import { INVOICE_INCOMING, SPK_INCOMING, isBusinessDocument } from "@/lib/business-documents";
 import { saveBusinessDocument } from "@/lib/business-document-data";
 import { letterAccess } from "@/lib/letter-access";
+import { incomingRecipients } from "@/lib/correspondence-settings";
 import { activeReviewer, hasActiveSecretariat, outgoingSources } from "@/lib/correspondence-data";
 import { REVIEW_ROLES, REVIEW_STATUS, canHandleSecretariat } from "@/lib/correspondence-workflow";
 import { discardUncommittedFiles, insertLetterAttachment, type StoredLetterFile } from "@/lib/letter-uploads";
@@ -30,11 +31,26 @@ export async function GET(request: Request) {
   const documentType = url.searchParams.get("document_type");
   const year = url.searchParams.get("year");
   const q = (url.searchParams.get("q") || "").trim();
-  const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 100),1),2500);
+  const requestedLimit = Number(url.searchParams.get("limit") || 100);
+  const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 2500) : 100;
+  const trash = url.searchParams.get("trash") === "1";
+  if (trash && user.role !== "ROOT_ADMIN") return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
 
   const where:string[] = ["1=1"];
   const params:unknown[] = [];
 
+  const id = url.searchParams.get("id");
+  if (id) { where.push("l.id=?"); params.push(id.slice(0, 36)); }
+  if (url.searchParams.get("for_disposition") === "1") {
+    where.push(`(
+      (l.direction='OUTGOING' AND l.status='ISSUED')
+      OR (l.direction<>'OUTGOING' AND (l.status='APPROVED'
+        OR (v.letter_id IS NULL AND l.status IN ('DISPOSED','IN_PROGRESS','COMPLETED'))
+        OR (v.letter_id IS NOT NULL AND l.direction='INCOMING' AND l.current_owner_user_id=?
+          AND l.status IN ('MANAGER_REVIEW','DIRECTOR_OPS_REVIEW','PRESIDENT_DIRECTOR_REVIEW'))))
+    )`);
+    params.push(user.id);
+  }
   if (direction) { where.push("l.direction=?"); params.push(direction); }
   if (status === "SENT") where.push("l.status='ISSUED' AND l.sent_date IS NOT NULL");
   else if (status) { where.push("l.status=?"); params.push(status); }
@@ -46,18 +62,18 @@ export async function GET(request: Request) {
   if (year && /^\d{4}$/.test(year)) { where.push("YEAR(l.letter_date)=?"); params.push(Number(year)); }
 
   if (q) {
-    where.push("(l.letter_number LIKE ? OR l.external_number LIKE ? OR l.subject LIKE ? OR l.sender LIKE ? OR l.recipient LIKE ?)");
+    where.push("(l.letter_number LIKE ? OR l.external_number LIKE ? OR l.subject LIKE ? OR l.sender LIKE ? OR l.recipient LIKE ? OR l.legacy_number_text LIKE ? OR CAST(nl.seq_base AS CHAR) LIKE ?)");
     const like = `%${q.slice(0,100)}%`;
-    params.push(like,like,like,like,like);
+    params.push(like,like,like,like,like,like,like);
   }
 
-  const access = letterAccess(user);
+  const access = trash ? { clause: "l.deleted_at IS NOT NULL", params: [] } : letterAccess(user);
   where.push(access.clause);
   params.push(...access.params);
 
   params.push(limit);
   const [rows] = await db.query<RowDataPacket[]>(
-    `SELECT l.*, v.kind AS v11_kind,v.requesting_unit AS v11_unit,
+      `SELECT l.*, v.kind AS v11_kind,v.requesting_unit AS v11_unit,
       u.name AS creator_name,
       uo.name AS current_owner_name,
       uo.unit_name AS current_owner_unit,
@@ -85,7 +101,9 @@ export async function GET(request: Request) {
     params
   );
 
-  const data = rows.map(({ source_letter_id, source_disposition_id, ...letter }) => letter);
+  const data = rows.map(({ source_letter_id, source_disposition_id, approval_snapshot, deleted_by,
+    deletion_reason, active_original_attachment_id, ...letter }) =>
+    trash ? { ...letter, deletion_reason } : letter);
   return NextResponse.json({ ok:true,data });
 }
 
@@ -180,7 +198,8 @@ export async function POST(request: Request) {
     const sender = direction === "INCOMING" ? required(body.sender, "Asal/pengirim", 255)
       : direction === "INTERNAL" ? user.unit_name || user.name : null;
     const recipient = direction === "OUTGOING" ? required(body.recipient, "Tujuan dokumen", 255)
-      : direction === "INTERNAL" ? targetLabel : str(body.recipient, 255) || null;
+      : direction === "INTERNAL" ? targetLabel
+      : str(body.recipient, 255) || (await incomingRecipients()).defaultRecipient;
     const receivedDate = direction === "INCOMING"
       ? (v11 ? checkedDate : dateOnly)(body.received_date || today, "Tanggal diterima") : null;
     if (v11 && receivedDate && receivedDate > today) throw new Error("Tanggal penerimaan tidak boleh di masa depan.");
@@ -228,7 +247,10 @@ export async function POST(request: Request) {
         await conn.execute("UPDATE siap_letters SET letter_number=? WHERE id=?", [number, id]);
       }
       await saveBusinessDocument(conn, user, { id, document_type: documentType, direction }, body.business, true);
-      if (original) await insertLetterAttachment(conn, id, user.id, original, "ORIGINAL");
+      if (original) {
+        const originalId = await insertLetterAttachment(conn, id, user.id, original, "ORIGINAL");
+        await conn.execute("UPDATE siap_letters SET active_original_attachment_id=? WHERE id=?", [originalId, id]);
+      }
 
       if (v11) {
         const extra = async (proof: File | null, pdfOnly = false) => {

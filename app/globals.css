@@ -374,3 +374,49 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit;
   .account-mode-banner{padding:9px 13px;flex-wrap:wrap}
 }
 @media(max-width:400px){.account-switch-enabled .top-title{display:none}}
+
+.workflow-form .field:has(> input:not([type=hidden]), > select, > textarea) > :is(label, span):first-child::after {
+  content: "Opsional";
+  display: inline-block;
+  margin-inline-start: .5em;
+  border-radius: 8px;
+  padding: 1px 6px;
+  background: #edf1f7;
+  color: #425670;
+  font-size: .87em;
+  font-weight: 600;
+}
+.workflow-form .field:has(> :is(input, select, textarea)[required]) > :is(label, span):first-child::after {
+  content: "Wajib";
+  background: #e3effc;
+  color: #124781;
+}
+.workflow-form .field[data-need] > :is(label, span):first-child::after { content: attr(data-need); }
+.letter-activity { min-width: 155px; white-space: nowrap; }
+.letter-activity span { display: block; }
+.letter-activity span + span { margin-top: 4px; }
+.letter-activity span.muted { white-space: normal; }
+.attachment-actions { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.attachment-image-preview { display: block; max-width: 100%; max-height: 65vh; margin: 0 auto 12px; object-fit: contain; }
+.pdf-preview { display: grid; gap: 12px; min-width: 0; }
+.pdf-preview-controls { display: flex; align-items: center; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.pdf-preview-controls label { display: flex; align-items: center; gap: 6px; }
+.pdf-preview-controls .select { width: auto; min-width: 55px; }
+.pdf-page { width: 100%; margin-inline: auto; position: relative; box-shadow: 0 0 0 1px var(--line); background: white; }
+.pdf-page canvas { width: 100%; height: auto; display: block; }
+.pdf-place-start { position: absolute; inset-inline-start: 50%; top: 50%; transform: translate(-50%, -50%); }
+.signature-box { position: absolute; outline: 2px solid #1468bc; background: rgb(211 234 255 / 82%); }
+.signature-box-move { display: block; touch-action: none; cursor: move; width: 100%; height: 100%; overflow: hidden;
+  padding: 1px 4px; border: 0; color: #143a63; font-size: 11px; background: transparent; }
+.signature-box-size { position: absolute; touch-action: none; cursor: nwse-resize; bottom: -5px; right: -5px; padding: 0;
+  width: 14px; height: 14px; border-radius: 3px; border: 2px solid white; background: #1468bc; box-shadow: 0 0 0 1px #1468bc; }
+.pic-settings { border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+.pic-settings-list { display: grid; gap: 8px; max-height: 230px; overflow: auto; }
+.pic-settings-list label { display: flex; align-items: flex-start; gap: 8px; }
+.notification-count { border-radius: 20px; background: #145a9c; color: white; min-width: 19px; padding: 2px 5px; text-align: center; }
+.notification-toolbar { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.notification-item { text-decoration: none; border-left: 4px solid #1f6db1; }
+.notification-item:hover { border-color: #2f79bd; }
+.notification-item-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.notification-note { border-top: 1px solid var(--line); margin-top: 2px; padding-top: 6px; }
+.workflow-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }

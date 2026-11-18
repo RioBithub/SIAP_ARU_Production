@@ -23,7 +23,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}){
 
     const result = await withTransaction(async conn => {
       const [letters] = await conn.query<RowDataPacket[]>(
-        "SELECT * FROM siap_letters WHERE id=? LIMIT 1 FOR UPDATE", [params.id],
+        "SELECT * FROM siap_letters WHERE id=? AND deleted_at IS NULL LIMIT 1 FOR UPDATE", [params.id],
       );
       const letter = letters[0];
       if (!letter) throw new Error("Surat tidak ditemukan.");
@@ -59,12 +59,17 @@ export async function POST(request:Request,{params}:{params:{id:string}}){
       const saved = await saveUpload(file, kind);
       staged = saved;
       const id = await insertLetterAttachment(conn, params.id, user.id, saved, kind);
+      await conn.execute(
+        "UPDATE siap_letters SET active_original_attachment_id=IF(?, ?, active_original_attachment_id), updated_by=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        [Number(kind === "ORIGINAL"), id, user.id, params.id],
+      );
       if (workflow && kind === "ORIGINAL" && letter.document_type === INVOICE_INCOMING) {
         await conn.execute("UPDATE siap_v11_letters SET invoice_revision=invoice_revision+1 WHERE letter_id=?", [params.id]);
       }
       await auditLog({
         user, action: "ATTACHMENT_UPLOAD", entityType: "ATTACHMENT", entityId: id,
-        metadata: { letterId: params.id, kind, name: saved.originalName, size: saved.originalSize, compressed: saved.isCompressed },
+        metadata: { letterId: params.id, kind, name: saved.originalName, size: saved.originalSize,
+          compressed: saved.isCompressed, previousOriginalId: kind === "ORIGINAL" ? letter.active_original_attachment_id : null },
         request,
       }, conn);
       return { id, ...saved, storagePath: undefined };

@@ -4,6 +4,8 @@ import type { RowDataPacket } from "mysql2";
 import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { dispositionAccess } from "@/lib/disposition-access";
+import { v11Letter } from "@/lib/v11-data";
+import { paymentDocuments } from "@/lib/v11-payment-documents";
 import { findLetterReferences } from "@/lib/business-document-data";
 
 export const runtime="nodejs";
@@ -71,9 +73,11 @@ export async function GET(_:Request,{params}:{params:{id:string}}){
         status,approved_at,submitted_action_id FROM siap_v11_payments WHERE disposition_id=? ORDER BY created_at,id`,
       [params.id],
     ) : [[]];
+  const workflow = ["INVOICE_PAYMENT","REQUEST_PAYMENT"].includes(d.purpose) ? await v11Letter(d.letter_id) : null;
+  const requirements = workflow ? await paymentDocuments(db, d.letter_id, workflow, d.document_type) : null;
   return NextResponse.json({
     ok:true,
-    data:{disposition:d,actions:history,attachments,payments,
+    data:{disposition:d,actions:history,attachments,payments,paymentDocuments:requirements,
       sandboxSigning: sandboxAttachmentsEnabled() && (user.role === "ROOT_ADMIN" ||
         [d.from_user_id,d.to_user_id,d.current_owner_user_id].includes(user.id))}
   });

@@ -143,16 +143,10 @@ try {
   console.log("Masukkan kredensial HMAC untuk Mekari Sign Sandbox.");
   const clientId = (await ask("Client ID HMAC sandbox", { secret: true })).trim();
   const clientSecret = await ask("Client Secret HMAC sandbox", { secret: true });
-  const addresses = (await ask("Email penguji yang boleh menerima tanda tangan, pisahkan koma")).toLowerCase()
-    .split(",").map(email => email.trim()).filter(Boolean);
   if (!/^[\w.\-]{1,150}$/.test(clientId) || !clientSecret) throw new Error("Client ID dan Client Secret sandbox wajib diisi.");
-  if (!addresses.length || addresses.some(email => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
-    throw new Error("Isi minimal satu email penguji yang valid.");
-  }
   await writeConfig(file, {
     ...config, MEKARI_CLIENT_ID: clientId, MEKARI_CLIENT_SECRET: clientSecret,
     SIAP_V11_MEKARI_MODE: "sandbox", SIAP_V11_MEKARI_ALLOW_SEND: "1",
-    SIAP_V11_MEKARI_TEST_RECIPIENTS: [...new Set(addresses)].join(","),
   }, true);
   console.log("Konfigurasi sandbox tersimpan dengan izin 600 di " + file);
   console.log("Web staging " + config.SIAP_V11_STAGE_URL);

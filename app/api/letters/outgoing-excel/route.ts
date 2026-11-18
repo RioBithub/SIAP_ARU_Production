@@ -238,7 +238,8 @@ export async function POST(request:Request){
         const key=`ARU_XLSX:${src.sheet}:${src.rowNo}`;
         const fmt=formats.get(src.cfg.documentType);
         const rendered=renderNumber(src.cfg,src.rawNumber,src.date);
-        const [existing]=await conn.query<RowDataPacket[]>(`SELECT id FROM siap_letters WHERE legacy_import_key=? LIMIT 1`,[key]);
+        const [existing]=await conn.query<RowDataPacket[]>(`SELECT id,deleted_at FROM siap_letters WHERE legacy_import_key=? LIMIT 1 FOR UPDATE`,[key]);
+        if(existing[0]?.deleted_at) { skipped++; continue; }
         let letterId:string;
         if(existing[0]){
           letterId=String(existing[0].id);

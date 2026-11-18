@@ -114,6 +114,9 @@ try {
   await cn.query(accountSwitch);
   await cn.query(accountSwitch);
   if (before !== await snapshotRows()) throw new Error("Migrasi V11 mengubah baris lama.");
+  const productionWorkflow = await readFile("database/migrations/2026-11-18-persuratan-production.sql", "utf8");
+  await cn.query(productionWorkflow);
+  await cn.query(productionWorkflow);
   await cn.execute("INSERT INTO siap_v11_managers (scope,user_id) VALUES ('OPS',?),('KSU',?)",
     [accounts.ops.id, accounts.ksu.id]);
   await cn.execute("CREATE TABLE siap_v11_stage_marker (id CHAR(36) PRIMARY KEY)");

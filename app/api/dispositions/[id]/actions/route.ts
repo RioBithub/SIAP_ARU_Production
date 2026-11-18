@@ -81,7 +81,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
          JOIN siap_users fu ON fu.id=d.from_user_id
          JOIN siap_users tu ON tu.id=d.to_user_id
          LEFT JOIN siap_v11_dispositions v ON v.disposition_id=d.id
-         WHERE d.id=?
+         WHERE d.id=? AND l.deleted_at IS NULL
          LIMIT 1 FOR UPDATE`,
         [params.id]
       );
@@ -111,7 +111,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
             (!workflow || workflow.invoice_revision !== d.task_revision || d.letter_status !== "MANAGER_REVIEW")) {
           throw new Error("Tugas verifikasi berlaku untuk revisi dan tahap review invoice yang aktif.");
         }
-        if (payment && (!workflow?.payable_id || d.letter_status !== "APPROVED")) {
+        if (payment && action !== "RETURN_TASK" && (!workflow?.payable_id || d.letter_status !== "APPROVED")) {
           throw new Error("Invoice tidak berada pada tahap pembayaran.");
         }
       }

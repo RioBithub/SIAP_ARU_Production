@@ -9,6 +9,13 @@ import { dispositionAccess } from "@/lib/disposition-access";
 
 export const runtime="nodejs";
 
+function previewType(name: string, data: Buffer) {
+  if (/\.pdf$/i.test(name) && data.subarray(0, 5).toString() === "%PDF-") return "application/pdf";
+  if (/\.png$/i.test(name) && data.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) return "image/png";
+  if (/\.jpe?g$/i.test(name) && data[0] === 255 && data[1] === 216 && data[2] === 255) return "image/jpeg";
+  return null;
+}
+
 export async function GET(request:Request,{params}:{params:{id:string}}){
   const user=await getCurrentUser();
 
@@ -16,7 +23,8 @@ export async function GET(request:Request,{params}:{params:{id:string}}){
     return NextResponse.json({ok:false,error:"Unauthorized"},{status:401});
 
   const [rows]=await db.query<RowDataPacket[]>(
-    "SELECT * FROM siap_attachments WHERE id=? LIMIT 1",
+    `SELECT a.* FROM siap_attachments a LEFT JOIN siap_letters l ON l.id=a.letter_id
+     WHERE a.id=? AND (a.letter_id IS NULL OR (l.id IS NOT NULL AND l.deleted_at IS NULL)) LIMIT 1`,
     [params.id]
   );
 
@@ -41,10 +49,14 @@ export async function GET(request:Request,{params}:{params:{id:string}}){
 
   try{
     const data=await readStoredFile(String(a.storage_path),Boolean(a.is_compressed));
+    const preview = new URL(request.url).searchParams.get("preview") === "1";
+    const name = safeFilename(String(a.original_name));
+    const mime = preview ? previewType(name, data) : "application/octet-stream";
+    if (!mime) return NextResponse.json({ok:false,error:"Pratinjau tersedia untuk PDF, PNG, dan JPG yang valid."},{status:415});
 
     await auditLog({
       user,
-      action:"ATTACHMENT_DOWNLOAD",
+      action:preview ? "ATTACHMENT_PREVIEW" : "ATTACHMENT_DOWNLOAD",
       entityType:"ATTACHMENT",
       entityId:params.id,
       request
@@ -52,16 +64,18 @@ export async function GET(request:Request,{params}:{params:{id:string}}){
 
     return new Response(data,{
       headers:{
-        "Content-Type":String(a.mime_type||"application/octet-stream"),
-        "Content-Disposition":`attachment; filename*=UTF-8''${encodeURIComponent(safeFilename(String(a.original_name)))}`,
-        "Cache-Control":"private, no-store"
+        "Content-Type":mime,
+        "Content-Disposition":`${preview ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(name)}`,
+        "Cache-Control":"private, no-store",
+        "Content-Security-Policy":"default-src 'none'; frame-ancestors 'self'; sandbox",
+        "X-Content-Type-Options":"nosniff",
       }
     });
 
   }catch(e){
     return NextResponse.json({
       ok:false,
-      error:e instanceof Error?e.message:"Gagal membaca file."
+      error:"Gagal membaca file."
     },{status:500});
   }
 }

@@ -9,6 +9,7 @@ import { dateOnly, required, str } from "@/lib/http";
 import { activeReviewer } from "@/lib/correspondence-data";
 import { REVIEW_STATUS, canHandleSecretariat, reviewRole } from "@/lib/correspondence-workflow";
 import { letterAccess } from "@/lib/letter-access";
+import { reversibleApproval, type ApprovalSnapshot } from "@/lib/letter-approval";
 import { saveUpload } from "@/lib/upload";
 import { getBusinessDocumentRow } from "@/lib/business-document-data";
 import { INVOICE_INCOMING, isBusinessDocument, isInvoice, SPK_OUTGOING, type SignatureMethod } from "@/lib/business-documents";
@@ -218,6 +219,17 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         next=REVIEW_STATUS[target.role];
         nextRole=target.role;
         nextOwner=target.id;
+
+      } else if (action === "UNDO_APPROVAL") {
+        if (!comment) throw new Error("Isi alasan pembatalan persetujuan.");
+        const approval = await reversibleApproval(conn, user, letter);
+        if (!approval || approval.id !== parsed.fields.approval_id) {
+          throw new Error("Persetujuan ini sudah ditindaklanjuti, berubah, atau tidak dapat dibatalkan oleh akun ini.");
+        }
+        next = approval.status;
+        nextRole = approval.role;
+        nextOwner = approval.ownerId;
+        routingNote = "Pembatalan persetujuan #" + approval.id;
 
       } else if(action==="APPROVE") {
         const expected = status === "SECRETARIAT_REVIEW" && atSecretariat ? "SECRETARIAT" : reviewRole(status);
@@ -474,14 +486,18 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
 
       if (parsed.signedFile && !signature) throw new Error("File bertanda tangan hanya tersedia saat penerbitan.");
       const actionId = crypto.randomUUID();
+      const snapshot: ApprovalSnapshot | null = ["APPROVE", "APPROVE_FINAL"].includes(action)
+        ? { id: actionId, status, role: letter.current_role, ownerId: letter.current_owner_user_id }
+        : null;
 
       await conn.execute(
         `UPDATE siap_letters SET status=?,\`current_role\`=?,current_owner_user_id=?,
          cancelled_reason=IF(? IN ('CANCELLED','REJECTED'),?,cancelled_reason),
          issued_date=COALESCE(?,issued_date),sent_date=COALESCE(?,sent_date),received_date=COALESCE(?,received_date),
-         routing_target_user_id=COALESCE(?,routing_target_user_id),updated_by=?
+         routing_target_user_id=COALESCE(?,routing_target_user_id),updated_by=?,approval_snapshot=?
          WHERE id=?`,
-        [next, nextRole, nextOwner, next, comment.slice(0, 1000) || null, issuedDate, sentDate, receiptDate, routingTargetId, user.id, params.id],
+        [next, nextRole, nextOwner, next, comment.slice(0, 1000) || null, issuedDate, sentDate, receiptDate, routingTargetId, user.id,
+          snapshot ? JSON.stringify(snapshot) : null, params.id],
       );
       const signatureNote = signature === "DIGITAL" ? "Tanda tangan digital" : signature === "BASAH" ? "Tanda tangan basah" : null;
       const actionComment = [comment, routingNote, signatureProvenance || signatureNote].filter(Boolean).join(" • ");
@@ -546,6 +562,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
           from: status, to: next, comment, direction, issuedDate, sentDate, routingTargetId,
           processAttachments: stored.map(file => file.originalName), signatureMethod: signature, signatureProvenance,
           receiptDate, receiptAttachmentId: receipt ? receiptId : null, dispatchChannel, dispatchAttachmentId: dispatchId,
+          reversedApprovalId: action === "UNDO_APPROVAL" ? parsed.fields.approval_id : undefined,
         },
         request,
       }, conn);

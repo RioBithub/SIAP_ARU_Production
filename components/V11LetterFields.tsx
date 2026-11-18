@@ -2,6 +2,7 @@
 
 import { DELIVERY_METHODS, REQUESTING_UNITS, jakartaDate, type RequestingUnit } from "@/lib/v11-workflow";
 import { formatInvoiceAmount } from "@/lib/business-documents";
+import AttachmentActions from "@/components/AttachmentActions";
 import StatusBadge from "@/components/StatusBadge";
 
 export function UnitField({ value = "" }: { value?: RequestingUnit | "" }) {
@@ -45,18 +46,19 @@ export function ReceiptFields({ initial, register = false, upload = false }: {
 }
 
 export function PersekotFields({ proof }: { proof?: string }) {
-  return <label className="field full">
-    <span>SPB Persekot {proof ? "(sudah ada)" : "(wajib saat diajukan)"}</span>
+  return <label className="field full" data-need={proof?"Opsional":"Wajib saat diajukan"}>
+    <span>SPB Persekot {proof ? "(sudah ada)" : ""}</span>
     <input className="input" type="file" name="spb_file" accept=".pdf"/>
     <small className="hint">Setelah draf tersimpan, unggah dokumen lain melalui Persyaratan sebelum Finance.</small>
   </label>;
 }
 
-function Evidence({ id, label }: { id?: string; label: string }) {
-  return id ? <a href={"/api/attachments/" + id} download>{label}</a> : null;
+function Evidence({ id, label, files }: { id?: string; label: string; files: {id:string;original_name:string}[] }) {
+  const file=files.find(file=>file.id===id);
+  return id ? <AttachmentActions id={id} name={file?.original_name||label} downloadLabel={"Unduh "+label}/> : null;
 }
 
-export function WorkflowSummary({ data, date }: { data: any; date?: string }) {
+export function WorkflowSummary({ data, date, files=[] }: { data: any; date?: string; files?: {id:string;original_name:string}[] }) {
   if (!data) return null;
   return <div className="kpi-list" style={{ marginTop: 12 }}>
     {data.requesting_unit && <>
@@ -66,7 +68,7 @@ export function WorkflowSummary({ data, date }: { data: any; date?: string }) {
       {data.delivery_method && <div className="kpi-row"><span>Cara menerima</span>
         <b>{DELIVERY_METHODS[data.delivery_method as keyof typeof DELIVERY_METHODS]}</b></div>}
       {data.receipt_note && <div className="kpi-row"><span>Catatan penerimaan</span><b>{data.receipt_note}</b></div>}
-      <Evidence id={data.receipt_attachment_id} label="Unduh bukti penerimaan"/>
+      <Evidence id={data.receipt_attachment_id} label="bukti penerimaan" files={files}/>
     </>}
     {data.payment && <>
       <div className="kpi-row"><span>Verifikasi revisi {data.invoice_revision}</span>
@@ -76,11 +78,11 @@ export function WorkflowSummary({ data, date }: { data: any; date?: string }) {
     </>}
     {data.signature_provenance && <div className="kpi-row"><span>Sumber Tanda Tangan</span><div>
       {({ MEKARI_MANUAL: "PDF Mekari diunggah manual", MEKARI_MOCK: "Simulasi Mekari", MEKARI_SANDBOX: "Mekari sandbox" } as Record<string, string>)[data.signature_provenance] || data.signature_provenance}
-      {" · "}<Evidence id={data.signature_attachment_id} label="PDF final"/>
+      {" · "}<Evidence id={data.signature_attachment_id} label="PDF final" files={files}/>
     </div></div>}
     {data.dispatch_channel && <div className="kpi-row"><span>Pengiriman</span><div>
       {DELIVERY_METHODS[data.dispatch_channel as keyof typeof DELIVERY_METHODS]} ke {data.dispatch_recipient}
-      {" · "}<Evidence id={data.dispatch_attachment_id} label="Bukti kirim"/>
+      {" · "}<Evidence id={data.dispatch_attachment_id} label="bukti kirim" files={files}/>
     </div></div>}
   </div>;
 }

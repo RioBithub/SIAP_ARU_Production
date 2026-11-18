@@ -9,6 +9,7 @@ import { dateOnly, required, str } from "@/lib/http";
 import { findLetterReferences, getBusinessDocumentDetails, getBusinessDocumentRow, saveBusinessDocument } from "@/lib/business-document-data";
 import { INVOICE_INCOMING, isBusinessDocument, isInvoice } from "@/lib/business-documents";
 import { letterAccess } from "@/lib/letter-access";
+import { reversibleApproval } from "@/lib/letter-approval";
 import { canHandleSecretariat } from "@/lib/correspondence-workflow";
 import { outgoingSources } from "@/lib/correspondence-data";
 import { checkedDate, invoiceKey, invoiceVerified, officialManager, persekotChecklist, receiptFields,
@@ -54,8 +55,11 @@ export async function GET(_:Request,{params}:{params:{id:string}}) {
      FROM siap_attachments a
      JOIN siap_users ua ON ua.id=a.uploaded_by
      LEFT JOIN siap_letter_actions la ON la.id=a.letter_action_id
-     WHERE a.letter_id=? AND a.disposition_id IS NULL ORDER BY a.created_at ASC`,[params.id]);
-  const { source_letter_id: sourceLetterId, source_disposition_id: sourceDispositionId, ...letter } = letters[0];
+     WHERE a.letter_id=? AND a.disposition_id IS NULL ORDER BY a.created_at ASC,a.id ASC`,[params.id]);
+  const approval = await reversibleApproval(db, user, letters[0]);
+  const { source_letter_id: sourceLetterId, source_disposition_id: sourceDispositionId, approval_snapshot, ...letter } = letters[0];
+  const originalId = letter.active_original_attachment_id ??
+    [...attachments].reverse().find(file => file.attachment_kind === "ORIGINAL")?.id;
   const business = isBusinessDocument(letter.document_type)
     ? await getBusinessDocumentDetails(user, params.id, letter.document_type)
     : undefined;
@@ -65,8 +69,8 @@ export async function GET(_:Request,{params}:{params:{id:string}}) {
   let sourceDisposition: { id: string } | undefined;
   if (sourceDispositionId) {
     const [rows] = await db.query<RowDataPacket[]>(
-      `SELECT id FROM siap_dispositions WHERE id=?
-       AND (?='ROOT_ADMIN' OR ? IN (from_user_id,to_user_id,current_owner_user_id)) LIMIT 1`,
+      `SELECT d.id FROM siap_dispositions d JOIN siap_letters l ON l.id=d.letter_id WHERE d.id=? AND l.deleted_at IS NULL
+       AND (?='ROOT_ADMIN' OR ? IN (d.from_user_id,d.to_user_id,d.current_owner_user_id)) LIMIT 1`,
       [sourceDispositionId, user.role, user.id],
     );
     if (rows[0]) sourceDisposition = { id: rows[0].id };
@@ -86,7 +90,7 @@ export async function GET(_:Request,{params}:{params:{id:string}}) {
         ? await invoicePaymentSummary(safe.payable_id, business.invoice.total) : null,
     };
   }
-  return NextResponse.json({ok:true,data:{letter,actions,attachments,business,v11,
+  return NextResponse.json({ok:true,data:{letter,actions,attachments,business,v11,originalId,approvalId:approval?.id,
     sandboxSigning: sandboxAttachmentsEnabled() && canHandleSecretariat(user.role),
     sourceLetter, sourceDisposition, hasSourceDisposition: Boolean(sourceDispositionId), hasSourceLetter: Boolean(sourceLetterId)}});
 }
@@ -101,7 +105,7 @@ export async function PATCH(request: Request, { params }: { params: { id: string
     const body = form ? JSON.parse(String(form.get("metadata") || "{}")) : await request.json();
     const spbFile = takeFile(form?.get("spb_file"));
     const result = await withTransaction(async conn => {
-      const [rows] = await conn.query<RowDataPacket[]>("SELECT * FROM siap_letters WHERE id=? LIMIT 1 FOR UPDATE", [params.id]);
+      const [rows] = await conn.query<RowDataPacket[]>("SELECT * FROM siap_letters WHERE id=? AND deleted_at IS NULL LIMIT 1 FOR UPDATE", [params.id]);
       const letter = rows[0];
       if (!letter) return 404;
 

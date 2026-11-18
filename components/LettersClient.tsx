@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent,useEffect,useMemo,useState } from "react";
+import { FormEvent,useEffect,useMemo,useRef,useState } from "react";
 import type { Role, SessionUser } from "@/lib/types";
 import { REVIEW_ROLES, canHandleSecretariat, reviewRole } from "@/lib/correspondence-workflow";
 import Modal from "@/components/Modal";
@@ -10,6 +10,9 @@ import { INVOICE_INCOMING, INVOICE_OUTGOING, SPK_INCOMING, SPK_OUTGOING, isBusin
 
 import { DELIVERY_METHODS, MANAGER_SCOPES, staffUnit, type ManagerScope } from "@/lib/v11-workflow";
 import PaymentDocumentsPanel from "@/components/PaymentDocumentsPanel";
+import AttachmentActions from "@/components/AttachmentActions";
+import SearchableSelect from "@/components/SearchableSelect";
+import { formatWorkflowTime } from "@/lib/workflow-time";
 import AttachmentSandbox from "@/components/AttachmentSandbox";
 import V11SigningPanel from "@/components/V11SigningPanel";
 import { PersekotFields, ReceiptFields, UnitField, WorkflowSummary } from "@/components/V11LetterFields";
@@ -87,7 +90,7 @@ const INCOMING_TYPE_OPTIONS=[
 ] as const;
 const humanAction=(a:string)=>({
   RECEIVE_INCOMING:"Diserahkan ke Sekretariat",RETURN_PREVIOUS:"Kembali satu tingkat",
-  PREPARE_ISSUE:"Nomor difinalisasi",MARK_SENT:"Pengiriman dicatat",REJECT:"Ditolak",SUBMIT:"Diajukan",APPROVE:"Disetujui & Diteruskan",APPROVE_FINAL:"Disetujui / Selesai",RETURN:"Dikembalikan",ISSUE:"Diterbitkan",CANCEL:"Dibatalkan",COMPLETE:"Diselesaikan",RESPONSE:"Tanggapan",CREATE_OUTGOING:"Draft Dibuat",CREATE_INTERNAL:"Nota Dinas Dibuat",REGISTER_INCOMING:"Surat Diregistrasi",IMPORT_LEGACY_EXCEL:"Diimpor dari Excel Lama"}[a]||a.replace(/_/g," "));
+  UNDO_APPROVAL:"Persetujuan dibatalkan",PREPARE_ISSUE:"Nomor difinalisasi",MARK_SENT:"Pengiriman dicatat",REJECT:"Ditolak",SUBMIT:"Diajukan",APPROVE:"Disetujui & Diteruskan",APPROVE_FINAL:"Disetujui / Selesai",RETURN:"Dikembalikan",ISSUE:"Diterbitkan",CANCEL:"Dibatalkan",COMPLETE:"Diselesaikan",RESPONSE:"Tanggapan",CREATE_OUTGOING:"Draft Dibuat",CREATE_INTERNAL:"Nota Dinas Dibuat",REGISTER_INCOMING:"Surat Diregistrasi",IMPORT_LEGACY_EXCEL:"Diimpor dari Excel Lama"}[a]||a.replace(/_/g," "));
 
 function titleFor(direction:Direction){
   if(direction==="INCOMING") return "Surat Masuk";
@@ -105,7 +108,18 @@ export default function LettersClient({direction,user}:Props){
   const persekot=notaKind==="PERSEKOT";
   const [signatureMethod,setSignatureMethod]=useState("");
   const [signingReady,setSigningReady]=useState(false);
-  const [queue,setQueue]=useState(direction!=="INTERNAL"&&user.role==="SECRETARIAT");
+  const [queue,setQueue]=useState(false);
+  const isRoot=user.role==="ROOT_ADMIN";
+  const [trash,setTrash]=useState(false);
+  const [trashTarget,setTrashTarget]=useState<any>(null);
+  const [trashBusy,setTrashBusy]=useState(false);
+  const listRequest=useRef<AbortController|null>(null);
+  const [recipients,setRecipients]=useState({defaultRecipient:"PT Aru Raharja",recipients:["PT Aru Raharja"]});
+  const [formatId,setFormatId]=useState("");
+  const [letterDate,setLetterDate]=useState(today);
+  const [customBase,setCustomBase]=useState("");
+  const [numberPreview,setNumberPreview]=useState<{rendered:string;highestBase:number;year:number}|null>(null);
+  const [numberError,setNumberError]=useState("");;
   const [sourceLetter,setSourceLetter]=useState<DocumentReference[]>([]);
   const [sourceDispositionId,setSourceDispositionId]=useState("");
   const [sourceLoading,setSourceLoading]=useState(false);
@@ -141,15 +155,27 @@ export default function LettersClient({direction,user}:Props){
   const [importBusy,setImportBusy]=useState(false);
   const [importResult,setImportResult]=useState<any>(null);
 
-  async function load(filters?:{q?:string;status?:string;docType?:string;year?:string;queue?:boolean}){
+  async function load(filters?:{q?:string;status?:string;docType?:string;year?:string;queue?:boolean;trash?:boolean}){
+    listRequest.current?.abort();
+    const controller=new AbortController();
+    listRequest.current=controller;
     setLoading(true);setError("");
     const fq=filters?.q??q, fs=filters?.status??status, ft=filters?.docType??docType, fy=filters?.year??year;
     const p=new URLSearchParams({direction,limit:direction==="OUTGOING"?"2000":"500"});
     if(fq)p.set("q",fq);if(fs)p.set("status",fs);if(ft)p.set("document_type",ft);if(fy)p.set("year",fy);
-    if(filters?.queue??queue)p.set("queue","secretariat");
-    const res=await fetch(`/api/letters?${p}`);const j=await res.json();
-    if(j.ok)setRows(j.data);else setError(j.error);
-    setLoading(false);
+    if(filters?.trash??trash) p.set("trash","1");
+    else if(filters?.queue??queue) p.set("queue","secretariat");
+    try {
+      const res=await fetch(`/api/letters?${p}`,{signal:controller.signal,cache:"no-store"});
+      const j=await res.json();
+      if(controller.signal.aborted) return;
+      if(j.ok) setRows(j.data);
+      else {setRows([]);setError(j.error||"Daftar surat belum dapat dimuat.");}
+    } catch {
+      if(!controller.signal.aborted) {setRows([]);setError("Daftar surat belum dapat dimuat.");}
+    } finally {
+      if(!controller.signal.aborted) setLoading(false);
+    }
   }
   async function loadFormats(){
     if(direction==="INTERNAL")return;
@@ -181,6 +207,32 @@ export default function LettersClient({direction,user}:Props){
     void load();
     void loadFormats();
     void loadReviewers();
+    if(direction==="INCOMING") void fetch("/api/admin/correspondence-settings")
+      .then(response=>response.ok?response.json():null)
+      .then(result=>{if(result?.data)setRecipients(result.data);})
+      .catch(()=>{});
+    return ()=>listRequest.current?.abort();
+  },[direction]);
+
+  useEffect(()=>{
+    setNumberPreview(null);
+    setNumberError("");
+    if(direction!=="OUTGOING"||!createOpen||!formatId||!letterDate) return;
+    const controller=new AbortController();
+    const timer=window.setTimeout(()=>{
+      const params=new URLSearchParams({format_id:formatId,date:letterDate,base:customBase});
+      void fetch("/api/admin/number-formats/preview?"+params,{signal:controller.signal})
+        .then(response=>response.json())
+        .then(result=>{
+          if(controller.signal.aborted) return;
+          if(result.ok) setNumberPreview(result.data);
+          else setNumberError(result.error||"Nomor belum dapat diperkirakan.");
+        }).catch(()=>{if(!controller.signal.aborted)setNumberError("Pratinjau nomor belum dapat dimuat.");});
+    },180);
+    return ()=>{window.clearTimeout(timer);controller.abort();};
+  },[direction,createOpen,formatId,letterDate,customBase]);
+
+  useEffect(()=>{
     const params=new URLSearchParams(window.location.search);
     const linkedId=params.get("letter_id");
     if(linkedId) void openDetail(linkedId);
@@ -208,6 +260,9 @@ export default function LettersClient({direction,user}:Props){
 
   function openCreate(){
     setNotaKind("NOTA");
+    setFormatId("");
+    setLetterDate(today());
+    setCustomBase("");
     setSourceLetter([]);
     setSourceDispositionId("");
     setError("");
@@ -354,6 +409,7 @@ export default function LettersClient({direction,user}:Props){
     const fd=new FormData();
     fd.set("action",pendingAction.action);
     fd.set("comment",comment);
+    if(pendingAction.action==="UNDO_APPROVAL") fd.set("approval_id",detail.approvalId);
     if(pendingAction.issue) fd.set("issued_date",String(form.get("issued_date")||today()));
     if(pendingAction.action==="REGISTER_INCOMING") fd.set("routing_target_user_id",String(form.get("routing_target_user_id")||""));
     if(pendingAction.action==="MARK_SENT") fd.set("sent_date",String(form.get("sent_date")||""));
@@ -538,10 +594,14 @@ export default function LettersClient({direction,user}:Props){
     if(detail.v11&&!detail.v11.payment && (d==="OUTGOING"?s==="ISSUED"&&letter.sent_date:s==="APPROVED") &&
       (["ROOT_ADMIN","DIRECTOR_OPS","PRESIDENT_DIRECTOR"].includes(user.role)||letter.routing_target_user_id===user.id))
       buttons.push(["COMPLETE","Tandai Selesai","btn-success"]);
+    if(detail.approvalId) buttons.push(["UNDO_APPROVAL","Batalkan Persetujuan","btn-secondary",true]);
     return buttons.map(b=><button key={b[0]} className={`btn ${b[2]}`} onClick={()=>startAction(b[0],b[1],Boolean(b[3]),Boolean(b[4]))}>{b[1]}</button>);
   }
 
   const generalAttachments=useMemo(()=>detail?.attachments?.filter((a:any)=>!a.letter_action_id)||[],[detail]);
+  const receiptFile=detail?.attachments?.find((file:any)=>file.id===detail.v11?.receipt_attachment_id);
+  const signingFiles=generalAttachments.filter((file:any)=>file.attachment_kind==="ADDITIONAL"||
+    (file.attachment_kind==="ORIGINAL"&&file.id===detail?.originalId));
   const processAttachmentsFor=(actionId:string)=>detail?.attachments?.filter((a:any)=>a.letter_action_id===actionId)||[];
 
   const pageDescription=direction==="INCOMING"
@@ -552,10 +612,34 @@ export default function LettersClient({direction,user}:Props){
 
   const currentYear=new Date().getFullYear();
   const yearOptions=Array.from({length:7},(_,i)=>String(currentYear-i));
-  function resetFilters(){setQ("");setStatus("");setDocType("");setYear("");void load({q:"",status:"",docType:"",year:""})}
+  function resetFilters(nextTrash=trash) {
+    setQ("");setStatus("");setDocType("");setYear("");setQueue(false);
+    void load({q:"",status:"",docType:"",year:"",queue:false,trash:nextTrash});
+  }
+
+  async function moveLetter(e:FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if(!trashTarget) return;
+    setTrashBusy(true);setError("");
+    const reason=new FormData(e.currentTarget).get("reason");
+    try {
+      const response=await fetch("/api/letters/"+trashTarget.id+"/trash",{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({operation:trash?"restore":"trash",reason}),
+      });
+      const result=await response.json();
+      if(!response.ok) throw new Error(result.error||"Surat belum dapat diproses.");
+      setTrashTarget(null);setDetailOpen(false);
+      setMessage(trash?"Surat dipulihkan.":"Surat dipindahkan ke Sampah.");
+      await load();
+    } catch(error) {
+      setError(error instanceof Error?error.message:"Surat belum dapat diproses.");
+    } finally {setTrashBusy(false);}
+  }
 
   return <main className="page">
-    <div className="page-head"><div><h2>{titleFor(direction)}</h2><p>{pageDescription}</p></div><div style={{display:"flex",gap:8,flexWrap:"wrap",justifyContent:"flex-end"}}>{direction==="OUTGOING"&&<a className="btn btn-secondary" href="/api/letters/outgoing-excel">↓ Export Excel</a>}{direction==="OUTGOING"&&user.role==="ROOT_ADMIN"&&<button className="btn btn-secondary" onClick={()=>{setImportOpen(true);setImportResult(null);setImportFile(null)}}>↑ Import Excel Lama</button>}{canCreate&&<button className="btn btn-primary" onClick={openCreate}>+ {createLabel}</button>}</div></div>
+    <div className="page-head"><div><h2>{titleFor(direction)}</h2><p>{pageDescription}</p></div><div style={{display:"flex",gap:8,flexWrap:"wrap",justifyContent:"flex-end"}}>{direction==="OUTGOING"&&<a className="btn btn-secondary" href="/api/letters/outgoing-excel">↓ Export Excel</a>}{direction==="OUTGOING"&&user.role==="ROOT_ADMIN"&&<button className="btn btn-secondary" onClick={()=>{setImportOpen(true);setImportResult(null);setImportFile(null)}}>↑ Import Excel Lama</button>}{isRoot&&<button className="btn btn-secondary" aria-pressed={trash}
+      onClick={()=>{setTrash(!trash);resetFilters(!trash);}}>{trash?"Kembali ke Daftar Surat":"Sampah"}</button>}{!trash&&canCreate&&<button className="btn btn-primary" onClick={openCreate}>+ {createLabel}</button>}</div></div>
 
     {direction==="OUTGOING"&&<div className="notice" style={{marginBottom:13}}>
       {hasSecretariat?"Surat dengan alur Sekretariat masuk antrian penerbitan setelah ACC. Cek administrasi sebelum ACC mengikuti jenis surat."
@@ -576,21 +660,41 @@ export default function LettersClient({direction,user}:Props){
       </select>
       <select className="select filter-select filter-year" value={year} onChange={e=>setYear(e.target.value)}><option value="">Semua tahun</option>{yearOptions.map(y=><option key={y} value={y}>{y}</option>)}</select>
       <button className="btn btn-primary" onClick={() => load()}>Terapkan</button>
-      {direction!=="INTERNAL"&&canHandleSecretariat(user.role)&&
+      {!trash&&direction!=="INTERNAL"&&canHandleSecretariat(user.role)&&
         <button type="button" className={"btn "+(queue?"btn-primary":"btn-secondary")} aria-pressed={queue}
           onClick={()=>{setQueue(!queue);void load({queue:!queue});}}>
           {queue?"Tampilkan Semua Surat":"Antrian Sekretariat"}
         </button>}
-      {(q||status||docType||year)&&<button className="btn btn-secondary" onClick={resetFilters}>Reset</button>}
+      {(q||status||docType||year||queue)&&<button className="btn btn-secondary" onClick={()=>resetFilters()}>Reset</button>}
     </div>
-    <div className="card"><div className="table-wrap"><table className="table"><thead><tr>{direction!=="INTERNAL"&&<th>{direction==="INCOMING"?"Nomor Surat":"No."}</th>}<th>Jenis Dokumen</th><th>Perihal</th><th>{direction==="INCOMING"?"Pengirim":"Tujuan"}</th><th>Tanggal</th><th>Status</th><th>Tujuan Saat Ini</th><th>Sifat</th><th>Lampiran</th><th></th></tr></thead><tbody>
-      {!loading&&rows.map(r=><tr key={r.id} className={`letter-row ${docTypeClass(r.document_type)}`}>{direction!=="INTERNAL"&&<td className="mono"><b>{direction==="OUTGOING"?(outgoingNumber(r)||"-"):(r.external_number||"-")}</b></td>}<td><span className={`badge letter-type-badge ${docTypeClass(r.document_type)}`}>{docLabel(r)}</span></td><td><b>{r.subject}</b>{r.legacy_import_key&&<span className="muted" style={{display:"block",fontSize:9.5,marginTop:3}}>Data Excel lama{r.legacy_number_conflict?" • cek nomor historis":""}</span>}</td><td>{direction==="INCOMING"?r.sender:r.recipient}</td><td>{fmtDate(r.letter_date)}</td><td><StatusBadge status={r.sent_date&&r.status==="ISSUED"?"SENT":r.status}/></td><td><b style={{fontSize:11}}>{currentTargetLabel(r)}</b></td><td><span className={`badge ${r.confidentiality==="RAHASIA"?"red":r.confidentiality==="PENTING"?"orange":"gray"}`}>{r.confidentiality}</span></td><td>{r.attachment_count}</td><td><button className="btn btn-secondary" onClick={()=>openDetail(r.id)}>Detail</button></td></tr>)}
-      {!loading&&rows.length===0&&<tr><td colSpan={direction==="INTERNAL"?9:10}><div className="empty">Belum ada data.</div></td></tr>}
-      {loading&&<tr><td colSpan={direction==="INTERNAL"?9:10}><div className="empty">Memuat...</div></td></tr>}
+    {queue&&<p className="hint" role="status">Antrean Sekretariat menampilkan surat yang saat ini berada di Sekretariat.</p>}
+    {trash&&<p className="hint">Sampah memuat surat yang telah disembunyikan. Pulihkan untuk melanjutkan alurnya.</p>}
+    <div className="card"><div className="table-wrap"><table className="table"><thead><tr>{direction!=="INTERNAL"&&<th>{direction==="INCOMING"?"Nomor Surat":"No."}</th>}<th>Jenis Dokumen</th><th>Perihal</th><th>{direction==="INCOMING"?"Pengirim":"Tujuan"}</th><th>Tanggal</th><th>Status</th><th>Tujuan Saat Ini</th><th>Sifat</th><th>Lampiran</th><th>{trash?"Dipindahkan":"Aktivitas"}</th><th>Aksi</th></tr></thead><tbody>
+      {!loading&&rows.map(r=><tr key={r.id} className={`letter-row ${docTypeClass(r.document_type)}`}>{direction!=="INTERNAL"&&<td className="mono"><b>{direction==="OUTGOING"?(outgoingNumber(r)||"-"):(r.external_number||"-")}</b></td>}<td><span className={`badge letter-type-badge ${docTypeClass(r.document_type)}`}>{docLabel(r)}</span></td><td><b>{r.subject}</b>{r.legacy_import_key&&<span className="muted" style={{display:"block",fontSize:9.5,marginTop:3}}>Data Excel lama{r.legacy_number_conflict?" • cek nomor historis":""}</span>}</td><td>{direction==="INCOMING"?r.sender:r.recipient}</td><td>{fmtDate(r.letter_date)}</td><td><StatusBadge status={r.sent_date&&r.status==="ISSUED"?"SENT":r.status}/></td><td><b style={{fontSize:11}}>{currentTargetLabel(r)}</b></td><td><span className={`badge ${r.confidentiality==="RAHASIA"?"red":r.confidentiality==="PENTING"?"orange":"gray"}`}>{r.confidentiality}</span></td><td>{r.attachment_count}</td>
+        <td className="letter-activity">{trash?<><span>{formatWorkflowTime(r.deleted_at)}</span><span className="muted">{r.deletion_reason}</span></>
+          :<><span>Dibuat {formatWorkflowTime(r.created_at)}</span><span className="muted">Diperbarui {formatWorkflowTime(r.updated_at)}</span></>}</td>
+        <td><div className="attachment-actions">{!trash&&<button className="btn btn-secondary" onClick={()=>openDetail(r.id)}>Detail</button>}
+          {isRoot&&<button className="btn btn-secondary" onClick={()=>{setError("");setTrashTarget(r);}}>{trash?"Pulihkan":"Pindah ke Sampah"}</button>}</div></td></tr>)}
+      {!loading&&rows.length===0&&<tr><td colSpan={direction==="INTERNAL"?10:11}><div className="empty">{trash?"Sampah kosong.":queue?"Tidak ada surat di antrean Sekretariat.":"Tidak ada surat yang cocok."}</div></td></tr>}
+      {loading&&<tr><td colSpan={direction==="INTERNAL"?10:11}><div className="empty">Memuat...</div></td></tr>}
     </tbody></table></div></div>
 
+    {trashTarget&&<Modal title={trash?"Pulihkan Surat":"Pindahkan Surat ke Sampah"} subtitle={trashTarget.subject}
+      onClose={()=>!trashBusy&&setTrashTarget(null)}>
+      <form className="form-grid workflow-form" onSubmit={moveLetter}>
+        {error&&<div className="field full error" role="alert">{error}</div>}
+        <p className="field full notice">{trash?"Surat dan proses terkait akan muncul kembali."
+          :"Surat, disposisi, dan lampirannya disembunyikan. Nomor surat dan pencatatan keuangan tetap tercatat."}</p>
+        <label className="field full"><span>Alasan</span><textarea className="textarea" name="reason" maxLength={1000} required/></label>
+        <div className="field full modal-actions">
+          <button type="button" className="btn btn-secondary" disabled={trashBusy} onClick={()=>setTrashTarget(null)}>Batal</button>
+          <button className={"btn "+(trash?"btn-primary":"btn-danger")} disabled={trashBusy}>{trash?"Pulihkan Surat":"Pindah ke Sampah"}</button>
+        </div>
+      </form>
+    </Modal>}
+
     {importOpen&&direction==="OUTGOING"&&user.role==="ROOT_ADMIN"&&<Modal title="Import Form Persuratan ARU" subtitle="Pindahkan daftar Excel lama ke database SIAP tanpa mengubah nomor historisnya." onClose={()=>!importBusy&&setImportOpen(false)}>
-      <form className="form-grid" onSubmit={importExcel}>
+      <form className="form-grid workflow-form" onSubmit={importExcel}>
         <div className="field full"><div className="notice"><b>Langkahnya ringkas:</b><br/>1. Pilih <b>Form Persuratan ARU.xlsx</b>.<br/>2. Klik <b>Import ke Database</b>.<br/>3. Cek ringkasan hasil. Import ulang file yang sama aman: baris yang sudah pernah masuk akan diperbarui, bukan diduplikasi.</div></div>
         <div className="field full"><label>File Excel</label><input className="input" type="file" accept=".xlsx" onChange={e=>setImportFile(e.target.files?.[0]||null)} required/><span className="hint">Dibaca: Perjanjian Kerjasama, Surat Keluar- Direksi, Surat Keluar - Bag. Operasional, Purchase Order, dan Surat keluar- Bag. umum. Sheet Kwitansi tidak diimport.</span></div>
         <div className="field full"><div className="format-preview"><span>Nomor historis</span><b>Tetap seperti Excel (termasuk .1, .2)</b><span>Data tidak standar / duplikat</span><b>Tetap disimpan dan diberi penanda untuk pengecekan</b><span>Sumber utama setelah import</span><b>Database SIAP ARU</b></div></div>
@@ -600,7 +704,7 @@ export default function LettersClient({direction,user}:Props){
     </Modal>}
 
     {createOpen&&<Modal title={direction==="INCOMING"?createLabel+" Masuk":createLabel} subtitle={direction==="INTERNAL"?"Nota Dinas digunakan Staff untuk menyampaikan laporan/permohonan ke Manager/atasan.":direction==="OUTGOING"?"Draft disusun Staff. Nomor direservasi per jenis surat dan seluruh proses tercatat di audit log.":"Semua perubahan tercatat di audit log."} onClose={()=>!createBusy&&setCreateOpen(false)}>
-      <form onSubmit={create} className="form-grid">
+      <form onSubmit={create} className="form-grid workflow-form">
         {error&&<div className="field full error" role="alert">{error}</div>}
         <div className="field">
           <label>Jenis Dokumen</label>
@@ -610,28 +714,25 @@ export default function LettersClient({direction,user}:Props){
                   onChange={e=>setNotaKind(e.target.value)}><option value="NOTA">Nota Dinas</option>
                   <option value="PERSEKOT">Pengajuan Persekot</option><option value="PAYMENT_REQUEST">Pengajuan Pembayaran Nonpersekot</option></select>
                   : <div className="input">Nota Dinas</div>}</>
-            : <select aria-label="Jenis Dokumen" className="select" name={createType==="__CUSTOM__"?undefined:"document_type"} required value={createType} onChange={e=>setCreateType(e.target.value)}>
+            : <select aria-label="Jenis Dokumen" className="select" name={createType==="__CUSTOM__"?undefined:"document_type"} required value={createType} onChange={e=>{setCreateType(e.target.value);setFormatId("");}}>
                 {typeOptions.map(([value,label])=><option key={value} value={value}>{label}</option>)}
                 {direction==="INCOMING"&&<option value="__CUSTOM__">Jenis lainnya</option>}
               </select>}
         </div>
         {direction==="INCOMING"&&createType==="__CUSTOM__"&&<div className="field"><label>Nama jenis dokumen</label><input aria-label="Nama jenis dokumen" className="input" name="document_type" maxLength={80} required/></div>}
-        {direction==="OUTGOING"&&<div className="field"><label>Format Nomor</label><select aria-label="Format Nomor" key={createType} className="select" name="number_format_id" required><option value="">Pilih format...</option>{formats.filter((f:any)=>f.document_type===createType).map((f:any)=><option value={f.id} key={f.id}>{f.name}</option>)}</select></div>}
-        {direction==="OUTGOING"&&<div className="field"><label>Nomor Dasar Custom <span className="muted">(opsional)</span></label><input className="input" type="number" min="1" step="1" name="custom_number_base" placeholder="Otomatis"/><span className="hint">Contoh 135. Jika 135 sudah terpakai pada jenis/tahun yang sama, sistem memakai 135.1, 135.2, dst.</span></div>}
+        {direction==="OUTGOING"&&<div className="field"><SearchableSelect label="Format Nomor" name="number_format_id" value={formatId} onChange={setFormatId}
+          options={formats.filter((f:any)=>f.document_type===createType).map((f:any)=>({value:f.id,label:f.name}))}
+          placeholder="Pilih format…" required/></div>}
+        {direction==="OUTGOING"&&<div className="field"><label>Nomor Dasar Custom <span className="muted">(opsional)</span></label><input className="input" type="number" min="1" step="1" name="custom_number_base" placeholder="Otomatis" value={customBase} onChange={e=>setCustomBase(e.target.value)}/><span className="hint">Contoh 135. Jika 135 sudah terpakai pada jenis/tahun yang sama, sistem memakai 135.1, 135.2, dst.</span></div>}
         {direction==="INCOMING"&&<>
           <div className="field"><label>Nomor Surat Asal</label><input className="input" name="external_number" required/></div>
           <div className="field"><label>Asal / Pengirim</label><input className="input" name="sender" required/></div>
-          <div className="field"><label>Ditujukan Kepada</label><input className="input" name="recipient" maxLength={255}/></div>
+          <div className="field"><label>Ditujukan Kepada</label><select className="select" name="recipient" key={recipients.defaultRecipient} defaultValue={recipients.defaultRecipient} required>
+            {recipients.recipients.map(name=><option key={name}>{name}</option>)}
+          </select></div>
           <div className="field full">
-            <label>Tujuan Review Awal</label>
-            <select aria-label="Tujuan review" className="select" name="routing_target_user_id" required>
-              <option value="">Pilih penerima pertama...</option>
-              {reviewers.map(r=>
-                <option key={r.id} value={r.id}>
-                  {reviewerLabel(r)}
-                </option>
-              )}
-            </select>
+            <SearchableSelect label="Tujuan Review Awal" ariaLabel="Tujuan review" name="routing_target_user_id" required
+              options={reviewers.map(r=>({value:r.id,label:reviewerLabel(r)}))} placeholder="Pilih penerima pertama…"/>
             <span className="hint">
               {v11Enabled?"Pilih Manager sesuai unit pemohon. Sekretariat memastikan tujuan saat registrasi."
                 :hasSecretariat?"Pilih pihak yang dituju untuk telaah. Sekretariat dapat memperbarui tujuan saat registrasi.":"Pilih Manager yang menangani surat ini."}
@@ -641,15 +742,8 @@ export default function LettersClient({direction,user}:Props){
         {direction==="OUTGOING"&&<>
           <div className="field"><label>Tujuan Surat</label><input className="input" name="recipient" required/></div>
           <div className="field">
-            <label>Manager Reviewer</label>
-            <select aria-label="Tujuan review" className="select" name="routing_target_user_id" required>
-              <option value="">Pilih Manager...</option>
-              {reviewers.map(r=>
-                <option key={r.id} value={r.id}>
-                  {reviewerLabel(r)}
-                </option>
-              )}
-            </select>
+            <SearchableSelect label="Manager Reviewer" ariaLabel="Tujuan review" name="routing_target_user_id" required
+              options={reviewers.map(r=>({value:r.id,label:reviewerLabel(r)}))} placeholder="Pilih Manager…"/>
             <span className="hint">Draft diajukan ke Manager ini, lalu Dirops → Dirut.</span>
           </div>
         </>}
@@ -668,12 +762,17 @@ export default function LettersClient({direction,user}:Props){
               {managerNota?"Nota yang dibuat Manager dapat diajukan ke Dirops atau Dirut.":"Nota Dinas diajukan ke Manager yang dipilih."}
             </span>
           </div>}
-        <div className="field"><label>{direction==="INTERNAL"?"Tanggal Nota Dinas":"Tanggal Surat"}</label><input className="input" type="date" name="letter_date" defaultValue={today()} required/>{direction==="OUTGOING"&&<span className="hint">Backdate diperbolehkan. Nomor existing tidak digeser; collision menghasilkan .1, .2, dst.</span>}</div>
+        <div className="field"><label>{direction==="INTERNAL"?"Tanggal Nota Dinas":"Tanggal Surat"}</label><input className="input" type="date" name="letter_date" value={letterDate} onChange={e=>setLetterDate(e.target.value)} required/>{direction==="OUTGOING"&&<span className="hint">Backdate diperbolehkan. Nomor existing tidak digeser; collision menghasilkan .1, .2, dst.</span>}</div>
+        {direction==="OUTGOING"&&formatId&&<div className="field full notice" role="status">
+          {numberPreview?<><b>Perkiraan nomor {numberPreview.rendered}</b><br/>
+            Urutan dasar tertinggi yang tercatat pada {numberPreview.year} {numberPreview.highestBase||"belum ada"}.
+            Nomor dikunci saat draf tersimpan.</>:numberError||"Menghitung perkiraan nomor…"}
+        </div>}
         {direction==="INCOMING"&&<div className="field"><label>Tanggal Diterima</label><input className="input" type="date" name="received_date" defaultValue={today()} required/></div>}
         {v11Enabled&&direction==="INCOMING"&&<><UnitField value={staffUnit(user.unit_name)||""}/><ReceiptFields upload/></>}
         {v11Enabled&&direction==="INTERNAL"&&persekot&&<PersekotFields/>}
         <div className="field full"><label>Perihal</label><input className="input" name="subject" required/></div>
-        <div className="field"><label>Sifat Dokumen</label><select className="select" name="confidentiality" defaultValue="BIASA"><option>BIASA</option><option>PENTING</option><option>RAHASIA</option></select></div>
+        <div className="field"><label>Sifat Dokumen</label><select className="select" name="confidentiality" defaultValue="BIASA" required><option>BIASA</option><option>PENTING</option><option>RAHASIA</option></select></div>
         {!v11Enabled&&<div className="field"><label>Visibilitas</label><label style={{display:"flex",alignItems:"center",gap:8,fontWeight:500}}><input type="checkbox" key={businessForm?"private":"regular"} name="is_public" defaultChecked={direction!=="INTERNAL"&&!businessForm&&!sourceDispositionId&&!sourceLetter.length}/> {direction==="INTERNAL"?"Dapat dilihat lebih luas oleh user persuratan":"Public untuk user yang punya akses persuratan"}</label></div>}
         <div className="field full"><label>{direction==="INTERNAL"?"Isi / Ringkasan Nota Dinas":"Ringkasan / Isi Ringkas"}</label><textarea className="textarea" name="summary"/></div>
         <div className="field full"><label>Catatan</label><textarea className="textarea" name="notes" placeholder={direction==="INTERNAL"?"Keterangan tambahan untuk Manager":"Catatan awal proses"}/></div>
@@ -711,7 +810,8 @@ export default function LettersClient({direction,user}:Props){
             {detail.letter.sent_date&&<div className="kpi-row"><span>Tanggal Kirim</span><b>{fmtDate(detail.letter.sent_date)}</b></div>}
             <div className="kpi-row"><span>Sifat</span><b>{detail.letter.confidentiality}</b></div>
             {direction!=="INTERNAL"&&<div className="kpi-row"><span>Backdate</span><b>{detail.letter.is_backdated?"Ya":"Tidak"}</b></div>}
-            <div className="kpi-row"><span>Dibuat oleh</span><b>{detail.letter.creator_name}</b></div>
+            <div className="kpi-row"><span>Dibuat oleh</span><b>{detail.letter.creator_name} · {formatWorkflowTime(detail.letter.created_at)}</b></div>
+            <div className="kpi-row"><span>Terakhir diperbarui</span><b>{formatWorkflowTime(detail.letter.updated_at)}</b></div>
             {direction==="OUTGOING"&&detail.letter.legacy_sheet_name&&<div className="kpi-row"><span>Sumber Historis</span><b>{detail.letter.legacy_sheet_name} • baris {detail.letter.legacy_row_no}</b></div>}
           </div>
           {direction==="OUTGOING"&&detail.letter.legacy_number_conflict===1&&<div className="notice" style={{marginTop:13}}><b>Nomor historis dipertahankan apa adanya.</b> Slot ini terdeteksi duplikat/tidak standar pada workbook lama, sehingga tidak dipakai untuk menggeser penomoran otomatis baru.</div>}
@@ -720,13 +820,13 @@ export default function LettersClient({direction,user}:Props){
           {direction==="OUTGOING"&&detail.letter.status==="RETURNED_STAFF"&&<div className="error" style={{marginTop:13}}><b>Dikembalikan ke Staff.</b> Baca catatan reviewer pada riwayat, revisi draft, lalu ajukan kembali mulai dari Manager.</div>}
           <div style={{marginTop:13}} className="notice">{detail.letter.summary||"Belum ada ringkasan."}</div>
           {detail.business&&<BusinessDocumentSummary details={detail.business} documentType={detail.letter.document_type}/>}
-          <WorkflowSummary data={detail.v11} date={detail.letter.received_date}/>
+          <WorkflowSummary data={detail.v11} date={detail.letter.received_date} files={detail.attachments}/>
           {detail.v11?.payment_documents && <PaymentDocumentsPanel key={detail.letter.id} id={detail.letter.id}
             data={detail.v11.payment_documents} onSaved={() => openDetail(detail.letter.id)}/>}
           {detail.sandboxSigning && <AttachmentSandbox key={detail.letter.id}
-            files={generalAttachments.filter((file:any) => ["ORIGINAL","ADDITIONAL"].includes(file.attachment_kind))}/>}
+            files={signingFiles}/>}
           {!detail.sandboxSigning&&detail.v11&&detail.letter.status==="WAITING_SIGNATURE"&&canHandleSecretariat(user.role)&&
-            <V11SigningPanel key={detail.letter.id} id={detail.letter.id} files={generalAttachments} onReady={setSigningReady}/>}
+            <V11SigningPanel key={detail.letter.id} id={detail.letter.id} files={signingFiles} onReady={setSigningReady}/>}
           <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:13}}>
             {canEditDetail()&&<button className="btn btn-secondary" onClick={openEdit}>Edit Metadata</button>}
             {direction==="OUTGOING"&&detail.business?.invoice&&!["CANCELLED","REJECTED"].includes(detail.letter.status)&&
@@ -750,14 +850,14 @@ export default function LettersClient({direction,user}:Props){
           <div className="card" style={{boxShadow:"none",marginTop:14}}>
             <div className="card-head"><div><h3>Dokumen & Lampiran Umum</h3><p>Dokumen utama disimpan apa adanya. Lampiran tambahan dikompresi hanya bila hasilnya lebih kecil. Semua file di bagian ini dapat diunduh kembali sesuai hak akses.</p></div></div>
             <div className="card-body">
-              {generalAttachments.map((a:any)=><div className="kpi-row" key={a.id}><div><b>{a.original_name}</b><span style={{display:"block"}}>{a.attachment_kind} • {size(Number(a.original_size))}{a.is_compressed?" • compressed":""} • {a.uploaded_by_name}</span></div><a className="btn btn-secondary" href={`/api/attachments/${a.id}`} download>↓ Unduh</a></div>)}
+              {generalAttachments.map((a:any)=><div className="kpi-row" key={a.id}><div><b>{a.original_name}</b><span style={{display:"block"}}>{a.attachment_kind==="ORIGINAL"?(a.id===detail.originalId?"Dokumen utama saat ini":"Dokumen utama versi sebelumnya"):a.attachment_kind} • {size(Number(a.original_size))}{a.is_compressed?" • compressed":""} • {a.uploaded_by_name}</span></div><AttachmentActions id={a.id} name={a.original_name}/></div>)}
               {!generalAttachments.length&&<div className="empty">Belum ada lampiran umum.</div>}
               {error&&!editOpen&&!pendingAction&&<div className="error" role="alert">{error}</div>}
               <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:10}}>
                 {(!detail.letter.uses_secretariat||direction!=="OUTGOING"||["DRAFT","RETURNED_STAFF"].includes(detail.letter.status))
                   &&(detail.letter.created_by===user.id||user.role==="ROOT_ADMIN"||
                   (detail.letter.status==="SECRETARIAT_INTAKE"&&canHandleSecretariat(user.role)))&&
-                  <label className="btn btn-secondary">+ Dokumen Utama<input hidden type="file" aria-label="Unggah dokumen utama" accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg" onChange={async e=>{
+                  <label className="btn btn-secondary">{detail.originalId?"Ganti Dokumen Utama":"+ Dokumen Utama"}<input hidden type="file" aria-label="Unggah dokumen utama" accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg" onChange={async e=>{
                     const input=e.currentTarget;
                     const file=input.files?.[0];
                     if(file) await upload("ORIGINAL",file);
@@ -778,19 +878,21 @@ export default function LettersClient({direction,user}:Props){
           <p className="muted" style={{fontSize:11}}>Setiap submit, approval, return, penerbitan, atau pembatalan dapat membawa catatan dan maksimal 5 lampiran proses.</p>
           <div className="timeline">{detail.actions?.map((a:any,i:number)=>{
             const af=processAttachmentsFor(a.id);
-            return <div className="timeline-row" key={a.id}><div className="timeline-dot">{i+1}</div><div style={{width:"100%"}}><b>{humanAction(a.action)} • {a.actor_name}</b><p>{a.from_status?`${a.from_status} → ${a.to_status}`:a.to_status}{a.comment?` • ${a.comment}`:""}</p>{af.length>0&&<div style={{display:"grid",gap:6,marginTop:7}}>{af.map((f:any)=><div key={f.id} style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",padding:"7px 9px",border:"1px solid var(--line)",borderRadius:9}}><span style={{fontSize:10.5}}><b>{f.original_name}</b><br/><span className="muted">{size(Number(f.original_size))}{f.is_compressed?" • compressed":""}</span></span><a className="btn btn-secondary" href={`/api/attachments/${f.id}`} download>↓ Unduh</a></div>)}</div>}</div></div>
+            return <div className="timeline-row" key={a.id}><div className="timeline-dot">{i+1}</div><div style={{width:"100%"}}><b>{humanAction(a.action)} • {a.actor_name}</b><p className="muted">{formatWorkflowTime(a.created_at)}</p><p>{a.from_status?`${a.from_status} → ${a.to_status}`:a.to_status}{a.comment?` • ${a.comment}`:""}</p>{af.length>0&&<div style={{display:"grid",gap:6,marginTop:7}}>{af.map((f:any)=><div key={f.id} style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",padding:"7px 9px",border:"1px solid var(--line)",borderRadius:9}}><span style={{fontSize:10.5}}><b>{f.original_name}</b><br/><span className="muted">{size(Number(f.original_size))}{f.is_compressed?" • compressed":""}</span></span><AttachmentActions id={f.id} name={f.original_name}/></div>)}</div>}</div></div>
           })}</div>
         </div>
       </div>
     </Modal>}
 
     {editOpen&&detail&&<Modal title="Edit Data Dokumen" subtitle="Perbarui data dan rujukan dokumen." onClose={()=>setEditOpen(false)}>
-      <form className="form-grid" onSubmit={editLetter}>
+      <form className="form-grid workflow-form" onSubmit={editLetter}>
         {error&&<div className="field full error" role="alert">{error}</div>}
         <div className="field full"><label>Perihal</label><input className="input" name="subject" defaultValue={detail.letter.subject} required/></div>
         {direction==="INCOMING"?<div className="field"><label>Asal / Pengirim</label><input className="input" name="sender" defaultValue={detail.letter.sender||""}/></div>:<div className="field"><label>Tujuan</label><input className="input" name="recipient" defaultValue={detail.letter.recipient||""}/></div>}
         {direction==="INCOMING"&&<div className="field">
-          <label>Ditujukan Kepada</label><input className="input" name="recipient" defaultValue={detail.letter.recipient||""}/>
+          <label>Ditujukan Kepada</label><select className="select" name="recipient" defaultValue={detail.letter.recipient||recipients.defaultRecipient} required>
+            {[...new Set([recipients.defaultRecipient,...recipients.recipients,detail.letter.recipient].filter(Boolean))].map((name:any)=><option key={name}>{name}</option>)}
+          </select>
         </div>}
         {direction==="INCOMING"&&(detail.business||detail.letter.status==="SECRETARIAT_INTAKE")&&<>
           <div className="field"><label>Nomor Dokumen Asal</label><input className="input" name="external_number" defaultValue={detail.letter.external_number||""} required/></div>
@@ -819,7 +921,7 @@ export default function LettersClient({direction,user}:Props){
     </Modal>}
 
     {pendingAction&&detail&&<Modal title={pendingAction.label} subtitle="Catatan dan lampiran pada aksi ini akan tersimpan permanen pada riwayat proses dan Audit Log." onClose={()=>!actionBusy&&setPendingAction(null)}>
-      <form className="form-grid" onSubmit={submitAction}>
+      <form className="form-grid workflow-form" onSubmit={submitAction}>
         {error&&<div className="field full error" role="alert">{error}</div>}
         {pendingAction.action==="REGISTER_INCOMING"&&<div className="field full">
           <label>Teruskan Kepada</label>
@@ -828,8 +930,15 @@ export default function LettersClient({direction,user}:Props){
             {(detail.v11?officialManagers:routingUsers.filter(isReviewer)).map(account=><option key={account.id} value={account.id}>{reviewerLabel(account)}</option>)}
           </select>
         </div>}
-        {pendingAction.action==="REGISTER_INCOMING"&&detail.v11&&
-          <ReceiptFields initial={{...detail.v11,date:String(detail.letter.received_date||"").slice(0,10)}} register upload/>}
+        {pendingAction.action==="REGISTER_INCOMING"&&detail.v11&&<>
+          {receiptFile&&<div className="field full notice">
+            <b>Bukti serah terima yang sudah diunggah</b><span>{receiptFile.original_name}</span>
+            <AttachmentActions id={receiptFile.id} name={receiptFile.original_name}/>
+          </div>}
+          <ReceiptFields initial={{...detail.v11,date:String(detail.letter.received_date||"").slice(0,10)}} register upload/>
+        </>}
+        {pendingAction.action==="APPROVE_FINAL"&&<p className="field full notice">Surat berstatus Disetujui di level Anda. Pilih Teruskan ke Dirops atau Dirut di detail jika perlu persetujuan dari atas. Tindak lanjut dan pembayaran mengikuti prosesnya masing-masing.</p>}
+        {pendingAction.action==="UNDO_APPROVAL"&&<p className="field full notice">Surat kembali ke reviewer sebelum persetujuan ini. Koreksi tersedia selama tahap berikutnya belum memproses surat atau tanda tangan.</p>}
         {pendingAction.action==="MARK_SENT"&&detail.v11&&<>
           <label className="field"><span>Kanal Pengiriman</span><select className="select" name="dispatch_channel" required>
             <option value="">Pilih kanal</option>
@@ -855,8 +964,8 @@ export default function LettersClient({direction,user}:Props){
             <span className="hint">Unggah PDF dari layanan TTD digital atau hasil pindai tanda tangan basah. Maksimal 10 MB.</span>
           </div>}
         </>}
-        <div className="field full"><label>Lampiran Proses <span className="muted">(opsional, maksimal {actionFileLimit} file)</span></label><input className="input" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.txt,.csv" onChange={e=>setActionFiles(Array.from(e.target.files||[]).slice(0,actionFileLimit))}/><span className="hint">Maksimal 10 MB per file. Lampiran proses dikompresi bila hasil kompresi lebih kecil dan tetap dapat di-download dari riwayat.</span>{actionFiles.length>0&&<div className="notice" style={{marginTop:7}}>{actionFiles.map(f=><div key={`${f.name}-${f.size}`}>{f.name} • {size(f.size)}</div>)}</div>}</div>
-        <div className="field full" style={{display:"flex",flexDirection:"row",justifyContent:"flex-end",gap:8}}><button type="button" className="btn btn-secondary" disabled={actionBusy} onClick={()=>setPendingAction(null)}>Batal</button><button className={`btn ${["RETURN","RETURN_PREVIOUS","CANCEL","REJECT"].includes(pendingAction.action)?"btn-danger":"btn-primary"}`} disabled={actionBusy}>{actionBusy?"Memproses...":pendingAction.label}</button></div>
+        {pendingAction.action!=="UNDO_APPROVAL"&&<div className="field full"><label>Lampiran Proses <span className="muted">(maksimal {actionFileLimit} file)</span></label><input className="input" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.txt,.csv" onChange={e=>setActionFiles(Array.from(e.target.files||[]).slice(0,actionFileLimit))}/><span className="hint">Maksimal 10 MB per file. Lampiran proses dikompresi bila hasil kompresi lebih kecil dan tetap dapat di-download dari riwayat.</span>{actionFiles.length>0&&<div className="notice" style={{marginTop:7}}>{actionFiles.map(f=><div key={`${f.name}-${f.size}`}>{f.name} • {size(f.size)}</div>)}</div>}</div>}
+        <div className="field full" style={{display:"flex",flexDirection:"row",justifyContent:"flex-end",gap:8}}><button type="button" className="btn btn-secondary" disabled={actionBusy} onClick={()=>setPendingAction(null)}>Batal</button><button className={`btn ${["RETURN","RETURN_PREVIOUS","CANCEL","REJECT","UNDO_APPROVAL"].includes(pendingAction.action)?"btn-danger":"btn-primary"}`} disabled={actionBusy}>{actionBusy?"Memproses...":pendingAction.label}</button></div>
       </form>
     </Modal>}
   </main>;

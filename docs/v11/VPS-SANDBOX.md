@@ -27,17 +27,18 @@ Pada pemasangan pertama, wizard meminta koneksi admin MySQL untuk membuat schema
 
 Wizard kemudian meminta port web staging. Nilai awalnya `33317`. Pilih port lain bila sedang dipakai. Tentukan password akun simulasi dengan minimal 16 karakter. Schema bernama `siap_aru_sqa_v11_<suffix>` dan akun database `v11_stage_<suffix>` dibuat otomatis. User tersebut mendapat izin untuk schema staging yang dibuat. Schema kosong mendapat migrasi dan 12 akun simulasi.
 
-Setelah database siap, wizard meminta tiga isian.
+Setelah database siap, wizard meminta dua isian.
+
+Masukkan email penguji di panel tanda tangan saat pengujian.
 
 | Isian terminal | Ambil dari |
 | --- | --- |
 | Client ID HMAC sandbox | `client_id` pada environment Postman sandbox yang berhasil diuji |
 | Client Secret HMAC sandbox | `client_secret` dari environment yang sama |
-| Email penguji | Alamat email milik penguji yang akan menerima undangan. Pisahkan dengan koma untuk beberapa penandatangan |
 
 Client ID, Client Secret dan password dimasukkan dengan tampilan tersembunyi. JSON privat menyimpan konfigurasi dengan izin `600`. Data staging berada di direktori `runs` di sebelah file konfigurasi. Skrip memuat konfigurasi tersebut ke environment aplikasi setiap kali proses dimulai. Kutip, dolar dan karakter khusus pada secret disimpan sebagai teks JSON.
 
-Untuk mengganti kredensial sandbox atau email penguji, jalankan kembali perintah setup dengan path yang sama. Skrip memverifikasi profil dan marker database sebelum menyimpan pengaturan Mekari. Akun simulasi tetap memakai password yang ditentukan saat schema pertama dibuat. Setelah perubahan, restart proses staging dengan perintah di bawah.
+Untuk mengganti kredensial sandbox, jalankan kembali perintah setup dengan path yang sama. Skrip memverifikasi profil dan marker database sebelum menyimpan pengaturan Mekari. Akun simulasi tetap memakai password yang ditentukan saat schema pertama dibuat. Setelah perubahan, restart proses staging dengan perintah di bawah.
 
 ```bash
 pm2 restart siap-aru-v11-sandbox
@@ -87,9 +88,9 @@ Semua akun berikut memakai password simulasi yang dimasukkan saat setup pertama.
 1. Login sebagai Staff, buat Surat Keluar dengan subjek SIMULASI dan lampirkan PDF fiktif. Ajukan ke Manager Operasional.
 2. Review sebagai Manager Operasional, kemudian Dirops dan Dirut sampai ACC final.
 3. Login sebagai Sekretariat dan finalisasi nomor sampai surat berstatus menunggu tanda tangan.
-4. Buka **Mekari Sign Sandbox**, pilih PDF, dan isi satu atau beberapa penandatangan memakai alamat penguji yang tercantum dalam setup.
+4. Buka **Mekari Sign Sandbox**, pilih PDF, dan isi satu atau beberapa penandatangan memakai alamat penguji yang bersedia menerima undangan.
 5. Pilih **Paralel** atau **Berurutan**. Untuk berurutan, gunakan tombol naik/turun sesuai urutan yang diinginkan.
-6. Klik **Prediksi Posisi Tanda Tangan** dan pilih saran untuk tiap penandatangan. Periksa posisi pada PDF. Posisi dapat diedit manual jika prediksi belum tersedia.
+6. Buka **Atur Posisi di PDF**, pilih halaman untuk tiap penandatangan, lalu geser atau ubah ukuran kotaknya. Gunakan prediksi sebagai pilihan jika akses Mekari tersedia.
 7. Klik **Ajukan Tanda Tangan Sandbox** satu kali. Para penguji menyelesaikan tanda tangan melalui undangan Mekari.
 8. Klik **Segarkan Status Mekari**. Setelah semua selesai, unduh PDF final dan terbitkan surat dengan metode **Gunakan PDF final Mekari staging**.
 

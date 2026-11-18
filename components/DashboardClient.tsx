@@ -1,4 +1,6 @@
 "use client";
+
+import { dispositionDeadline } from "@/lib/workflow-time";
 import { useEffect,useMemo,useState } from "react";
 
 const rupiah=(n:number)=>new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",maximumFractionDigits:0}).format(n||0);
@@ -85,7 +87,7 @@ export default function DashboardClient(){
       <div className="card-head"><h3>Tindak Lanjut Terbuka</h3></div>
       <div className="card-body kpi-list">{data.followups.map((item:any)=><div className="kpi-row" key={item.id}>
         <a href={"/dispositions?disposition_id="+item.id}>{item.subject}</a>
-        <span>{item.owner_name||"—"} · {item.due_date?String(item.due_date).slice(0,10):"Tanpa tenggat"}</span>
+        <span>{item.owner_name||"—"} · {item.due_date?dispositionDeadline(item.due_date,item.due_time):"Tanpa tenggat"}</span>
       </div>)}</div>
     </section>}
     <div className="grid-2">
