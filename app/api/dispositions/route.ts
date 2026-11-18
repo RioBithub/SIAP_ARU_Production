@@ -6,13 +6,14 @@ import { getCurrentUser } from "@/lib/auth";
 import { db, withTransaction } from "@/lib/db";
 import { canCreateDisposition } from "@/lib/permissions";
 import { auditLog } from "@/lib/audit";
-import { dateOnly, required, str } from "@/lib/http";
+import { required, str } from "@/lib/http";
 import { letterAccess } from "@/lib/letter-access";
 import { dispositionAccess } from "@/lib/disposition-access";
 import { resultRequirement, reviewRole } from "@/lib/correspondence-workflow";
 import { INVOICE_INCOMING } from "@/lib/business-documents";
-import { officialManager, taskPurpose, v11Enabled, v11Letter } from "@/lib/v11-data";
+import { checkedDate, officialManager, taskPurpose, v11Enabled, v11Letter } from "@/lib/v11-data";
 import { dispositionTargetRoles, staffCanVerify, staffUnit, unitManagerScope } from "@/lib/v11-workflow";
+import { delegatedUsers } from "@/lib/correspondence-settings";
 import { preparePaymentTask } from "@/lib/v11-finance";
 
 export const runtime="nodejs";
@@ -77,7 +78,11 @@ export async function POST(request:Request) {
       ? String(b.priority).toUpperCase()
       : "NORMAL";
 
-    const due=b.due_date ? dateOnly(b.due_date,"Target selesai") : null;
+    const due=b.due_date ? checkedDate(b.due_date,"Tanggal target selesai") : null;
+    const dueTime=b.due_time ? String(b.due_time) : null;
+    if (dueTime && (!due || !/^([01]\d|2[0-3]):[0-5]\d$/.test(dueTime))) {
+      throw new Error("Isi tanggal dan jam target selesai yang valid (WIB).");
+    }
 
     const parentId = str(b.parent_id, 36) || null;
     const purpose = taskPurpose(b.purpose);
@@ -139,10 +144,15 @@ export async function POST(request:Request) {
         throw new Error("Penerima tidak sesuai jalur delegasi disposisi.");
       }
       if (strict && target.role === "MANAGER") await officialManager(conn, target.id);
-      if (strict && user.role === "MANAGER") {
-        const manager = await officialManager(conn, user.id);
-        const targetScope = target.role === "FINANCE" ? "KSU" : unitManagerScope(staffUnit(target.unit_name));
-        if (targetScope && targetScope !== manager.scope) throw new Error("Penerima berada di bawah Manager lain.");
+      if (user.role === "MANAGER") {
+        const manager = strict ? await officialManager(conn, user.id) : null;
+        const configured = purpose === "GENERAL" ? await delegatedUsers(user.id, conn) : null;
+        if (configured !== null) {
+          if (!configured.includes(target.id)) throw new Error("Penerima belum terdaftar sebagai PIC Manager ini.");
+        } else if (manager) {
+          const targetScope = target.role === "FINANCE" ? "KSU" : unitManagerScope(staffUnit(target.unit_name));
+          if (targetScope && targetScope !== manager.scope) throw new Error("Penerima berada di bawah Manager lain.");
+        }
       }
       if (workflow && letter.document_type === INVOICE_INCOMING && target.role === "FINANCE" && purpose !== "INVOICE_PAYMENT") {
         throw new Error("Finance menerima invoice hanya untuk instruksi pembayaran setelah persetujuan.");
@@ -193,11 +203,11 @@ export async function POST(request:Request) {
       await conn.execute(
         `INSERT INTO siap_dispositions
          (id,letter_id,parent_id,from_user_id,to_user_id,current_owner_user_id,
-          visibility,instruction,status,priority,due_date,result_requirement)
-         VALUES (?,?,?,?,?,?,?,?,'UNSEEN',?,?,?)`,
+          visibility,instruction,status,priority,due_date,due_time,result_requirement)
+         VALUES (?,?,?,?,?,?,?,?,'UNSEEN',?,?,?,?)`,
         [
           id,letterId,parentId,user.id,toUserId,toUserId,
-          taskVisibility,instruction,priority,due,requirement
+          taskVisibility,instruction,priority,due,dueTime,requirement
         ]
       );
 
@@ -225,7 +235,8 @@ export async function POST(request:Request) {
         action:"DISPOSITION_CREATE",
         entityType:"DISPOSITION",
         entityId:id,
-        metadata:{letterId,toUser:toUserId,visibility:taskVisibility,priority,due,parentId,resultRequirement:requirement,purpose},
+        metadata:{letterId,toUser:toUserId,visibility:taskVisibility,priority,due,dueTime,parentId,resultRequirement:requirement,purpose,
+          to:"UNSEEN",note:instruction.slice(0,240)},
         request
       }, conn);
       return { id };

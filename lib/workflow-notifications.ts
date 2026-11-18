@@ -9,16 +9,16 @@ export async function notifyWorkflow(conn: Connection, event: {
   const recipients = new Set<string>();
   let title: string;
   if (event.entityType === "LETTER" &&
-      /^LETTER_(CREATE|REGISTER_INCOMING|SUBMIT|APPROVE|APPROVE_FINAL|RETURN|RETURN_PREVIOUS|REJECT|ISSUE|MARK_SENT)$/.test(event.action)) {
+      /^LETTER_(CREATE|REGISTER_INCOMING|SUBMIT|APPROVE|APPROVE_FINAL|RETURN|RETURN_PREVIOUS|REJECT|ISSUE|MARK_SENT|UNDO_APPROVAL|COMPLETE|PREPARE_ISSUE)$/.test(event.action)) {
     const [rows] = await conn.query<RowDataPacket[]>(
-      "SELECT l.*,v.kind AS workflow_kind FROM siap_letters l JOIN siap_v11_letters v ON v.letter_id=l.id WHERE l.id=?", [event.entityId],
+      "SELECT l.*,v.kind AS workflow_kind FROM siap_letters l JOIN siap_v11_letters v ON v.letter_id=l.id WHERE l.id=? AND l.deleted_at IS NULL", [event.entityId],
     );
     const letter = rows[0];
     if (!letter) return;
     const [users] = await conn.query<RowDataPacket[]>(
       `SELECT u.id FROM siap_users u WHERE u.is_active=1 AND (
         u.id=? OR (? IS NULL AND u.role=?)
-        OR (? IN ('APPROVED','REJECTED','ISSUED') AND u.id=?)
+        OR (? IN ('APPROVED','REJECTED','ISSUED','COMPLETED') AND u.id=?)
         OR (?='APPROVED' AND (?='INVOICE_MASUK' OR ? IN ('PERSEKOT','PAYMENT_REQUEST')) AND EXISTS (
           SELECT 1 FROM siap_v11_managers m WHERE m.scope='KSU' AND m.user_id=u.id
         )))`,
@@ -26,6 +26,7 @@ export async function notifyWorkflow(conn: Connection, event: {
         letter.status, letter.created_by, letter.status, letter.document_type, letter.workflow_kind],
     );
     for (const user of users) recipients.add(String(user.id));
+    if (event.action === "LETTER_UNDO_APPROVAL") recipients.add(String(letter.created_by));
     title = ({
       LETTER_CREATE: "Surat baru perlu diregistrasi",
       LETTER_REGISTER_INCOMING: "Surat masuk menunggu pemeriksaan",
@@ -34,6 +35,9 @@ export async function notifyWorkflow(conn: Connection, event: {
       LETTER_RETURN_PREVIOUS: "Surat dikembalikan untuk perbaikan",
       LETTER_REJECT: "Surat ditolak",
       LETTER_ISSUE: "Surat keluar telah diterbitkan",
+      LETTER_UNDO_APPROVAL: "Persetujuan surat dibatalkan untuk pemeriksaan ulang",
+      LETTER_COMPLETE: "Tindak lanjut surat selesai",
+      LETTER_PREPARE_ISSUE: "Nomor surat final dan siap ditandatangani",
       LETTER_MARK_SENT: "Pengiriman surat telah dicatat",
     } as Record<string, string>)[event.action] || (letter.status === "APPROVED"
       ? "Dokumen disetujui untuk ditindaklanjuti" : "Surat menunggu persetujuan berikutnya");

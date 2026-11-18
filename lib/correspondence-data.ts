@@ -28,6 +28,12 @@ export async function outgoingSources(
   conn: Queryable, user: SessionUser, sourceLetterId: string, sourceDispositionId: string,
 ) {
   if (sourceDispositionId) {
+    const [[reference]] = await conn.query<RowDataPacket[]>(
+      "SELECT letter_id FROM siap_dispositions WHERE id=?", [sourceDispositionId],
+    );
+    if (!reference) throw new Error("Disposisi asal tidak tersedia.");
+    const source = await getAccessibleLetter(user, reference.letter_id, conn, true);
+    if (!source || ["CANCELLED", "REJECTED"].includes(source.status)) throw new Error("Dokumen asal tidak tersedia.");
     const [rows] = await conn.query<RowDataPacket[]>(
       "SELECT id,letter_id,to_user_id,status FROM siap_dispositions WHERE id=? LIMIT 1 FOR UPDATE",
       [sourceDispositionId],
@@ -42,8 +48,8 @@ export async function outgoingSources(
     }
     sourceLetterId = disposition.letter_id;
   }
-  if (sourceLetterId) {
-    const source = await getAccessibleLetter(user, sourceLetterId, conn);
+  if (sourceLetterId && !sourceDispositionId) {
+    const source = await getAccessibleLetter(user, sourceLetterId, conn, true);
     if (!source || ["CANCELLED", "REJECTED"].includes(source.status) ||
         (!sourceDispositionId && !["INCOMING", "INTERNAL"].includes(source.direction))) {
       throw new Error("Pilih Surat Masuk atau Nota Dinas asal yang dapat Anda akses.");

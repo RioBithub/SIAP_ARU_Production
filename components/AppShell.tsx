@@ -58,6 +58,7 @@ export default function AppShell({ user, rootName, targetId, children }: {
     {label:"Administrasi",items:[
       {href:"/admin/users",label:"User & Role",icon:"♟",roles:["ROOT_ADMIN"]},
       {href:"/admin/number-formats",label:"Jenis & Format Surat",icon:"#",roles:["ROOT_ADMIN"]},
+      {href:"/admin/correspondence-settings",label:"Pengaturan Persuratan",icon:"⚙",roles:["ROOT_ADMIN"]},
       {href:"/audit",label:"Audit Log",icon:"▤",roles:["ROOT_ADMIN"]},
     ]}
   ];

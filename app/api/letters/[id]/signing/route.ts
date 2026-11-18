@@ -32,7 +32,7 @@ function publicJob(job: RowDataPacket | null) {
 async function lockSigningLetter(conn: PoolConnection, id: string) {
   const [rows] = await conn.query<RowDataPacket[]>(
     `SELECT l.status,l.direction,l.` + "`current_role`" + ` AS owner_role
-     FROM siap_letters l JOIN siap_v11_letters v ON v.letter_id=l.id WHERE l.id=? FOR UPDATE`, [id],
+     FROM siap_letters l JOIN siap_v11_letters v ON v.letter_id=l.id WHERE l.id=? AND l.deleted_at IS NULL FOR UPDATE`, [id],
   );
   if (!rows[0] || rows[0].direction !== "OUTGOING" || rows[0].status !== "WAITING_SIGNATURE" ||
       rows[0].owner_role !== "SECRETARIAT") throw new Error("Surat belum menunggu tanda tangan Sekretariat.");
@@ -41,9 +41,13 @@ async function lockSigningLetter(conn: PoolConnection, id: string) {
 async function signingPdf(conn: PoolConnection, letterId: string, value: unknown) {
   const id = required(value, "PDF draf yang telah disetujui", 36);
   const [rows] = await conn.query<RowDataPacket[]>(
-    `SELECT original_name,storage_path,is_compressed FROM siap_attachments
-     WHERE id=? AND letter_id=? AND disposition_id IS NULL
-       AND attachment_kind='ORIGINAL' AND original_size BETWEEN 8 AND 10485760`,
+    `SELECT a.original_name,a.storage_path,a.is_compressed
+     FROM siap_attachments a JOIN siap_letters l ON l.id=a.letter_id
+     WHERE a.id=? AND l.id=? AND a.disposition_id IS NULL
+       AND a.attachment_kind='ORIGINAL' AND a.original_size BETWEEN 8 AND 10485760
+       AND a.id=COALESCE(l.active_original_attachment_id,
+         (SELECT source.id FROM siap_attachments source WHERE source.letter_id=l.id AND source.disposition_id IS NULL
+          AND source.attachment_kind='ORIGINAL' ORDER BY source.created_at DESC,source.id DESC LIMIT 1))`,
     [id, letterId],
   );
   const source = rows[0];
@@ -76,6 +80,9 @@ export async function POST(request: Request, { params }: { params: { id: string 
   const files: StoredLetterFile[] = [];
   try {
     const body = await request.json();
+    if (mode === "sandbox" && ["START", "PREDICT"].includes(body.action) && body.confirm_sandbox !== true) {
+      throw new Error("Konfirmasi bahwa PDF boleh dikirim ke Mekari Sandbox.");
+    }
     if (body.action === "PREDICT") {
       if (mode !== "sandbox") throw new Error("Prediksi posisi tersedia dalam mode Mekari Sandbox.");
       const source = await withTransaction(async conn => {

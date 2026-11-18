@@ -1,0 +1,64 @@
+# Rilis persuratan SIAP ARU di VPS
+
+Jalankan dari sesi operator VPS yang mengelola PM2 `siap-aru`. Langkah ini untuk instalasi `/opt/apps/siap-aru` yang sudah memakai migrasi V11, dokumen pembayaran, Sandbox lampiran, dan ganti akun Root. Pilih waktu rilis saat pengguna dapat berhenti mengubah dokumen selama backup dan restart. Portal produksi memakai skema `aru_siap` dan port lokal 3200.
+
+## Backup, pembaruan, dan pengecekan
+
+```bash
+(
+  set -euo pipefail
+  cd /opt/apps/siap-aru
+  test "$(git branch --show-current)" = main
+  test -z "$(git status --porcelain --untracked-files=no)"
+  git fetch --no-tags origin main
+  target="$(git rev-parse FETCH_HEAD)"
+  git merge-base --is-ancestor HEAD "$target"
+  migration=database/migrations/2026-11-18-persuratan-production.sql
+  git cat-file -e "$target:$migration"
+  git log -1 --oneline "$target"
+
+  unset MYSQL_PWD
+  db_args=(--no-defaults --protocol=socket -uroot)
+  if ! mariadb "${db_args[@]}" aru_siap -Nse 'SELECT 1' >/dev/null 2>&1; then
+    db_args+=(-p)
+  fi
+
+  umask 077
+  mkdir -p /root/siap-aru-backups
+  backup="$(mktemp -d /root/siap-aru-backups/persuratan-XXXXXXXX)"
+  git rev-parse HEAD > "$backup/commit-sebelum-rilis.txt"
+  mariadb-dump "${db_args[@]}" --single-transaction --quick aru_siap |
+    gzip > "$backup/aru_siap.sql.gz"
+  gzip -t "$backup/aru_siap.sql.gz"
+
+  upload_dir="$(node -e "require('@next/env').loadEnvConfig(process.cwd(),false);process.stdout.write(require('path').resolve(process.env.UPLOAD_DIR||'./storage'))")"
+  tar -czf "$backup/lampiran.tar.gz" -C "$upload_dir" .
+  tar -tzf "$backup/lampiran.tar.gz" >/dev/null
+  printf 'Backup tersimpan di %s\n' "$backup"
+
+  git pull --ff-only origin main
+  test "$(git rev-parse HEAD)" = "$target"
+  npm ci --include=dev
+  npm run typecheck
+  npm run build
+
+  mariadb "${db_args[@]}" aru_siap < "$migration"
+  if [ -d .next/standalone ]; then
+    cp -a public .next/standalone/
+    cp -a .next/static .next/standalone/.next/
+  fi
+  pm2 restart siap-aru --update-env
+  curl -fsS --retry 10 --retry-connrefused --retry-delay 2 --max-time 5 http://127.0.0.1:3200/api/health
+  printf '\n'
+  pm2 save
+  git log -1 --oneline
+)
+```
+
+Ketik password admin MariaDB saat muncul prompt. Jika backup basis data atau lampiran gagal, periksa penyebabnya sebelum meneruskan rilis. Jika proses berhenti di migrasi atau build, lihat baris error pertama. Migrasi ini bisa dijalankan ulang. Setelah restart, health yang diharapkan ialah `{"ok":true,"status":"healthy","database":"connected"}`.
+
+## Verifikasi dari situs utama
+
+- Sebagai Sekretariat, buka Surat Masuk dan Surat Keluar. Daftar awal memuat semua surat yang dapat diakses. Gunakan **Antrian Sekretariat** untuk memfilter ke pekerjaan yang masih berada di Sekretariat.
+- Buka satu lampiran PDF simulasi lewat **Pratinjau**. Untuk menguji undangan, gunakan dokumen dan email penguji yang disetujui mengikuti [panduan Mekari Sandbox](MEKARI-SANDBOX.md).
+- Sebagai Root Admin, buka **Pengaturan Persuratan** lalu pastikan pilihan tujuan Surat Masuk dan PIC sesuai akun dan unit perusahaan. **Sampah** dapat dipakai pada surat demo dan menyediakan pemulihan, dengan alasan tercatat pada Audit Log.

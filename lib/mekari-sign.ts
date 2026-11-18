@@ -88,8 +88,6 @@ function signatureAnnotation(input: Record<string, unknown>): SignatureAnnotatio
 }
 
 function configuredSandboxRecipients(input: Record<string, unknown>) {
-  const allowed = new Set((process.env.SIAP_V11_MEKARI_TEST_RECIPIENTS || "").toLowerCase()
-    .split(",").map(email => email.trim()).filter(Boolean));
   const entries = input.signers === undefined ? [input] : input.signers;
   if (!Array.isArray(entries) || !entries.length) throw new Error("Tambahkan minimal satu penandatangan.");
   const seen = new Set<string>();
@@ -98,8 +96,8 @@ function configuredSandboxRecipients(input: Record<string, unknown>) {
     const fields = entry as Record<string, unknown>;
     const email = typeof fields.signer_email === "string" ? fields.signer_email.trim().toLowerCase() : "";
     const name = typeof fields.signer_name === "string" ? fields.signer_name.trim().slice(0, 150) : "";
-    if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !allowed.has(email)) {
-      throw new Error(`Penandatangan ${index + 1} memerlukan nama dan email uji yang sudah diizinkan.`);
+    if (!name || email.length > 254 || !/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(email)) {
+      throw new Error(`Penandatangan ${index + 1} memerlukan nama dan alamat email yang valid.`);
     }
     if (seen.has(email)) throw new Error("Setiap penandatangan harus memakai email yang berbeda.");
     seen.add(email);
@@ -134,7 +132,7 @@ export async function predictSandboxAnnotations(filename: string, pdf: Buffer, i
     });
   } catch (error) {
     if (error instanceof MekariError && error.status === 403) {
-      throw new Error("Akun sandbox ini belum memiliki akses Predict Annotation.");
+      throw new Error("Akun Sandbox belum memiliki akses prediksi. Gunakan Atur Posisi di PDF untuk menempatkan kotak tanda tangan.");
     }
     if (error instanceof MekariError && error.status === 422) {
       throw new Error("Mekari belum bisa memprediksi posisi tanda tangan untuk PDF ini.");

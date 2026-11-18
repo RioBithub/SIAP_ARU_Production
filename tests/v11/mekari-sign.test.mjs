@@ -14,7 +14,6 @@ beforeEach(t => {
     MEKARI_CLIENT_ID: "fixture-client",
     MEKARI_CLIENT_SECRET: "fixture-only-hmac-test",
     SIAP_V11_MEKARI_ALLOW_SEND: "1",
-    SIAP_V11_MEKARI_TEST_RECIPIENTS: "signer@example.invalid,reviewer@example.invalid",
   };
   const previous = Object.fromEntries(Object.keys(fixture).map(key => [key, process.env[key]]));
   Object.assign(process.env, fixture);
@@ -78,8 +77,10 @@ test("Payload multi-signer mengikuti urutan pilihan dan penempatan masing-masing
   assert(parallel.signers.every(signer => !("order" in signer)));
 });
 
-test("Validasi menolak email di luar daftar, duplikat, dan koordinat di luar halaman", () => {
-  assert.throws(() => configuredSandboxSigning({ signers: [firstSigner, { ...secondSigner, signer_email: "other@example.invalid" }] }), /Penandatangan 2/);
+test("Email uji yang valid diterima, duplikat dan koordinat di luar halaman ditolak", () => {
+  const other = configuredSandboxSigning({ signers: [firstSigner, { ...secondSigner, signer_email: "other@example.invalid" }] });
+  assert.equal(other.signers[1].email, "other@example.invalid");
+  assert.throws(() => configuredSandboxSigning({ signers: [firstSigner, { ...secondSigner, signer_email: "invalid-email" }] }), /Penandatangan 2/);
   assert.throws(() => configuredSandboxSigning({ signers: [firstSigner, { ...secondSigner, signer_email: "SIGNER@EXAMPLE.INVALID" }] }), /berbeda/);
   assert.throws(() => configuredSandboxSigning({ signers: [firstSigner, { ...secondSigner, position_x: 600 }] }), /di luar halaman/);
   assert.throws(() => configuredSandboxSigning({ signers: [firstSigner], signing_order: "false" }), /urutan/);

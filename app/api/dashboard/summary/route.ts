@@ -4,7 +4,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { canSeeFinance } from "@/lib/permissions";
 import { getLedgerPosition } from "@/lib/finance-ledger";
-import { jakartaDate } from "@/lib/v11-workflow";
+import { jakartaDateTime } from "@/lib/workflow-time";
 import { getFinanceYearSnapshot } from "@/lib/finance-summary";
 
 export const runtime = "nodejs";
@@ -23,26 +23,26 @@ export async function GET() {
       SUM(status IN ('DISPOSED','IN_PROGRESS')) AS in_progress,
       SUM(status IN ('COMPLETED','APPROVED','ISSUED')) AS completed
      FROM siap_letters
-     WHERE MONTH(letter_date)=MONTH(CURDATE()) AND YEAR(letter_date)=YEAR(CURDATE())`
+     WHERE deleted_at IS NULL AND MONTH(letter_date)=MONTH(CURDATE()) AND YEAR(letter_date)=YEAR(CURDATE())`
   );
 
   const [dispRows] = await db.query<RowDataPacket[]>(
     `SELECT
-      SUM(status='UNSEEN') AS unseen,
-      SUM(status='IN_PROGRESS') AS active,
-      SUM(due_date<? AND status NOT IN ('RETURNED','CANCELLED','COMPLETED')) AS overdue,
-      SUM(status='COMPLETED' AND YEARWEEK(completed_at,1)=YEARWEEK(CURDATE(),1)) AS completed_week
-     FROM siap_dispositions
-     WHERE to_user_id=? OR current_owner_user_id=? OR ?='ROOT_ADMIN'`,
-    [jakartaDate(), user.id, user.id, user.role]
+      SUM(d.status='UNSEEN') AS unseen,
+      SUM(d.status='IN_PROGRESS') AS active,
+      SUM(TIMESTAMP(d.due_date,COALESCE(d.due_time,'23:59:59'))<? AND d.status NOT IN ('RETURNED','CANCELLED','COMPLETED')) AS overdue,
+      SUM(d.status='COMPLETED' AND YEARWEEK(d.completed_at,1)=YEARWEEK(CURDATE(),1)) AS completed_week
+     FROM siap_dispositions d JOIN siap_letters l ON l.id=d.letter_id
+     WHERE l.deleted_at IS NULL AND (d.to_user_id=? OR d.current_owner_user_id=? OR ?='ROOT_ADMIN')`,
+    [jakartaDateTime(), user.id, user.id, user.role]
   );
   const [followups]=await db.query<RowDataPacket[]>(
-    `SELECT d.id,l.subject,d.status,d.due_date,u.name AS owner_name
+    `SELECT d.id,l.subject,d.status,d.due_date,d.due_time,u.name AS owner_name
      FROM siap_dispositions d JOIN siap_letters l ON l.id=d.letter_id
      LEFT JOIN siap_users u ON u.id=d.current_owner_user_id
-     WHERE d.status NOT IN ('RETURNED','CANCELLED','COMPLETED')
+     WHERE l.deleted_at IS NULL AND d.status NOT IN ('RETURNED','CANCELLED','COMPLETED')
        AND (? IN (d.from_user_id,d.to_user_id,d.current_owner_user_id) OR ?='ROOT_ADMIN')
-     ORDER BY d.due_date IS NULL,d.due_date,d.created_at DESC LIMIT 8`,[user.id,user.role]);
+     ORDER BY d.due_date IS NULL,d.due_date,COALESCE(d.due_time,'23:59:59'),d.created_at DESC LIMIT 8`,[user.id,user.role]);
 
   let finance = null;
   if (canSeeFinance(user.role)) {

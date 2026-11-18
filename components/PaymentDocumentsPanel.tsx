@@ -2,12 +2,13 @@
 
 import { useState, type FormEvent } from "react";
 import type { PaymentDocuments } from "@/lib/v11-payment-documents";
+import AttachmentActions from "@/components/AttachmentActions";
 import { PERSEKOT_DOCUMENTS } from "@/lib/v11-workflow";
 
 export default function PaymentDocumentsPanel({ id, data, onSaved }: {
   id: string;
   data: PaymentDocuments & { editable: boolean };
-  onSaved: () => Promise<void>;
+  onSaved?: () => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -30,7 +31,7 @@ export default function PaymentDocumentsPanel({ id, data, onSaved }: {
         form.reset();
         setCode("");
       }
-      await onSaved();
+      await onSaved?.();
       setSaved(true);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Gagal menyimpan persyaratan.");
@@ -45,7 +46,7 @@ export default function PaymentDocumentsPanel({ id, data, onSaved }: {
       <p className={data.missing.length ? "notice" : "success"}>
         {data.missing.length ? "Belum lengkap. Instruksi pembayaran belum bisa dibuat." : "Berkas persyaratan lengkap."}
       </p>
-      {data.editable ? <form onSubmit={submit} className="form-grid">
+      {data.editable ? <form onSubmit={submit} className="form-grid workflow-form">
         <label className="field"><span>Tujuan pembayaran</span>
           <select className="select" name="recipient_type" value={recipient} onChange={event =>
             setRecipient(event.target.value as typeof recipient)} required disabled={busy}>
@@ -62,13 +63,13 @@ export default function PaymentDocumentsPanel({ id, data, onSaved }: {
         {data.documents.map(doc => <div className="kpi-row" key={doc.code}>
           <span>{PERSEKOT_DOCUMENTS[doc.code]}</span>
           <div>
-            {doc.attachment ? <a href={"/api/attachments/" + doc.attachment.id} download>{doc.attachment.name}</a>
+            {doc.attachment ? <AttachmentActions id={doc.attachment.id} name={doc.attachment.name} downloadLabel="Unduh bukti"/>
               : doc.linked ? <b>Sudah tertaut ke SPK invoice</b>
               : doc.required ? <b>Wajib · Berkas belum ada</b> : <span>{data.recipient ? "Tidak wajib untuk tujuan ini" : "Wajib jika dibayar ke vendor"}</span>}
           </div>
         </div>)}
       </div>
-      {data.editable && <form onSubmit={submit} className="form-grid" style={{ marginTop: 12 }}>
+      {data.editable && <form onSubmit={submit} className="form-grid workflow-form" style={{ marginTop: 12 }}>
         <label className="field"><span>Jenis dokumen persyaratan</span>
           <select className="select" name="document_code" value={code} required
             onChange={event => setCode(event.target.value)} disabled={busy}>

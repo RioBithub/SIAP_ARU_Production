@@ -9,7 +9,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
   if (!user) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
 
   const [rows] = await db.query<(RowDataPacket & { id: string; letter_id: string; to_user_id: string })[]>(
-    "SELECT id,letter_id,to_user_id FROM siap_dispositions WHERE id=? AND status='IN_PROGRESS' LIMIT 1",
+    "SELECT d.id,d.letter_id,d.to_user_id FROM siap_dispositions d JOIN siap_letters l ON l.id=d.letter_id WHERE d.id=? AND d.status='IN_PROGRESS' AND l.deleted_at IS NULL LIMIT 1",
     [params.id],
   );
   const disposition = rows[0];

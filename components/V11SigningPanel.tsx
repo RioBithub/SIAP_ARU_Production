@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { SignatureAnnotation } from "@/lib/mekari-sign";
+import SignaturePlacement from "@/components/SignaturePlacement";
+import AttachmentActions from "@/components/AttachmentActions";
 
 type Mode = "mock" | "sandbox";
 type Job = { id: string; status: string; mode: Mode; final_attachment_id: string | null };
@@ -28,6 +30,12 @@ function newSigner(id: number): DraftSigner {
   return { id, name: "", email: "", coordinates: editableCoordinates(), suggestion: "" };
 }
 
+function placementOf(values: DraftSigner["coordinates"]): SignatureAnnotation | null {
+  if (coordinateFields.some(key => !values[key].trim() || !Number.isFinite(Number(values[key])))) return null;
+  const coords = Object.fromEntries(coordinateFields.map(key => [key, Number(values[key])])) as Record<Coordinate, number>;
+  return coords.canvas_width > 0 && coords.canvas_height > 0 ? { type_of: "signature", ...coords } : null;
+}
+
 export default function V11SigningPanel({ id, files = [], onReady, source }: {
   id: string;
   files?: SandboxSource[];
@@ -43,6 +51,8 @@ export default function V11SigningPanel({ id, files = [], onReady, source }: {
   const [ordered, setOrdered] = useState(false);
   const [signers, setSigners] = useState([newSigner(0)]);
   const [suggestions, setSuggestions] = useState<SignatureAnnotation[]>([]);
+  const [placementOpen, setPlacementOpen] = useState(false);
+  const [placementSigner, setPlacementSigner] = useState(0);
   const nextSignerId = useRef(1);
   const path = source ? "/api/attachments/" + source.id + "/signing" : "/api/letters/" + id + "/signing";
   const selectedPdf = source?.id ?? attachmentId;
@@ -86,6 +96,7 @@ export default function V11SigningPanel({ id, files = [], onReady, source }: {
   }
 
   const recipients = signers.map(signer => ({ signer_name: signer.name, signer_email: signer.email }));
+  const active = signers.find(signer => signer.id === placementSigner) ?? signers[0];
 
   async function predict() {
     setBusy("PREDICT");
@@ -134,8 +145,9 @@ export default function V11SigningPanel({ id, files = [], onReady, source }: {
       {job ? <>
         <p>Status {job.status}</p>
         {job.status === "IN_PROGRESS" && job.mode === mode && <button className="btn btn-secondary" disabled={!!busy} onClick={() => void action("REFRESH")}>Segarkan Status Mekari</button>}
-        {job.final_attachment_id && <a href={"/api/attachments/" + job.final_attachment_id} download>{source ? "Unduh PDF bukti Sandbox" : "Unduh PDF final"}</a>}
-      </> : <form onSubmit={event => void action("START", event)}>
+        {job.final_attachment_id && <AttachmentActions id={job.final_attachment_id} name="Bukti tanda tangan.pdf"
+          downloadLabel={source ? "Unduh PDF bukti Sandbox" : "Unduh PDF final"}/>}
+      </> : <form className="workflow-form" onSubmit={event => void action("START", event)}>
         <fieldset className="form-grid signing-form" disabled={!!busy}>
           {source ? <label className="field full"><span>PDF sumber · {source.original_name}</span>
             <span><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} required/> Saya sudah memastikan PDF ini boleh dikirim untuk uji di Mekari Sandbox.</span>
@@ -144,6 +156,7 @@ export default function V11SigningPanel({ id, files = [], onReady, source }: {
               setAttachmentId(event.target.value);
               setMessage("");
               setSuggestions([]);
+              setPlacementOpen(false);
               setSigners(current => current.map(signer => ({ ...signer, coordinates: editableCoordinates(), suggestion: "" })));
             }} required>
               <option value="">Pilih PDF</option>
@@ -151,6 +164,10 @@ export default function V11SigningPanel({ id, files = [], onReady, source }: {
             </select>
           </label>}
           {mode === "sandbox" && <>
+            {!source && <label className="field full consent-field"><span>
+              <input type="checkbox" required checked={confirmed} onChange={event => setConfirmed(event.target.checked)}/>
+              {" "}Saya mengizinkan PDF ini dikirim untuk uji Mekari Sandbox.
+            </span></label>}
             <label className="field full"><span>Urutan tanda tangan</span>
               <select className="select" value={ordered ? "sequential" : "parallel"} onChange={event => setOrdered(event.target.value === "sequential")}>
                 <option value="parallel">Paralel</option>
@@ -164,7 +181,7 @@ export default function V11SigningPanel({ id, files = [], onReady, source }: {
                   onChange={event => editSigner(signer.id, { name: event.target.value })} required/>
               </label>
               <label className="field"><span>Email penandatangan uji</span>
-                <input className="input" type="email" value={signer.email}
+                <input className="input" type="email" maxLength={254} value={signer.email}
                   onChange={event => editSigner(signer.id, { email: event.target.value })} required/>
               </label>
               {suggestions.length > 0 && <label className="field full"><span>Saran posisi dari Mekari</span>
@@ -203,13 +220,30 @@ export default function V11SigningPanel({ id, files = [], onReady, source }: {
                 const signer = newSigner(nextSignerId.current++);
                 setSigners(current => [...current, signer]);
               }}>Tambah Penandatangan</button>
-              <button className="btn btn-secondary" type="button" disabled={!selectedPdf || (!!source && !confirmed) || !recipients.every(
+              <button className="btn btn-primary" type="button" disabled={!selectedPdf} aria-expanded={placementOpen}
+                onClick={() => setPlacementOpen(current => !current)}>Atur Posisi di PDF</button>
+              <button className="btn btn-secondary" type="button" disabled={!selectedPdf || !confirmed || !recipients.every(
                 recipient => recipient.signer_name.trim() && recipient.signer_email.trim(),
               )} onClick={() => void predict()}>{busy === "PREDICT" ? "Meminta saran posisi…" : "Prediksi Posisi Tanda Tangan"}</button>
             </div>
+            {selectedPdf && placementOpen && <div className="field full">
+              <label className="field">
+                <span>Penandatangan yang ditempatkan</span>
+                <select className="select" value={active.id} onChange={event => setPlacementSigner(Number(event.target.value))}>
+                  {signers.map((signer, index) => <option key={signer.id} value={signer.id}>
+                    {signer.name || "Penandatangan " + (index + 1)}
+                  </option>)}
+                </select>
+              </label>
+              <p className="hint">Pilih halaman, pasang kotak, lalu geser kotak atau tarik pegangan sudutnya. Kolom posisi ikut terisi.</p>
+              <SignaturePlacement key={selectedPdf} id={selectedPdf}
+                signerName={active.name || "Penandatangan " + (signers.indexOf(active) + 1)}
+                value={placementOf(active.coordinates)}
+                onChange={annotation => editSigner(active.id, { coordinates: editableCoordinates(annotation), suggestion: "" })}/>
+            </div>}
           </>}
           <div className="signing-controls">
-            <button className="btn btn-primary" type="submit" disabled={!selectedPdf || (!!source && !confirmed)}>
+            <button className="btn btn-primary" type="submit" disabled={!selectedPdf || (mode === "sandbox" && !confirmed)}>
               {mode === "mock" ? "Mulai Simulasi" : "Ajukan Tanda Tangan Sandbox"}
             </button>
           </div>

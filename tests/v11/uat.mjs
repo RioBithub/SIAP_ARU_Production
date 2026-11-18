@@ -685,7 +685,7 @@ try {
       return page;
     }
     try {
-      const row = await incoming("demo-ui-mobile");
+      const row = await incoming("demo-ui-mobile", { receiptFile: true });
       const mobile = await pageFor("secretariat", true);
       await mobile.goto(new URL("/letters/incoming?letter_id=" + row.id, base).href);
       const registration = mobile.getByRole("button", { name: "Registrasi & Teruskan", exact: true });
@@ -694,7 +694,13 @@ try {
       await registration.click();
       const receiptInput = mobile.locator('input[name="receipt_file"]');
       await receiptInput.waitFor({ state: "visible" });
-      await receiptInput.setInputFiles({ name: "SIMULASI-bukti.pdf", mimeType: "application/pdf", buffer: pdf });
+      assert.equal(await receiptInput.getAttribute("required"), null);
+      const receiptPreview = mobile.getByRole("dialog").last().getByRole("button", { name: "Pratinjau", exact: true });
+      await receiptPreview.click();
+      const preview = mobile.getByRole("dialog").last();
+      await preview.locator(".pdf-page canvas").waitFor({ state: "visible" });
+      await mobile.screenshot({ path: path.join(out, "00-preview-bukti-serah-terima.png") });
+      await preview.getByRole("button", { name: "Tutup dialog" }).click();
       assert(await mobile.locator('input[name="received_time"]').isVisible());
       const managerOptions = await mobile.getByRole("combobox", { name: "Teruskan kepada" }).locator("option").allTextContents();
       assert.deepEqual(managerOptions.slice(1).sort(), ["Manager Keuangan, SDM & Umum", "Manager Operasional"].sort());
@@ -702,6 +708,8 @@ try {
       await mobile.screenshot({ path: path.join(out, "01-penerimaan-mobile.png") });
       const save = mobile.getByRole("button", { name: "Registrasi & Teruskan", exact: true }).last();
       await Promise.all([mobile.waitForResponse(res => res.url().endsWith("/actions") && res.request().method()==="POST" && res.ok()), save.click()]);
+      await mobile.getByRole("button", { name: "Terapkan", exact: true }).click();
+      await mobile.getByRole("row").filter({ hasText: subject("demo-ui-mobile") }).waitFor();
       const desktop = await pageFor("ops", false);
       await desktop.goto(new URL("/dispositions?letter_id=" + row.id, base).href);
       await desktop.getByRole("combobox", { name: "Diteruskan kepada" }).selectOption(roles.staff.id);
@@ -734,10 +742,150 @@ try {
       await browser.close();
     }
   });
+
+  await test(51, async () => {
+    const config = "/api/admin/correspondence-settings";
+    assert.equal((await call("staff", config)).defaultRecipient, "PT Aru Raharja");
+    const row = await incoming("tujuan-default");
+    assert.equal((await detail("staff", row.id)).letter.recipient, "PT Aru Raharja");
+    const patch = body => call("root", config, { method: "PATCH", body });
+    await call("staff", config, { method: "PATCH", body: { kind: "recipients" }, status: 403 });
+    try {
+      await patch({ kind: "recipients", recipients: ["PT Aru Raharja", "PT Aru Raharja - SIMULASI"],
+        defaultRecipient: "PT Aru Raharja - SIMULASI" });
+      const other = await incoming("tujuan-diatur");
+      assert.equal((await detail("secretariat", other.id)).letter.recipient, "PT Aru Raharja - SIMULASI");
+    } finally {
+      await patch({ kind: "recipients", recipients: ["PT Aru Raharja"], defaultRecipient: "PT Aru Raharja" });
+    }
+    return "Tujuan default Surat Masuk dan perubahan melalui Root Admin terverifikasi.";
+  });
+  await test(52, async () => {
+    const row = await outgoing("undo-persetujuan");
+    await letterAction("staff", row.id, "SUBMIT");
+    const approval = await letterAction("ops", row.id, "APPROVE");
+    const request = { approval_id: approval.actionId, comment: "SIMULASI koreksi reviewer" };
+    assert.equal((await detail("ops", row.id)).approvalId, approval.actionId);
+    assert(!((await detail("dirops", row.id)).approvalId));
+    await letterAction("dirops", row.id, "UNDO_APPROVAL", request, [], 400);
+    const restored = await letterAction("ops", row.id, "UNDO_APPROVAL", request, []);
+    assert.equal(restored.status, "MANAGER_REVIEW");
+    const returned = await detail("ops", row.id);
+    assert.equal(returned.letter.current_owner_user_id, roles.ops.id);
+    assert(returned.actions.some(action => action.action === "UNDO_APPROVAL" && action.comment.includes(request.comment)));
+    await letterAction("ops", row.id, "UNDO_APPROVAL", request, [], 400);
+    const next = await letterAction("ops", row.id, "APPROVE");
+    await letterAction("dirops", row.id, "APPROVE");
+    await letterAction("ops", row.id, "UNDO_APPROVAL", { ...request, approval_id: next.actionId }, [], 400);
+    const final = await letterAction("dirut", row.id, "APPROVE");
+    await letterAction("secretariat", row.id, "PREPARE_ISSUE");
+    await letterAction("root", row.id, "UNDO_APPROVAL", { ...request, approval_id: final.actionId }, [], 400);
+    return "Persetujuan Surat Keluar dapat dikoreksi sekali oleh reviewer; otorisasi, aksi berikutnya, dan tahap tanda tangan memblokir koreksi lama.";
+  });
+  await test(53, async () => {
+    const f = profile.format;
+    const preview = () => call("staff", "/api/admin/number-formats/preview?" +
+      new URLSearchParams({ format_id: f.id, date: d, base: "654321" }));
+    const estimate = await preview();
+    assert.equal((await preview()).rendered, estimate.rendered);
+    const row = await outgoing("versi-draf", { custom_number_base: "654321", letter_date: d });
+    const original = await detail("staff", row.id);
+    assert.equal(original.letter.letter_number, estimate.rendered);
+    await letterAction("staff", row.id, "SUBMIT");
+    await letterAction("ops", row.id, "RETURN", { comment: "SIMULASI revisi versi" });
+    const revision = file(multipart({ kind: "ORIGINAL" }, []), "file", "SIMULASI-revisi.pdf",
+      fixturePdf(["Draft revisi untuk pengujian"]));
+    await post("staff", "/api/letters/" + row.id + "/attachments", revision, 201);
+    const revised = await detail("staff", row.id);
+    assert.notEqual(revised.originalId, original.originalId);
+    assert(revised.attachments.some(file => file.id === original.originalId));
+    assert(revised.attachments.some(file => file.id === revised.originalId && file.original_name === "SIMULASI-revisi.pdf"));
+    assert.equal((await letterAction("staff", row.id, "SUBMIT")).status, "MANAGER_REVIEW");
+    return "Perkiraan nomor cocok dengan ledger; draft revisi menjadi dokumen utama dan versi terdahulu tetap tersedia.";
+  });
+  await test(54, async () => {
+    const row = await incoming("pic-konfigurasi");
+    await register(row.id);
+    const config = "/api/admin/correspondence-settings";
+    assert.equal((await call("ops", config)).delegation, null);
+    await assign("ops", row.id, "staffkeu", { due_date: due, due_time: "13:45" }, 400);
+    const choose = userIds => call("root", config, {
+      method: "PATCH", body: { kind: "delegation", managerId: roles.ops.id, userIds },
+    });
+    try {
+      await choose([roles.staffkeu.id]);
+      assert.deepEqual((await call("ops", config)).delegation, [roles.staffkeu.id]);
+      await assign("ops", row.id, "staff", {}, 400);
+      await assign("ops", row.id, "staffkeu", { due_time: "13:45" }, 400);
+      const task = await assign("ops", row.id, "staffkeu", { due_date: due, due_time: "13:45", priority: "HIGH" });
+      assert.equal((await taskDetail("staffkeu", task.id)).disposition.due_time, "13:45:00");
+      const alert = (await call("staffkeu", "/api/notifications")).items.find(item => item.href.endsWith(task.id));
+      assert.equal(alert.due_time, "13:45:00");
+      assert.equal(alert.actor_name, "SIMULASI Manager Operasional");
+      assert.equal(alert.event_status, "UNSEEN");
+      const found = await call("ops", "/api/letters?for_disposition=1&q=" + encodeURIComponent("pic-konfigurasi"));
+      assert(found.some(letter => letter.id === row.id));
+    } finally { await choose(null); }
+    const payRequest = await post("staff", "/api/letters", {
+      direction: "INTERNAL", document_type: "NOTA_DINAS", payment_request: true, subject: subject("Finance-return"),
+      letter_date: old, routing_target_user_id: roles.ops.id,
+    }, 201);
+    await letterAction("staff", payRequest.id, "SUBMIT");
+    await letterAction("ops", payRequest.id, "APPROVE_FINAL");
+    await payRecipient("staff", payRequest.id, "NON_VENDOR");
+    await fillPayDocs("staff", payRequest.id, payDocuments.filter(code => code !== "REKENING"));
+    const request = await assign("ksu", payRequest.id, "finance", { purpose: "REQUEST_PAYMENT" });
+    assert.equal((await taskDetail("finance", request.id)).paymentDocuments.missing.length, 0);
+    await taskAction("finance", request.id, "RETURN_TASK", {}, [], 400);
+    await taskAction("finance", request.id, "RETURN_TASK", { note: "SIMULASI bukti perlu diperbarui" });
+    assert.equal((await taskDetail("ksu", request.id)).disposition.status, "RETURNED");
+    assert.equal((await detail("ksu", payRequest.id)).letter.status, "APPROVED");
+    await assign("ksu", payRequest.id, "finance", { purpose: "REQUEST_PAYMENT" });
+    return "PIC khusus, pencarian server, tenggat WIB, dan pengembalian Finance ke KSU dengan alasan lulus.";
+  });
+  await test(55, async () => {
+    const row = await incoming("sampah", { receiptFile: true });
+    await register(row.id, "ops", false);
+    const task = await assign("ops", row.id, "staff");
+    const record = await detail("secretariat", row.id);
+    assert.equal((await call("secretariat", "/api/attachments/" + record.v11.receipt_attachment_id + "?preview=1", { raw: true }))
+      .response.headers.get("content-type"), "application/pdf");
+    await call("staffkeu", "/api/attachments/" + record.originalId + "?preview=1", { status: 403 });
+    await post("secretariat", "/api/letters/" + row.id + "/trash", { operation: "trash", reason: "SIMULASI" }, 403);
+    const issued = await detail("root", state.manual);
+    const drafts = await outgoing("hapus-draf");
+    for (const id of [row.id, issued.letter.id, drafts.id, state.invoice]) {
+      await post("root", "/api/letters/" + id + "/trash", { operation: "trash", reason: "SIMULASI tinjau Sampah" });
+      await call("root", "/api/letters/" + id, { status: 404 });
+    }
+    await call("secretariat", "/api/attachments/" + record.originalId + "?preview=1", { status: [403,404] });
+    await call("staff", "/api/dispositions/" + task.id, { status: 404 });
+    await taskAction("staff", task.id, "START", {}, [], 400);
+    const trash = await call("root", "/api/letters?trash=1");
+    assert([row.id, issued.letter.id, drafts.id, state.invoice].every(id => trash.some(letter => letter.id === id)));
+    await call("staff", "/api/letters?trash=1", { status: 403 });
+    for (const id of [row.id, issued.letter.id, drafts.id, state.invoice]) {
+      await post("root", "/api/letters/" + id + "/trash", { operation: "restore", reason: "SIMULASI pulihkan surat" });
+    }
+    assert.equal((await detail("root", state.manual)).letter.letter_number, issued.letter.letter_number);
+    assert.equal((await detail("ksu", state.invoice)).v11.payment.status, "PAID");
+    assert.equal((await taskDetail("staff", task.id)).disposition.status, "UNSEEN");
+    return "Sampah Root menyembunyikan surat draf, diproses, terbit, dan selesai; pemulihan mempertahankan lampiran, tugas, nomor, dan saldo.";
+  });
+  await test(56, async () => {
+    const before = (await call("ksu", "/api/notifications")).unread;
+    assert(before > 0);
+    await call("staffkeu", "/api/notifications", { method: "PATCH", body: { all: true } });
+    assert.equal((await call("ksu", "/api/notifications")).unread, before);
+    await call("ksu", "/api/notifications", { method: "PATCH", body: { all: true } });
+    assert.equal((await call("ksu", "/api/notifications")).unread, 0);
+    assert((await call("ksu", "/api/notifications")).items.every(item => item.read_at));
+    return "Tandai semua telah dibaca bekerja hanya untuk notifikasi akun aktif.";
+  });
 } finally {
   await sql.end();
   await writeFile(path.join(out, "uat.json"), JSON.stringify({ runId, db: profile.version, cases: result }, null, 2));
 }
 const totals = Object.fromEntries(["PASS","FAIL","SKIP"].map(status => [status,result.filter(row=>row.status===status).length]));
 console.log(JSON.stringify(totals));
-if (totals.FAIL || result.length !== 50) process.exitCode=1;
+if (totals.FAIL || result.length !== 56) process.exitCode=1;

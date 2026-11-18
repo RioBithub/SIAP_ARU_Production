@@ -19,15 +19,20 @@ export const runtime = "nodejs";
 
 const error = (status: number, message: string) => NextResponse.json({ ok: false, error: message }, { status });
 
-async function sourceFor(user: SessionUser, id: string) {
-  const [rows] = await db.query<RowDataPacket[]>(
+async function sourceFor(user: SessionUser, id: string, conn: Pick<PoolConnection, "query"> = db) {
+  const [rows] = await conn.query<RowDataPacket[]>(
     `SELECT a.id,a.letter_id,a.disposition_id,a.original_name,a.storage_path,a.is_compressed,
             d.from_user_id,d.to_user_id,d.current_owner_user_id
      FROM siap_attachments a
+     JOIN siap_letters l ON l.id=a.letter_id AND l.deleted_at IS NULL
      LEFT JOIN siap_dispositions d ON d.id=a.disposition_id
      LEFT JOIN siap_disposition_actions da ON da.id=a.disposition_action_id AND da.disposition_id=d.id
      WHERE a.id=? AND a.letter_id IS NOT NULL AND a.original_size BETWEEN 8 AND 10485760
-       AND (a.attachment_kind IN ('ORIGINAL','ADDITIONAL') OR da.action='SUBMIT_RESULT')`,
+       AND (a.attachment_kind IN ('ORIGINAL','ADDITIONAL') OR da.action='SUBMIT_RESULT')
+       AND (a.attachment_kind<>'ORIGINAL' OR a.disposition_id IS NOT NULL OR l.direction<>'OUTGOING'
+            OR a.id=COALESCE(l.active_original_attachment_id,
+              (SELECT a2.id FROM siap_attachments a2 WHERE a2.letter_id=l.id AND a2.disposition_id IS NULL
+               AND a2.attachment_kind='ORIGINAL' ORDER BY a2.created_at DESC,a2.id DESC LIMIT 1)))`,
     [id],
   );
   const source = rows[0];
@@ -36,7 +41,7 @@ async function sourceFor(user: SessionUser, id: string) {
     return user.role === "ROOT_ADMIN" || [source.from_user_id, source.to_user_id, source.current_owner_user_id].includes(user.id)
       ? source : null;
   }
-  return canHandleSecretariat(user.role) && await getAccessibleLetter(user, source.letter_id) ? source : null;
+  return canHandleSecretariat(user.role) && await getAccessibleLetter(user, source.letter_id, conn) ? source : null;
 }
 
 async function findJob(conn: Pick<PoolConnection, "query">, id: string, lock = false) {
@@ -95,8 +100,11 @@ export async function POST(request: Request, { params }: { params: { id: string 
       sandboxCredentials();
       const pdf = await readSourcePdf(source);
       const existing = await withTransaction(async conn => {
-        await conn.query("SELECT id FROM siap_attachments WHERE id=? FOR UPDATE", [id]);
-        const job = await findJob(conn, id);
+        const [[letter]] = await conn.query<RowDataPacket[]>(
+          "SELECT id FROM siap_letters WHERE id=? AND deleted_at IS NULL FOR UPDATE", [source.letter_id],
+        );
+        if (!letter || !await sourceFor(user, id, conn)) throw new Error("PDF sumber tidak lagi tersedia untuk tanda tangan.");
+        const job = await findJob(conn, id, true);
         if (job) return job;
         await conn.execute(
           "INSERT INTO siap_v11_attachment_signing (source_attachment_id,requested_by,status) VALUES (?,?,'REQUESTING')",
