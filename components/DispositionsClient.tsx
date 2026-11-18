@@ -62,6 +62,22 @@ function letterOption(letter: DispositionLetter): DispositionLetterOption {
   return { id: letter.id, subject: letter.subject, reference: number ? `${type} · ${number}` : type };
 }
 
+async function fetchDispositionLetters(params: URLSearchParams, signal: AbortSignal): Promise<DispositionLetter[]> {
+  const response = await fetch("/api/letters?" + params, { signal, cache: "no-store" }).catch(() => null);
+  if (response?.status === 401) throw new Error("Sesi berakhir. Silakan masuk kembali.");
+  const result = await response?.json().catch(() => null);
+  if (!response?.ok || !result?.ok || !Array.isArray(result.data)) {
+    throw new Error("Pencarian dokumen belum tersedia.");
+  }
+  return result.data;
+}
+
+const ASSIGNEE_TASK_STATES = ["UNSEEN", "SEEN", "IN_PROGRESS"];
+const SOURCE_FILE_LABELS: Record<string, string> = {
+  ORIGINAL: "Dokumen surat", ADDITIONAL: "Lampiran surat", PROCESS: "Bukti proses surat",
+  RECEIPT: "Bukti serah terima", SPB: "SPB", SIGNED: "Surat bertanda tangan", DISPATCH: "Bukti pengiriman",
+};
+
 function reviewButtonLabel(d:any){
   if(d.status==="REVIEW_MANAGER") return "Setujui & Selesaikan";
   if(d.status==="REVIEW_DIROPS"){
@@ -122,13 +138,15 @@ export default function DispositionsClient({user}:{user:SessionUser}){
   const [pinnedLetter,setPinnedLetter]=useState<DispositionLetter|null>(null);
   const [letterQuery,setLetterQuery]=useState("");
   const [letterResponse,setLetterResponse]=useState<{ term: string; letters: DispositionLetter[]; error?: string }|null>(null);
+  const [letterAttempt,setLetterAttempt]=useState(0);
   const [delegation,setDelegation]=useState<string[]|null>(null);
-  const [parent,setParent]=useState<{id:string;subject:string;result_requirement:ResultRequirement}|null>(null);
+  const [parent,setParent]=useState<{id:string;subject:string;from_name:string;result_requirement:ResultRequirement}|null>(null);
   const [open,setOpen]=useState(false);
   const [error,setError]=useState("");
   const [message,setMessage]=useState("");
   const [createFiles,setCreateFiles]=useState<File[]>([]);
   const [createBusy,setCreateBusy]=useState(false);
+  const [createError,setCreateError]=useState("");
   const [detail,setDetail]=useState<any>(null);
   const [detailOpen,setDetailOpen]=useState(false);
   const [process,setProcess]=useState<ProcessAction|null>(null);
@@ -180,45 +198,66 @@ export default function DispositionsClient({user}:{user:SessionUser}){
     const controller=new AbortController();
     const timer=window.setTimeout(()=>{
       const params=new URLSearchParams({for_disposition:"1",limit:"60",q:letterTerm});
-      void fetch("/api/letters?"+params,{signal:controller.signal,cache:"no-store"})
-        .then(async response=>{
-          const result=await response.json();
-          if(!response.ok) throw new Error(result.error||"Dokumen belum dapat dimuat.");
-          if(!controller.signal.aborted) setLetterResponse({term:letterTerm, letters:result.data});
+      void fetchDispositionLetters(params,controller.signal)
+        .then(letters=>{
+          if(!controller.signal.aborted) setLetterResponse({term:letterTerm,letters});
         }).catch(error=>{
           if(!controller.signal.aborted) setLetterResponse({term:letterTerm, letters:[],
             error:error instanceof Error?error.message:"Dokumen belum dapat dimuat."});
         });
     },letterTerm?180:0);
     return ()=>{window.clearTimeout(timer);controller.abort();};
-  },[open,parent,letterTerm]);
+  },[open,parent,letterTerm,letterAttempt]);
 
   useEffect(()=>{
     if(!open||!selectedLetterId||pinnedLetter?.id===selectedLetterId) return;
     const controller=new AbortController();
     const params=new URLSearchParams({limit:"1",id:selectedLetterId});
     if(!parent) params.set("for_disposition","1");
-    void fetch("/api/letters?"+params,{signal:controller.signal,cache:"no-store"})
-      .then(response=>response.json()).then(result=>{
-        if(!controller.signal.aborted&&result.ok&&result.data[0])setPinnedLetter(result.data[0]);
+    void fetchDispositionLetters(params,controller.signal).then(([letter])=>{
+        if(!controller.signal.aborted&&letter) setPinnedLetter(letter);
       }).catch(()=>{});
     return ()=>controller.abort();
   },[open,parent,selectedLetterId,pinnedLetter?.id]);
 
-  const filtered=useMemo(()=>rows.filter(d=>{
-    const hay=[
-      d.subject,d.letter_number,d.external_number,d.instruction,
-      d.from_name,d.to_name,d.current_owner_name,d.confidentiality
-    ].join(" ").toLowerCase();
-
-    return (!q||hay.includes(q.toLowerCase()))&&(!status||d.status===status);
-  }),[rows,q,status]);
+  const filtered=useMemo(()=>{
+    const term=q.trim().toLowerCase();
+    const matches=rows.filter(d=>{
+      const hay=[
+        d.subject,d.letter_number,d.external_number,d.instruction,
+        d.from_name,d.to_name,d.current_owner_name,d.confidentiality
+      ].join(" ").toLowerCase();
+      return hay.includes(term)&&(!status||d.status===status);
+    });
+    const ids=new Set(matches.map(task=>task.id));
+    const children=new Map<string,typeof rows>();
+    for(const task of matches){
+      if(!ids.has(task.parent_id)) continue;
+      const siblings=children.get(task.parent_id)??[];
+      siblings.push(task);
+      children.set(task.parent_id,siblings);
+    }
+    const ordered:{task:any;depth:number}[]=[];
+    const visited=new Set<string>();
+    function add(task:any,depth:number){
+      if(visited.has(task.id)) return;
+      visited.add(task.id);
+      ordered.push({task,depth});
+      for(const child of children.get(task.id)??[]) add(child,depth+1);
+    }
+    for(const task of matches) if(!ids.has(task.parent_id)) add(task,0);
+    for(const task of matches) add(task,0);
+    return ordered;
+  },[rows,q,status]);
 
   const currentResponse=letterResponse?.term===letterTerm?letterResponse:null;
   const letterChoices=currentResponse?.letters??[];
   const selectedLetter=letterChoices.find(letter=>letter.id===selectedLetterId) ||
     (pinnedLetter?.id===selectedLetterId?pinnedLetter:undefined);
   const selectedOption=selectedLetter?letterOption(selectedLetter):null;
+  const delegationSources=!parent&&selectedOption&&purpose==="GENERAL"&&["MANAGER","DIRECTOR_OPS"].includes(user.role)
+    ? rows.filter(task=>task.letter_id===selectedOption.id&&task.to_user_id===user.id&&ASSIGNEE_TASK_STATES.includes(task.status))
+    : [];
   const strict=Boolean(v11Enabled||selectedLetter?.v11_kind);
   const scope=users.find(account=>account.id===user.id)?.v11_scope;
   const invoice=selectedLetter?.v11_kind&&selectedLetter.document_type===INVOICE_INCOMING;
@@ -257,7 +296,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
   async function create(e:FormEvent<HTMLFormElement>){
     e.preventDefault();
     setCreateBusy(true);
-    setError("");
+    setCreateError("");
 
     try{
       const form=new FormData(e.currentTarget);
@@ -272,25 +311,26 @@ export default function DispositionsClient({user}:{user:SessionUser}){
         body:JSON.stringify(payload)
       });
 
-      const j=await r.json();
+      const j=await r.json().catch(()=>null);
 
-      if(!r.ok){
-        setError(j.error||"Gagal membuat disposisi.");
+      if(!r.ok||!j?.data?.id){
+        setCreateError(j?.error||"Gagal membuat disposisi.");
         return;
       }
 
       let uploaded=0;
+      const attachments=createFiles.slice(0,5);
 
-      for(const file of createFiles.slice(0,5)){
+      for(const file of attachments){
         const fd=new FormData();
         fd.set("file",file);
 
         const ur=await fetch(`/api/dispositions/${j.data.id}/attachments`,{
           method:"POST",
           body:fd
-        });
+        }).catch(()=>null);
 
-        if(ur.ok) uploaded++;
+        if(ur?.ok) uploaded++;
       }
 
       setOpen(false);
@@ -298,11 +338,16 @@ export default function DispositionsClient({user}:{user:SessionUser}){
       setSelectedLetterId("");
       setParent(null);
       setPurpose("GENERAL");
-      setMessage(`Disposisi berhasil dikirim${uploaded?` dengan ${uploaded} lampiran`:""}.`);
+      const outcome=j.data.parent_id?"Delegasi tersambung ke disposisi asal.":"Disposisi berhasil dikirim.";
+      const uploadStatus=uploaded<attachments.length
+        ? ` ${uploaded} dari ${attachments.length} lampiran tambahan tersimpan. Unggah sisanya dari detail tugas.`
+        : uploaded?` ${uploaded} lampiran tambahan tersimpan.`:"";
+      setMessage(outcome+uploadStatus);
       await load();
+      if(j.data.parent_id) await openDetail(j.data.parent_id);
 
-    }catch(e){
-      setError(e instanceof Error?e.message:"Gagal membuat disposisi.");
+    }catch{
+      setCreateError("Gagal mengirim disposisi. Cek daftar sebelum mencoba lagi.");
     }finally{
       setCreateBusy(false);
     }
@@ -491,6 +536,8 @@ export default function DispositionsClient({user}:{user:SessionUser}){
 
   const generalAttachments=
     detail?.attachments?.filter((a:any)=>!a.disposition_action_id)||[];
+  const sourceAttachments=detail?.sourceAttachments??[];
+  const childTasks=detail?.children??[];
 
   const processAttachments=(id:string)=>
     detail?.attachments?.filter((a:any)=>a.disposition_action_id===id)||[];
@@ -508,6 +555,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
           searchLetters("");
           setLetterResponse(null);
           setCreateFiles([]);
+          setCreateError("");
           setOpen(true);
         }}>
           + Buat Disposisi
@@ -573,13 +621,15 @@ export default function DispositionsClient({user}:{user:SessionUser}){
           </thead>
 
           <tbody>
-            {filtered.map(d=>
+            {filtered.map(({task:d,depth})=>
               <tr key={d.id} className={`letter-row ${docClass(d.document_type)}`}>
                 <td>
-                  <b>{d.subject}</b>
-                  <span className="muted" style={{display:"block",fontSize:10}}>
-                    {d.letter_number||d.external_number||"-"}
-                  </span>
+                  <div className={depth?"disposition-child":""} style={depth?{marginInlineStart:Math.min(depth-1,3)*10}:undefined}>
+                    <b>{depth?`Delegasi ke ${d.to_name}`:d.subject}</b>
+                    <span className="muted" style={{display:"block",fontSize:10}}>
+                      {d.parent_id&&!depth?"Delegasi · ":""}{d.letter_number||d.external_number||"-"}
+                    </span>
+                  </div>
                 </td>
 
                 <td>{d.from_name}</td>
@@ -613,13 +663,14 @@ export default function DispositionsClient({user}:{user:SessionUser}){
 
     {open&&
       <Modal
-        title="Buat Disposisi"
+        title={parent?"Teruskan Disposisi":"Buat Disposisi"}
         subtitle="Pilih dokumen dan penanggung jawab sesuai tahap review."
         onClose={()=>!createBusy&&setOpen(false)}
       >
         <form onSubmit={create} className="form-grid workflow-form">
+          {createError&&<div className="error field full" role="alert">{createError}</div>}
           {parent&&<div className="field full notice">
-            <b>Delegasi dari</b> {parent.subject}
+            Terhubung ke tugas dari <b>{parent.from_name}</b>.
             <input type="hidden" name="parent_id" value={parent.id}/>
           </div>}
           <input type="hidden" name="letter_id" value={parent?selectedLetterId:selectedOption?.id||""}/>
@@ -631,12 +682,18 @@ export default function DispositionsClient({user}:{user:SessionUser}){
                 value={selectedOption?`${selectedOption.reference} — ${selectedOption.subject}`:parent.subject}/>
             </> : <DispositionLetterPicker options={letterChoices.map(letterOption)} selected={selectedOption}
               query={letterQuery} loading={!currentResponse} error={currentResponse?.error}
-              onSearch={searchLetters} onSelect={selectLetter}/>}
+              onSearch={searchLetters} onSelect={selectLetter} onRetry={()=>{
+                setLetterResponse(null);
+                setLetterAttempt(attempt=>attempt+1);
+              }}/>}
 
             {selectedLetter?.confidentiality&&<span className="hint">Sifat surat <ConfidentialityBadge value={selectedLetter.confidentiality}/></span>}
-            <span className="hint">
-              Reviewer aktif dapat memberi tugas saat Surat Masuk V11 masih diperiksa.
-            </span>
+            {delegationSources.length===1&&<span className="hint">
+              {delegationSources[0].status==="IN_PROGRESS"
+                ? `Disposisi ini akan tersambung ke tugas dari ${delegationSources[0].from_name}.`
+                : "Mulai disposisi asal sebelum meneruskannya ke PIC."}
+            </span>}
+            {delegationSources.length>1&&<span className="hint">Buka salah satu disposisi asal lalu pilih Teruskan ke PIC.</span>}
           </div>
 
           {selectedLetter&&(invoice||notePayment)&&<label className="field">
@@ -710,7 +767,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
               accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.txt,.csv"
               onChange={e=>setCreateFiles(Array.from(e.target.files||[]).slice(0,5))}
             />
-            <span className="hint">Maks. 10 MB/file.</span>
+            <span className="hint">Lampiran surat asal ikut ditampilkan. Unggah berkas tambahan bila perlu, maks. 10 MB per file.</span>
           </div>
 
           <div className="field full modal-actions">
@@ -792,16 +849,46 @@ export default function DispositionsClient({user}:{user:SessionUser}){
               {detail.disposition.status==="IN_PROGRESS"&&(detail.disposition.to_user_id===user.id||user.role==="ROOT_ADMIN")&&<>
                 {["STAFF","FINANCE","ROOT_ADMIN"].includes(user.role)&&
                   <a className="btn btn-secondary" href={"/letters/outgoing?source_disposition_id="+encodeURIComponent(detail.disposition.id)}>Buat Draf Surat Hasil</a>}
-                {canCreate&&<button className="btn btn-secondary" onClick={()=>{
+                {canCreate&&(detail.disposition.to_user_id===user.id||!detail.disposition.purpose)&&<button className="btn btn-secondary" onClick={()=>{
+                  searchLetters("");
                   setParent(detail.disposition);
-                  setPurpose("GENERAL");
                   setSelectedLetterId(detail.disposition.letter_id);
                   setCreateFiles([]);
+                  setCreateError("");
                   setDetailOpen(false);
                   setOpen(true);
-                }}>Delegasikan ke PIC</button>}
+                }}>Teruskan ke PIC</button>}
               </>}
             </div>
+
+            {(detail.parent||childTasks.length>0)&&<section className="card disposition-context">
+              <div className="card-head"><h3>Jalur Disposisi</h3></div>
+              <div className="card-body">
+                {detail.parent&&<div className="disposition-file">
+                  <div><b>Tugas asal</b><div>{detail.parent.from_name} → {detail.parent.to_name}</div></div>
+                  <button className="btn btn-secondary" onClick={()=>void openDetail(detail.parent.id)}>Buka Tugas Asal</button>
+                </div>}
+                {childTasks.map((task:any)=><div className="disposition-file" key={task.id}>
+                  <div><b>Delegasi ke {task.to_name}</b><div>Posisi saat ini · {task.current_owner_name||task.to_name}</div></div>
+                  <StatusBadge status={task.status}/>
+                  <button className="btn btn-secondary" onClick={()=>void openDetail(task.id)}>Buka Delegasi</button>
+                </div>)}
+              </div>
+            </section>}
+
+            <section className="card disposition-context">
+              <div className="card-head"><h3>Lampiran Surat Asal</h3></div>
+              <div className="card-body">
+                {sourceAttachments.map((file:any)=><div className="disposition-file" key={file.id}>
+                  <div>
+                    <b>{file.original_name}</b>
+                    <span className="muted" style={{display:"block"}}>{SOURCE_FILE_LABELS[file.source_kind]||"Lampiran"} · {size(Number(file.original_size))}</span>
+                  </div>
+                  <AttachmentActions id={file.id} name={file.original_name}/>
+                </div>)}
+                {!sourceAttachments.length&&<div className="empty">Belum ada lampiran surat asal yang tersedia.</div>}
+              </div>
+            </section>
 
             {detail.paymentDocuments&&<PaymentDocumentsPanel id={detail.disposition.letter_id}
               data={{...detail.paymentDocuments,editable:false}}/>}
@@ -815,8 +902,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
             <div className="card" style={{boxShadow:"none",marginTop:14}}>
               <div className="card-head">
                 <div>
-                  <h3>Lampiran</h3>
-                  <p>Dokumen pendukung umum pada disposisi.</p>
+                  <h3>Lampiran Tambahan Disposisi</h3>
                 </div>
               </div>
 
@@ -837,7 +923,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
                 )}
 
                 {!generalAttachments.length&&
-                  <div className="empty">Belum ada lampiran umum.</div>
+                  <div className="empty">Belum ada lampiran tambahan.</div>
                 }
 
                 {(user.role==="ROOT_ADMIN" ||
@@ -851,8 +937,9 @@ export default function DispositionsClient({user}:{user:SessionUser}){
                       type="file"
                       multiple
                       onChange={async e=>{
-                        await uploadGeneral(detail.disposition.id,Array.from(e.target.files||[]));
+                        const files=Array.from(e.currentTarget.files||[]);
                         e.currentTarget.value="";
+                        await uploadGeneral(detail.disposition.id,files);
                       }}
                     />
                   </label>

@@ -84,7 +84,7 @@ export async function POST(request:Request) {
       throw new Error("Isi tanggal dan jam target selesai yang valid (WIB).");
     }
 
-    const parentId = str(b.parent_id, 36) || null;
+    const requestedParentId = str(b.parent_id, 36) || null;
     const purpose = taskPurpose(b.purpose);
     const requirement = purpose === "GENERAL" ? resultRequirement(b.result_requirement) : "ATTACHMENT";
     const data = await withTransaction(async conn => {
@@ -110,6 +110,18 @@ export async function POST(request:Request) {
       const letterStatus=String(letter.status);
       const direction=String(letter.direction);
 
+      let parentId = requestedParentId;
+      if (!parentId && purpose === "GENERAL" && ["MANAGER","DIRECTOR_OPS"].includes(user.role)) {
+        const [parents] = await conn.query<RowDataPacket[]>(
+          `SELECT id FROM siap_dispositions WHERE letter_id=? AND to_user_id=?
+           AND status IN ('UNSEEN','SEEN','IN_PROGRESS') LIMIT 2`, [letterId, user.id],
+        );
+        if (parents.length > 1) {
+          throw new Error("Ada beberapa disposisi aktif untuk surat ini. Buka tugas asal dan pilih Teruskan ke PIC.");
+        }
+        parentId = parents[0]?.id ?? null;
+      }
+
       const inReview = Boolean(workflow) && direction === "INCOMING" && Boolean(reviewRole(letterStatus));
       if (inReview && !parentId &&
           (reviewRole(letterStatus) !== user.role || letter.current_owner_user_id !== user.id)) return null;
@@ -123,9 +135,12 @@ export async function POST(request:Request) {
           [parentId],
         );
         const parent = parents[0];
-        if (!parent || parent.letter_id !== letterId || parent.status !== "IN_PROGRESS" ||
+        if (!parent || parent.letter_id !== letterId ||
             ((strict || user.role !== "ROOT_ADMIN") && parent.to_user_id !== user.id)) {
           throw new Error("Delegasi hanya dapat dibuat untuk disposisi asal yang sedang Anda kerjakan.");
+        }
+        if (parent.status !== "IN_PROGRESS") {
+          throw new Error("Buka dan mulai disposisi asal sebelum meneruskannya ke PIC.");
         }
       }
 
@@ -239,7 +254,7 @@ export async function POST(request:Request) {
           to:"UNSEEN",note:instruction.slice(0,240)},
         request
       }, conn);
-      return { id };
+      return { id, parent_id: parentId };
     });
 
     if (!data) return NextResponse.json({ ok:false,error:"Hanya reviewer atau peserta yang berwenang dapat menugaskan dokumen ini." }, { status:403 });

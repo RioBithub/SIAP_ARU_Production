@@ -18,13 +18,22 @@ import { saveUpload } from "@/lib/upload";
 import { checkedDate, invoiceKey, officialManager, persekotChecklist, receiptFields,
   requestingUnit, saveProof, takeFile, v11Enabled } from "@/lib/v11-data";
 import { jakartaDate } from "@/lib/v11-workflow";
+import type { SessionUser } from "@/lib/types";
 
 export const runtime = "nodejs";
 
 export async function GET(request: Request) {
-  const user = await getCurrentUser();
-  if (!user) return NextResponse.json({ ok:false,error:"Unauthorized" },{status:401});
+  try {
+    const user = await getCurrentUser();
+    if (!user) return NextResponse.json({ ok: false, error: "Silakan masuk kembali." }, { status: 401 });
+    return await listLetters(request, user);
+  } catch (error) {
+    console.error("GET /api/letters", error instanceof Error && "code" in error ? error.code : "LIST_FAILED");
+    return NextResponse.json({ ok: false, error: "Daftar dokumen belum dapat dimuat. Coba lagi." }, { status: 503 });
+  }
+}
 
+async function listLetters(request: Request, user: SessionUser) {
   const url = new URL(request.url);
   const direction = url.searchParams.get("direction");
   const status = url.searchParams.get("status");
@@ -45,12 +54,21 @@ export async function GET(request: Request) {
   if (forDisposition) {
     where.push(`(
       (l.direction='OUTGOING' AND l.status='ISSUED')
-      OR (l.direction<>'OUTGOING' AND (l.status='APPROVED'
+      OR (l.direction<>'OUTGOING' AND (
+        l.status='APPROVED'
         OR (v.letter_id IS NULL AND l.status IN ('DISPOSED','IN_PROGRESS','COMPLETED'))
-        OR (v.letter_id IS NOT NULL AND l.direction='INCOMING' AND l.current_owner_user_id=?
-          AND l.status IN ('MANAGER_REVIEW','DIRECTOR_OPS_REVIEW','PRESIDENT_DIRECTOR_REVIEW'))))
+        OR (
+          v.letter_id IS NOT NULL AND l.direction='INCOMING'
+          AND l.status IN ('MANAGER_REVIEW','DIRECTOR_OPS_REVIEW','PRESIDENT_DIRECTOR_REVIEW')
+          AND (
+            l.current_owner_user_id=? OR (? IN ('MANAGER','DIRECTOR_OPS') AND EXISTS (
+              SELECT 1 FROM siap_dispositions d WHERE d.letter_id=l.id AND d.to_user_id=? AND d.status='IN_PROGRESS'
+            ))
+          )
+        )
+      ))
     )`);
-    params.push(user.id);
+    params.push(user.id, user.role, user.id);
   }
   if (direction) { where.push("l.direction=?"); params.push(direction); }
   if (status === "SENT") where.push("l.status='ISSUED' AND l.sent_date IS NOT NULL");
@@ -62,14 +80,14 @@ export async function GET(request: Request) {
   if (documentType) { where.push("l.document_type=?"); params.push(documentType); }
   if (year && /^\d{4}$/.test(year)) { where.push("YEAR(l.letter_date)=?"); params.push(Number(year)); }
 
-  const displayNumber = `COALESCE(NULLIF(l.legacy_number_text,''),
-    CASE WHEN nl.seq_base IS NULL THEN NULL
-         WHEN nl.variant>0 THEN CONCAT(nl.seq_base,'.',nl.variant)
-         ELSE CAST(nl.seq_base AS CHAR) END)`;
+  const ledgerNumber = `CASE WHEN nl.seq_base IS NULL THEN NULL
+    WHEN nl.variant>0 THEN CONCAT(nl.seq_base,'.',nl.variant)
+    ELSE CAST(nl.seq_base AS CHAR) END`;
+  const displayNumber = `COALESCE(NULLIF(l.legacy_number_text,''), ${ledgerNumber})`;
   if (q) {
     const columns = ["l.letter_number", "l.external_number", "l.subject", "l.sender", "l.recipient",
       "l.legacy_number_text", "CAST(nl.seq_base AS CHAR)"];
-    if (forDisposition) columns.push(displayNumber);
+    if (forDisposition) columns.push(`(${ledgerNumber})`);
     where.push(`(${columns.map(column => `${column} LIKE ?`).join(" OR ")})`);
     params.push(...columns.map(() => `%${q}%`));
   }
@@ -80,8 +98,10 @@ export async function GET(request: Request) {
 
   const order = ["l.letter_date DESC", "l.created_at DESC"];
   if (forDisposition && q) {
-    order.unshift(`CASE WHEN ? IN (${displayNumber}, l.letter_number, l.external_number) THEN 0 ELSE 1 END`);
-    params.push(q);
+    // Compare each column independently so older number columns can use different collations.
+    order.unshift(`CASE WHEN l.letter_number=? OR l.external_number=? OR l.legacy_number_text=?
+      OR (NULLIF(l.legacy_number_text,'') IS NULL AND (${ledgerNumber})=?) THEN 0 ELSE 1 END`);
+    params.push(q, q, q, q);
   }
   params.push(limit);
   const [rows] = await db.query<RowDataPacket[]>(

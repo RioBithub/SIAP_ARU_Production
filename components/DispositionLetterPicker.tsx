@@ -4,7 +4,7 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 
 export type DispositionLetterOption = { id: string; subject: string; reference: string };
 
-export default function DispositionLetterPicker({ options, selected, query, loading, error, onSearch, onSelect }: {
+export default function DispositionLetterPicker({ options, selected, query, loading, error, onSearch, onSelect, onRetry }: {
   options: DispositionLetterOption[];
   selected: DispositionLetterOption | null;
   query: string;
@@ -12,6 +12,7 @@ export default function DispositionLetterPicker({ options, selected, query, load
   error?: string;
   onSearch: (query: string) => void;
   onSelect: (id: string) => void;
+  onRetry: () => void;
 }) {
   const inputId = useId();
   const listId = `${inputId}-results`;
@@ -78,9 +79,16 @@ export default function DispositionLetterPicker({ options, selected, query, load
         <span className="muted">{option.reference}</span>
       </li>)}
     </ul>}
-    {expanded && !showOptions && (error
-      ? <span className="hint" role="alert">{error}</span>
-      : <span className="hint" role="status">{loading ? "Mencari dokumen…" : query.trim()
-        ? "Tidak ada dokumen yang cocok." : "Belum ada dokumen yang dapat didisposisikan."}</span>)}
+    {error ? <div className="disposition-search-feedback">
+      <span className="hint" role="alert">{error}</span>
+      <button className="btn btn-secondary" type="button" onClick={() => {
+        input.current?.focus();
+        setExpanded(true);
+        onRetry();
+      }}>Coba Lagi</button>
+    </div> : expanded && !showOptions && <span className="hint" role="status">
+      {loading ? "Mencari dokumen…" : query.trim()
+        ? "Tidak ada dokumen yang cocok." : "Belum ada dokumen yang dapat didisposisikan."}
+    </span>}
   </>;
 }

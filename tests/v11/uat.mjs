@@ -268,8 +268,11 @@ try {
     const doc = await detail("ops", state.invoice);
     assert.equal(doc.v11.verified, true);
     assert.equal(doc.letter.status, "MANAGER_REVIEW");
-    assert.equal((await taskDetail("ops", state.verify)).disposition.status, "COMPLETED");
-    return "Staff verifikasi bukti dan Manager ACC; status dokumen masih review.";
+    const task = await taskDetail("ops", state.verify);
+    assert.equal(task.disposition.status, "COMPLETED");
+    assert(task.sourceAttachments.some(file => file.id === doc.originalId && file.source_kind === "ORIGINAL"));
+    assert(task.sourceAttachments.some(file => file.id === state.receipt && file.source_kind === "RECEIPT"));
+    return "Staff verifikasi bukti dan Manager ACC. Invoice asli dan bukti terima ikut tampil tanpa unggah ulang.";
   });
   await test(15, async () => {
     await assign("ops", state.invoice, "finance", { purpose: "INVOICE_VERIFY" }, 400);
@@ -441,8 +444,21 @@ try {
     const a = await assign("dirut", id, "dirops");
     await start("dirops", a.id);
     const b = await assign("dirops", id, "ops", { parent_id: a.id });
+    await assign("ops", id, "staff", {}, 400);
     await start("ops", b.id);
-    const c = await assign("ops", id, "staff", { parent_id: b.id });
+    const c = await assign("ops", id, "staff");
+    assert.equal(c.parent_id, b.id);
+    const linked = await taskDetail("staff", c.id);
+    assert.equal(linked.parent.id, b.id);
+    const parent = await taskDetail("dirops", b.id);
+    assert.equal(parent.children[0].id, c.id);
+    assert.deepEqual(linked.sourceAttachments, parent.sourceAttachments);
+    assert.equal(linked.sourceAttachments.length, 2);
+    for (const file of linked.sourceAttachments) {
+      assert((await call("staff", "/api/attachments/" + file.id, { raw: true })).bytes.equals(pdf));
+      await call("staffkeu", "/api/attachments/" + file.id, { status: 403 });
+    }
+    assert.equal(linked.attachments.length, 0);
     await start("staff", c.id);
     for (const [owner, reviewer, task, expected] of [
       ["staff", "ops", c, "REVIEW_MANAGER"], ["ops", "dirops", b, "REVIEW_DIROPS"], ["dirops", "dirut", a, "REVIEW_DIRUT"],
@@ -453,7 +469,7 @@ try {
     assert.equal((await taskDetail("ops", c.id)).disposition.parent_id, b.id);
     assert.equal((await taskDetail("dirops", b.id)).disposition.parent_id, a.id);
     assert.equal((await detail("dirut", id)).letter.status, "APPROVED");
-    return "Dirut → Dirops → Manager → Staff; hasil di-ACC oleh pemberi tiap tugas.";
+    return "Dirut → Dirops → Manager → Staff. Manager otomatis meneruskan tugas aktif, lampiran asal dapat dibuka, dan hasil naik per tahap.";
   });
   await test(29, async () => {
     state.parent = (await assign("dirops", state.hierarchy, "ops")).id;
@@ -464,7 +480,11 @@ try {
     return "Induk tidak dapat mengirim hasil atau dibatalkan saat anak aktif.";
   });
   await test(30, async () => {
+    const other = await assign("dirut", state.hierarchy, "ops");
+    const ambiguous = await assign("ops", state.hierarchy, "it", {}, 400);
+    assert.match(ambiguous.error, /beberapa disposisi aktif/);
     const child2 = await assign("ops", state.hierarchy, "it", { parent_id: state.parent });
+    await taskAction("dirut", other.id, "CANCEL_TASK", { note: "Simulasi jalur lain selesai diuji." });
     await start("staff", state.child1);
     await submit("staff", state.child1);
     await taskAction("ops", state.child1, "APPROVE_RESULT");
@@ -661,12 +681,28 @@ try {
     const [ledger] = await sql.query("SELECT rendered_number,status,seq_base,variant FROM siap_number_ledger WHERE letter_id IN (?,?)", [state.manual, state.mock]);
     assert.equal(new Set(ledger.map(r => r.rendered_number)).size, 2);
     assert(ledger.every(row => row.status === "ISSUED" && row.seq_base === ledger[0].seq_base));
-    for (const { letter } of rows) {
-      const params = new URLSearchParams({ for_disposition: "1", limit: "1", q: letter.display_number });
-      const [match] = await call("root", "/api/letters?" + params);
-      assert.equal(match?.id, letter.id);
+    const [columns] = await sql.query("SHOW FULL COLUMNS FROM siap_letters");
+    const externalCollation = columns.find(column => column.Field === "external_number").Collation;
+    const letterCollation = columns.find(column => column.Field === "letter_number").Collation;
+    assert.match(externalCollation, /^utf8mb4_\w+$/);
+    const mixed = letterCollation === "utf8mb4_general_ci" ? "utf8mb4_unicode_ci" : "utf8mb4_general_ci";
+    const setCollation = value => sql.query(`ALTER TABLE siap_letters MODIFY external_number
+      VARCHAR(255) CHARACTER SET utf8mb4 COLLATE ${value} NULL`);
+    await setCollation(mixed);
+    try {
+      for (const { letter } of rows) {
+        const params = new URLSearchParams({ for_disposition: "1", limit: "1", q: letter.display_number });
+        const [match] = await call("root", "/api/letters?" + params);
+        assert.equal(match?.id, letter.id);
+      }
+      const known = (await detail("ops", state.hierarchy)).letter;
+      const hits = await call("ops", "/api/letters?for_disposition=1&q=" + encodeURIComponent(known.external_number));
+      assert.equal(hits[0]?.id, known.id);
+      assert((await call("ops", "/api/letters?for_disposition=1&q=r")).length > 0);
+    } finally {
+      await setCollation(externalCollation);
     }
-    return "Nomor terbit unik. Pencarian disposisi memprioritaskan nomor persis, termasuk varian.";
+    return "Nomor eksternal dan varian ditemukan dengan kolasi kolom nomor yang berbeda.";
   });
   await test(48, async () => {
     const build = JSON.parse(await readFile(env.SIAP_V11_BUILD_CHECK_FILE, "utf8"));
@@ -720,11 +756,21 @@ try {
       await desktop.goto(new URL("/dispositions?letter_id=" + row.id, base).href);
       const documentSearch = desktop.getByRole("combobox", { name: /^Dokumen\b/ });
       const documentId = desktop.locator('input[name="letter_id"]');
+      const matches = desktop.getByRole("listbox", { name: "Hasil pencarian dokumen" });
       await desktop.locator(`input[name="letter_id"][value="${row.id}"]`).waitFor({ state: "attached" });
       assert((await documentSearch.inputValue()).includes(subject("demo-ui-mobile")));
       await desktop.getByRole("button", { name: "Batal", exact: true }).click();
       await desktop.getByRole("button", { name: "+ Buat Disposisi", exact: true }).click();
       assert.equal(await documentSearch.inputValue(), "");
+
+      await desktop.route(url => url.pathname === "/api/letters" &&
+        url.searchParams.get("for_disposition") === "1" && url.searchParams.get("q") === "r",
+      route => route.fulfill({ status: 502, body: "" }), { times: 1 });
+      await documentSearch.fill("r");
+      await desktop.getByRole("alert").filter({ hasText: "Pencarian dokumen belum tersedia." }).waitFor();
+      await desktop.getByRole("button", { name: "Coba Lagi", exact: true }).click();
+      await matches.waitFor();
+      assert.equal(await documentSearch.inputValue(), "r");
 
       await documentSearch.fill(runId + "-dokumen-tidak-ada");
       await desktop.getByText("Tidak ada dokumen yang cocok.", { exact: true }).waitFor();
@@ -732,7 +778,6 @@ try {
       assert.equal(await documentSearch.evaluate(input => input.validity.valid), false);
 
       await desktop.setViewportSize({ width: 390, height: 844 });
-      const matches = desktop.getByRole("listbox", { name: "Hasil pencarian dokumen" });
       const match = matches.getByRole("option", { name: new RegExp(subject("demo-ui-mobile")) });
       await documentSearch.fill("demo-ui-mobile");
       await match.waitFor();
@@ -762,6 +807,14 @@ try {
       const staff = await pageFor("staff", true);
       await staff.goto(new URL("/dispositions?disposition_id=" + task.id, base).href);
       const taskDialog=staff.getByRole("dialog");
+      const sourceFiles = taskDialog.locator("section").filter({
+        has: staff.getByRole("heading", { name: "Lampiran Surat Asal", exact: true }),
+      });
+      await sourceFiles.getByText("Bukti serah terima", { exact: false }).waitFor();
+      await sourceFiles.getByRole("button", { name: "Pratinjau" }).first().click();
+      const sourcePreview = taskDialog.last();
+      await sourcePreview.locator(".pdf-page canvas").waitFor();
+      await sourcePreview.getByRole("button", { name: "Tutup dialog" }).click();
       const startButton=taskDialog.getByRole("button", { name: "Mulai", exact: true });
       await startButton.evaluate(el=>el.scrollIntoView({block:"center"}));
       await startButton.click();
@@ -781,6 +834,22 @@ try {
       await desktop.getByRole("link", { name: "Unduh Riwayat (.xlsx)", exact: true }).click();
       assert.match((await downloaded).suggestedFilename(), /^riwayat-disposisi-BIASA-.*\.xlsx$/);
 
+      const parentInstruction = subject("Tugas Dirops untuk pengujian delegasi UI");
+      const childInstruction = subject("Delegasi UI ke Staff");
+      const rootTask = await assign("dirops", state.hierarchy, "ops", { instruction: parentInstruction });
+      await start("ops", rootTask.id);
+      await desktop.goto(new URL("/dispositions?disposition_id=" + rootTask.id, base).href);
+      await desktop.getByRole("button", { name: "Teruskan ke PIC", exact: true }).click();
+      const delegateDialog = desktop.getByRole("dialog", { name: "Teruskan Disposisi" });
+      assert.equal(await delegateDialog.locator('input[name="letter_id"]').inputValue(), state.hierarchy);
+      await delegateDialog.getByRole("combobox", { name: "Diteruskan kepada" }).selectOption(roles.staff.id);
+      await delegateDialog.locator('textarea[name="instruction"]').fill(childInstruction);
+      await delegateDialog.getByRole("button", { name: "Kirim Disposisi", exact: true }).click();
+      await desktop.getByRole("button", { name: "Buka Delegasi", exact: true }).click();
+      await desktop.getByRole("button", { name: "Buka Tugas Asal", exact: true }).waitFor();
+      const childRow = desktop.getByRole("row").filter({ hasText: childInstruction });
+      assert(await childRow.evaluate((row, expected) => row.previousElementSibling?.textContent?.includes(expected), parentInstruction));
+
       const cleanup = await incoming("hapus-permanen-ui");
       const admin = await pageFor("root", false);
       await admin.goto(new URL("/letters/incoming", base).href);
@@ -798,7 +867,7 @@ try {
       await dialog.waitFor({ state: "hidden" });
       await rowFor().waitFor({ state: "hidden" });
       await call("root", "/api/letters/" + cleanup.id, { status: 404 });
-      return "Chromium 390/1440 px: registrasi, pemilihan dokumen via klik dan keyboard, kirim disposisi, invoice lunas, unduh Excel, dan hapus permanen.";
+      return "Chromium 390/1440 px: pencarian pulih dari respons kosong, pratinjau lampiran asal, navigasi induk/delegasi, serta alur sebelumnya lulus.";
     } finally {
       await browser.close();
     }
@@ -959,6 +1028,7 @@ try {
     assert.equal((await taskDetail("ops", parent.id)).disposition.visibility, "ROUTE");
     await start("ops", parent.id);
     const child = await assign("ops", secret.id, "staff", { parent_id: parent.id, visibility: "PRIVATE" });
+    assert.deepEqual((await taskDetail("dirops", parent.id)).children, []);
     await start("staff", child.id);
     await submit("staff", child.id, reference, ["files"]);
     assert.equal(sheet(await report("dirops", parent.id), "Tugas").length, 2, "Jangan ekspor tugas turunan privat bagi Dirops.");
@@ -967,6 +1037,7 @@ try {
     assert.equal(sheet(full, "Tugas").length, 3);
     assert.match(sheet(full, "Tugas")[1][9], /13:45 WIB/);
     assert(sheet(full, "Lampiran").some(row => row[0] === "1.1" && row[2] === "SIMULASI-dokumen.pdf"));
+    assert.equal(sheet(full, "Lampiran").filter(row => row[0] === "Surat asal").length, 2);
     const log = sheet(full, "Log Proses");
     const resultIndex = log.findIndex(row => row[8] === reference);
     assert(resultIndex > 0);

@@ -10,7 +10,7 @@ import { getAccessibleLetter } from "@/lib/letter-access";
 import { discardUncommittedFiles, insertLetterAttachment, type StoredLetterFile } from "@/lib/letter-uploads";
 import {
   callbackUrl, configuredSandboxSigning, mekariMode, MekariError, mockSignedPdf, predictSandboxAnnotations,
-  sandboxCredentials, sandboxPdf, sandboxStatus, sendSandboxSignature,
+  sandboxCredentials, sandboxPdf, sandboxPollDelay, sandboxStatus, sendSandboxSignature,
 } from "@/lib/mekari-sign";
 import { readStoredFile } from "@/lib/upload";
 import { saveProof } from "@/lib/v11-data";
@@ -135,15 +135,17 @@ export async function POST(request: Request, { params }: { params: { id: string 
       await lockSigningLetter(conn, params.id);
       const current = await getJob(conn, params.id, true);
       if (!current || current.mode !== mode) throw new Error("Permintaan Mekari untuk mode ini belum ada.");
-      if (current.status !== "IN_PROGRESS" || (current.next_poll_at && new Date(current.next_poll_at).getTime() > Date.now())) {
-        return { current, poll: false };
+      const retryAfter = current.status === "IN_PROGRESS" ? sandboxPollDelay(current.next_poll_at) : 0;
+      if (current.status !== "IN_PROGRESS" || retryAfter) {
+        return { current, poll: false, retryAfter };
       }
       await conn.execute("UPDATE siap_v11_signing SET next_poll_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 15 SECOND) WHERE id=?", [current.id]);
-      return { current, poll: true };
+      return { current, poll: true, retryAfter: 15 };
     });
-    if (!job.poll) return NextResponse.json({ ok: true, data: publicJob(job.current) });
+    if (!job.poll) return NextResponse.json({ ok: true, data: publicJob(job.current), retry_after: job.retryAfter || undefined });
     const { current } = job;
-    const status = mode === "mock" ? "COMPLETED" : await sandboxStatus(current.provider_id);
+    const progress = mode === "sandbox" ? await sandboxStatus(current.provider_id) : undefined;
+    const status = progress?.status ?? "COMPLETED";
     let pdf: Buffer | null = null;
     if (status === "COMPLETED") {
       try {
@@ -153,10 +155,10 @@ export async function POST(request: Request, { params }: { params: { id: string 
         const seconds = error.retryAfter ?? 15;
         await db.execute("UPDATE siap_v11_signing SET next_poll_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL ? SECOND) WHERE id=?",
           [seconds, current.id]);
-        return NextResponse.json({ ok: true, data: publicJob(current), retry_after: seconds }, { status: 202 });
+        return NextResponse.json({ ok: true, data: publicJob(current), progress, retry_after: seconds }, { status: 202 });
       }
     }
-    if (status === "IN_PROGRESS") return NextResponse.json({ ok: true, data: publicJob(current) });
+    if (status === "IN_PROGRESS") return NextResponse.json({ ok: true, data: publicJob(current), progress, retry_after: job.retryAfter });
     const data = await withTransaction(async conn => {
       await lockSigningLetter(conn, params.id);
       const latest = await getJob(conn, params.id, true);
@@ -179,7 +181,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
       return publicJob({ ...latest, status, final_attachment_id: attachmentId } as RowDataPacket);
     });
     files.length = 0;
-    return NextResponse.json({ ok: true, data });
+    return NextResponse.json({ ok: true, data, progress });
   } catch (error) {
     await discardUncommittedFiles(files);
     const safe = error instanceof MekariError || (error instanceof Error && !("code" in error));

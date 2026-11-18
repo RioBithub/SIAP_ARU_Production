@@ -188,18 +188,37 @@ export async function sendSandboxSignature(filename: string, pdf: Buffer, signin
 }
 
 export function providerStatus(value: unknown) {
-  const status = String(value ?? "").toUpperCase();
+  const status = String(value ?? "").trim().toUpperCase();
   if (!["IN_PROGRESS", "COMPLETED", "VOIDED", "DECLINED", "DENIED"].includes(status)) {
     throw new Error("Status dokumen sandbox tidak dikenal.");
   }
   return status;
 }
 
-export async function sandboxStatus(id: string, scope?: "attachment") {
+const SIGNER_STATUSES = ["awaiting", "your_turn", "completed"] as const;
+type SignerStatus = typeof SIGNER_STATUSES[number] | "unknown";
+export type SandboxProgress = { status: string; signers: { name: string; status: SignerStatus }[] };
+
+export function sandboxPollDelay(nextPollAt: Date | null) {
+  return nextPollAt ? Math.max(0, Math.ceil((new Date(nextPollAt).getTime() - Date.now()) / 1000)) : 0;
+}
+
+export async function sandboxStatus(id: string, scope?: "attachment"): Promise<SandboxProgress> {
   const response = await request("GET", "/v1/documents/" + providerId(id), { scope });
-  const result = await response.json();
+  const result = await response.json().catch(() => { throw new MekariError(0); });
   if (result?.data?.id !== id) throw new Error("Respons dokumen sandbox tidak cocok.");
-  return providerStatus(result?.data?.attributes?.signing_status);
+  const attributes = result.data.attributes;
+  const signers: unknown[] = Array.isArray(attributes?.signers) ? attributes.signers : [];
+  return {
+    status: providerStatus(attributes?.signing_status),
+    // Provider entries can contain one-time signing links and passcodes. Return display fields only.
+    signers: signers.map((signer, index) => {
+      const fields = signer && typeof signer === "object" ? signer as Record<string, unknown> : null;
+      const status = SIGNER_STATUSES.find(value => value === fields?.status) ?? "unknown";
+      const name = typeof fields?.name === "string" ? fields.name.trim().slice(0, 150) : "";
+      return { status, name: name || `Penandatangan ${index + 1}` };
+    }),
+  };
 }
 
 // Caller must check authoritative COMPLETED status before fetching the PDF.
