@@ -32,7 +32,7 @@ export async function GET() {
 
   const [rows]=await db.query<RowDataPacket[]>(
     `SELECT d.*,
-      l.subject,l.letter_number,l.external_number,l.direction,l.document_type,v.purpose,
+      l.subject,l.letter_number,l.external_number,l.direction,l.document_type,l.confidentiality,v.purpose,
       fu.name AS from_name,fu.role AS from_role,
       tu.name AS to_name,tu.role AS to_role,
       cu.name AS current_owner_name,cu.role AS current_owner_role,
@@ -195,7 +195,7 @@ export async function POST(request:Request) {
         if (prior.length) throw new Error("Sudah ada instruksi pembayaran untuk pengajuan ini.");
       }
       const taskVisibility = purpose !== "GENERAL" ? "PRIVATE"
-        : workflow && visibility === "PUBLIC" ? "ROUTE" : visibility;
+        : (workflow || letter.confidentiality === "RAHASIA") && visibility === "PUBLIC" ? "ROUTE" : visibility;
 
       const id=crypto.randomUUID();
       const actionId=crypto.randomUUID();

@@ -77,7 +77,12 @@ export async function deleteStoredFile(storagePath: string) {
   const resolved = path.resolve(storagePath);
   if (!resolved.startsWith(absoluteRoot + path.sep)) throw new Error("Lokasi file tidak valid.");
   try {
-    await fs.unlink(resolved);
+    const [root, parent] = await Promise.all([fs.realpath(absoluteRoot), fs.realpath(path.dirname(resolved))]);
+    const relative = path.relative(root, parent);
+    if (relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) {
+      throw new Error("Lokasi file tidak valid.");
+    }
+    await fs.unlink(path.join(parent, path.basename(resolved)));
   } catch (error: any) {
     if (error?.code !== "ENOENT") throw error;
   }
