@@ -1,3 +1,4 @@
+import { sandboxAttachmentsEnabled } from "@/lib/mekari-sign";
 import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { getCurrentUser } from "@/lib/auth";
@@ -83,6 +84,7 @@ export async function GET(_:Request,{params}:{params:{id:string}}) {
     };
   }
   return NextResponse.json({ok:true,data:{letter,actions,attachments,business,v11,
+    sandboxSigning: sandboxAttachmentsEnabled() && canHandleSecretariat(user.role),
     sourceLetter, sourceDisposition, hasSourceDisposition: Boolean(sourceDispositionId), hasSourceLetter: Boolean(sourceLetterId)}});
 }
 

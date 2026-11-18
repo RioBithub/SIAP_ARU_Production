@@ -5,7 +5,7 @@ import type { SignatureAnnotation } from "@/lib/mekari-sign";
 
 type Mode = "mock" | "sandbox";
 type Job = { id: string; status: string; mode: Mode; final_attachment_id: string | null };
-type Source = { id: string; original_name: string; attachment_kind: string };
+export type SandboxSource = { id: string; original_name: string; attachment_kind: string };
 type Coordinate = keyof Omit<SignatureAnnotation, "type_of">;
 type DraftSigner = {
   id: number;
@@ -28,34 +28,41 @@ function newSigner(id: number): DraftSigner {
   return { id, name: "", email: "", coordinates: editableCoordinates(), suggestion: "" };
 }
 
-export default function V11SigningPanel({ id, files, onReady }: { id: string; files: Source[]; onReady: (ready: boolean) => void }) {
+export default function V11SigningPanel({ id, files = [], onReady, source }: {
+  id: string;
+  files?: SandboxSource[];
+  onReady?: (ready: boolean) => void;
+  source?: SandboxSource;
+}) {
   const [mode, setMode] = useState<Mode | null>(null);
-  const [pilotAttachmentId, setPilotAttachmentId] = useState<string | null>(null);
   const [job, setJob] = useState<Job | null>(null);
   const [busy, setBusy] = useState<"START" | "REFRESH" | "PREDICT" | null>(null);
   const [message, setMessage] = useState("");
   const [attachmentId, setAttachmentId] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
   const [ordered, setOrdered] = useState(false);
   const [signers, setSigners] = useState([newSigner(0)]);
   const [suggestions, setSuggestions] = useState<SignatureAnnotation[]>([]);
   const nextSignerId = useRef(1);
-  const path = "/api/letters/" + id + "/signing";
+  const path = source ? "/api/attachments/" + source.id + "/signing" : "/api/letters/" + id + "/signing";
+  const selectedPdf = source?.id ?? attachmentId;
   useEffect(() => {
     const controller = new AbortController();
-    onReady(false);
+    onReady?.(false);
     setMode(null);
-    setPilotAttachmentId(null);
     setJob(null);
     void fetch(path, { signal: controller.signal }).then(async response => {
-      if (!response.ok) return;
+      if (!response.ok) {
+        if (source && !controller.signal.aborted) setMessage("Akses tanda tangan untuk PDF ini tidak tersedia.");
+        return;
+      }
       const json = await response.json();
       setMode(json.mode);
-      setPilotAttachmentId(json.pilot_attachment_id);
       setJob(json.data);
-      onReady(!json.pilot_attachment_id && json.data?.status === "COMPLETED");
+      onReady?.(json.data?.status === "COMPLETED");
     }).catch(() => {});
     return () => controller.abort();
-  }, [path, onReady]);
+  }, [path, onReady, source]);
 
   async function postAction(action: "START" | "REFRESH" | "PREDICT", fields = {}) {
     const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" },
@@ -86,7 +93,7 @@ export default function V11SigningPanel({ id, files, onReady }: { id: string; fi
     setSuggestions([]);
     setSigners(current => current.map(signer => ({ ...signer, suggestion: "" })));
     try {
-      const json = await postAction("PREDICT", { attachment_id: attachmentId, signers: recipients });
+      const json = await postAction("PREDICT", { attachment_id: selectedPdf, signers: recipients, confirm_sandbox: confirmed });
       setSuggestions(json.data);
       if (!json.data.length) setMessage("Mekari belum memberi saran posisi yang bisa dipakai. Isi posisi secara manual.");
     } catch (error) {
@@ -105,10 +112,10 @@ export default function V11SigningPanel({ id, files, onReady }: { id: string; fi
       signers: signers.map((signer, index) => ({ ...recipients[index], ...signer.coordinates })),
     } : {};
     try {
-      const fields = kind === "START" ? { attachment_id: attachmentId, ...sandboxFields } : {};
+      const fields = kind === "START" ? { attachment_id: selectedPdf, confirm_sandbox: confirmed, ...sandboxFields } : {};
       const json = await postAction(kind, fields);
       setJob(json.data);
-      onReady(!pilotAttachmentId && json.data?.status === "COMPLETED");
+      onReady?.(json.data?.status === "COMPLETED");
       if (json.retry_after) setMessage("PDF belum siap. Segarkan setelah " + json.retry_after + " detik.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Proses Mekari gagal.");
@@ -117,21 +124,22 @@ export default function V11SigningPanel({ id, files, onReady }: { id: string; fi
     }
   }
 
-  if (!mode) return null;
-  const pdfs = files.filter(file => file.attachment_kind === "ORIGINAL" && /\.pdf$/i.test(file.original_name)
-    && (!pilotAttachmentId || file.id.toLowerCase() === pilotAttachmentId));
-  return <details className="card" style={{ marginTop: 12 }}>
+  if (!mode) return source ? <p role="status">{message || "Memuat Mekari Sandbox…"}</p> : null;
+  const pdfs = files.filter(file => file.attachment_kind === "ORIGINAL" && /\.pdf$/i.test(file.original_name));
+  return <details className="card" style={{ marginTop: 12 }} open={source ? true : undefined}>
     <summary className="card-head"><b>{(job?.mode ?? mode) === "mock" ? "Simulasi Mekari Sign" : "Mekari Sign Sandbox"}</b></summary>
     <div className="card-body">
-      {pilotAttachmentId && <p className="notice">Surat simulasi. PDF hasil Sandbox tersedia sebagai bukti uji.</p>}
+      {source && <p className="notice">Hasil tanda tangan disimpan sebagai bukti Sandbox. Status persetujuan dan penerbitan dicatat melalui alur SIAP ARU.</p>}
       {message && <p className="notice" role="status">{message}</p>}
       {job ? <>
         <p>Status {job.status}</p>
         {job.status === "IN_PROGRESS" && job.mode === mode && <button className="btn btn-secondary" disabled={!!busy} onClick={() => void action("REFRESH")}>Segarkan Status Mekari</button>}
-        {job.final_attachment_id && <a href={"/api/attachments/" + job.final_attachment_id} download>{pilotAttachmentId ? "Unduh PDF bukti uji" : "Unduh PDF final"}</a>}
+        {job.final_attachment_id && <a href={"/api/attachments/" + job.final_attachment_id} download>{source ? "Unduh PDF bukti Sandbox" : "Unduh PDF final"}</a>}
       </> : <form onSubmit={event => void action("START", event)}>
         <fieldset className="form-grid signing-form" disabled={!!busy}>
-          <label className="field full"><span>PDF Draf yang Disetujui</span>
+          {source ? <label className="field full"><span>PDF sumber · {source.original_name}</span>
+            <span><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} required/> Saya sudah memastikan PDF ini boleh dikirim untuk uji di Mekari Sandbox.</span>
+          </label> : <label className="field full"><span>PDF Draf yang Disetujui</span>
             <select className="select" value={attachmentId} onChange={event => {
               setAttachmentId(event.target.value);
               setMessage("");
@@ -141,7 +149,7 @@ export default function V11SigningPanel({ id, files, onReady }: { id: string; fi
               <option value="">Pilih PDF</option>
               {pdfs.map(file => <option key={file.id} value={file.id}>{file.original_name}</option>)}
             </select>
-          </label>
+          </label>}
           {mode === "sandbox" && <>
             <label className="field full"><span>Urutan tanda tangan</span>
               <select className="select" value={ordered ? "sequential" : "parallel"} onChange={event => setOrdered(event.target.value === "sequential")}>
@@ -195,13 +203,13 @@ export default function V11SigningPanel({ id, files, onReady }: { id: string; fi
                 const signer = newSigner(nextSignerId.current++);
                 setSigners(current => [...current, signer]);
               }}>Tambah Penandatangan</button>
-              <button className="btn btn-secondary" type="button" disabled={!attachmentId || !recipients.every(
+              <button className="btn btn-secondary" type="button" disabled={!selectedPdf || (!!source && !confirmed) || !recipients.every(
                 recipient => recipient.signer_name.trim() && recipient.signer_email.trim(),
               )} onClick={() => void predict()}>{busy === "PREDICT" ? "Meminta saran posisi…" : "Prediksi Posisi Tanda Tangan"}</button>
             </div>
           </>}
           <div className="signing-controls">
-            <button className="btn btn-primary" type="submit" disabled={!attachmentId}>
+            <button className="btn btn-primary" type="submit" disabled={!selectedPdf || (!!source && !confirmed)}>
               {mode === "mock" ? "Mulai Simulasi" : "Ajukan Tanda Tangan Sandbox"}
             </button>
           </div>

@@ -18,7 +18,7 @@ import { activeTasks, checkedDate, invoiceVerified, officialManager, receiptFiel
   takeFile, v11Letter } from "@/lib/v11-data";
 import { DELIVERY_METHODS, jakartaDate } from "@/lib/v11-workflow";
 import { requireInvoicePaid } from "@/lib/v11-finance";
-import { mekariMode, mekariPilotAttachmentId, MEKARI_PILOT_JOB_MODE } from "@/lib/mekari-sign";
+import { mekariMode, MEKARI_PILOT_JOB_MODE } from "@/lib/mekari-sign";
 
 export const runtime="nodejs";
 
@@ -376,9 +376,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
           const [pilotJobs] = await conn.query<RowDataPacket[]>(
             "SELECT 1 FROM siap_v11_signing WHERE letter_id=? AND mode=?", [params.id, MEKARI_PILOT_JOB_MODE],
           );
-          if (pilotJobs.length || mekariPilotAttachmentId(params.id)) {
-            throw new Error("Surat simulasi Mekari Sandbox tidak dapat diterbitkan.");
-          }
+          if (pilotJobs.length) throw new Error("Surat simulasi dengan konfigurasi pilot lama tidak dapat diterbitkan.");
         }
 
         if (secretariat || (documentType === SPK_OUTGOING && await getBusinessDocumentRow(params.id, conn))) {

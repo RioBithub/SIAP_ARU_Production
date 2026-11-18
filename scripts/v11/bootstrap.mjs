@@ -104,6 +104,9 @@ try {
   const notifications = await readFile("database/migrations/2026-11-18-v11-notifications.sql", "utf8");
   await cn.query(notifications);
   await cn.query(notifications);
+  const mekariAttachments = await readFile("database/migrations/2026-11-18-v11-mekari-attachments.sql", "utf8");
+  await cn.query(mekariAttachments);
+  await cn.query(mekariAttachments);
   if (before !== await snapshotRows()) throw new Error("Migrasi V11 mengubah baris lama.");
   await cn.execute("INSERT INTO siap_v11_managers (scope,user_id) VALUES ('OPS',?),('KSU',?)",
     [accounts.ops.id, accounts.ksu.id]);

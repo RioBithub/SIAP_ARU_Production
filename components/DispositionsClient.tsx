@@ -2,6 +2,7 @@
 
 import { FormEvent,useEffect,useMemo,useState } from "react";
 import type { SessionUser } from "@/lib/types";
+import AttachmentSandbox from "@/components/AttachmentSandbox";
 import Modal from "@/components/Modal";
 import StatusBadge from "@/components/StatusBadge";
 import { RESULT_REQUIREMENTS, reviewRole, type ResultRequirement } from "@/lib/correspondence-workflow";
@@ -735,6 +736,12 @@ export default function DispositionsClient({user}:{user:SessionUser}){
                 }}>Delegasikan ke PIC</button>}
               </>}
             </div>
+
+            {detail.sandboxSigning && <AttachmentSandbox key={detail.disposition.id}
+              files={detail.attachments.filter((file:any) =>
+                ["ORIGINAL","ADDITIONAL"].includes(file.attachment_kind) ||
+                detail.actions.some((action:any) => action.id === file.disposition_action_id && action.action === "SUBMIT_RESULT"))
+              }/>}
 
             <div className="card" style={{boxShadow:"none",marginTop:14}}>
               <div className="card-head">

@@ -16,7 +16,8 @@ try {
   const [[marker]] = await connection.query("SELECT id FROM siap_v11_stage_marker");
   if (marker.id !== profile.marker) throw new Error("Marker staging berbeda.");
   await connection.query(await readFile("database/migrations/2026-11-18-v11-notifications.sql", "utf8"));
-  console.log("Migrasi notifikasi staging selesai.");
+  await connection.query(await readFile("database/migrations/2026-11-18-v11-mekari-attachments.sql", "utf8"));
+  console.log("Migrasi notifikasi dan Sandbox lampiran staging selesai.");
 } finally {
   await connection.end();
 }

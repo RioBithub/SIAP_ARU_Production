@@ -1,3 +1,4 @@
+import { sandboxAttachmentsEnabled } from "@/lib/mekari-sign";
 import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { getCurrentUser } from "@/lib/auth";
@@ -72,6 +73,8 @@ export async function GET(_:Request,{params}:{params:{id:string}}){
     ) : [[]];
   return NextResponse.json({
     ok:true,
-    data:{disposition:d,actions:history,attachments,payments}
+    data:{disposition:d,actions:history,attachments,payments,
+      sandboxSigning: sandboxAttachmentsEnabled() && (user.role === "ROOT_ADMIN" ||
+        [d.from_user_id,d.to_user_id,d.current_owner_user_id].includes(user.id))}
   });
 }

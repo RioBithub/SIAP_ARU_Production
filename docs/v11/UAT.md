@@ -59,8 +59,17 @@ Notifikasi diperiksa dengan akun penerima dan akun lain. Akun lain tidak dapat m
 
 Pengujian tambahan memigrasikan staging lama dari 35 menjadi 36 tabel, menjalankan migrasi kembali dan mencocokkan seluruh baris lama. Panduan presenter ada di [SKENARIO-PAK-NOR.md](SKENARIO-PAK-NOR.md).
 
-## Uji pembatasan Sandbox dari situs utama
+## Uji awal dengan pembatasan satu surat (riwayat)
 
 Typecheck dan build lulus pada Node 20.20.2. Lima tes adapter dan suite regresi lokal lulus (48 PASS, 2 SKIP untuk panggilan vendor). Uji API dan Chromium memakai database lokal terisolasi, konfigurasi service tanpa mode staging, serta gateway simulasi. Surat lain, PDF lain, akun tanpa izin, dan email di luar daftar ditolak. Prediksi dua posisi, dua penandatangan berurutan, polling dan unduhan bukti uji lulus. Penerbitan ditolak lewat opsi Mekari maupun unggah manual. Setelah konfigurasi pilot dilepas, panel tersembunyi dan surat simulasi tetap ditolak saat diajukan untuk penerbitan.
 
-[Langkah tes UAT-045 pada situs utama](PILOT-MEKARI.md)
+[Langkah tes UAT-045 pada situs utama](MEKARI-SANDBOX.md)
+
+
+## Sandbox per lampiran surat dan disposisi
+
+Typecheck dan build lulus pada Node 20.20.2. Skema lokal menerima migrasi tambahan dua kali dengan snapshot baris lama identik. Backup dan restore mencocokkan 37 tabel. Lima tes adapter lulus.
+
+Tes API dan Chromium di database terisolasi dengan gateway Mekari simulasi memproses dua PDF independen pada satu Surat Keluar dan satu laporan hasil disposisi. API menolak akun yang tidak berwenang, email di luar daftar, dan permintaan tanpa konfirmasi. Prediksi, kedua penandatangan, deduplikasi pengajuan serentak, polling dan unduhan lulus. Persetujuan disposisi dan penerbitan surat tidak berubah ketika PDF Sandbox selesai. UAT-045 lewat undangan Mekari eksternal masih menunggu uji dari VPS.
+
+[Panduan deploy dan uji Sandbox per lampiran](MEKARI-SANDBOX.md)

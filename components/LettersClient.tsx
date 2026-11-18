@@ -9,6 +9,7 @@ import BusinessDocumentFields, { BusinessDocumentSummary, ReferencePicker } from
 import { INVOICE_INCOMING, INVOICE_OUTGOING, SPK_INCOMING, SPK_OUTGOING, isBusinessDocument, isInvoice, type DocumentReference } from "@/lib/business-documents";
 
 import { DELIVERY_METHODS, MANAGER_SCOPES, staffUnit, type ManagerScope } from "@/lib/v11-workflow";
+import AttachmentSandbox from "@/components/AttachmentSandbox";
 import V11SigningPanel from "@/components/V11SigningPanel";
 import { PersekotFields, ReceiptFields, UnitField, WorkflowSummary } from "@/components/V11LetterFields";
 
@@ -718,7 +719,9 @@ export default function LettersClient({direction,user}:Props){
           <div style={{marginTop:13}} className="notice">{detail.letter.summary||"Belum ada ringkasan."}</div>
           {detail.business&&<BusinessDocumentSummary details={detail.business} documentType={detail.letter.document_type}/>}
           <WorkflowSummary data={detail.v11} date={detail.letter.received_date}/>
-          {detail.v11&&detail.letter.status==="WAITING_SIGNATURE"&&canHandleSecretariat(user.role)&&
+          {detail.sandboxSigning && <AttachmentSandbox key={detail.letter.id}
+            files={generalAttachments.filter((file:any) => ["ORIGINAL","ADDITIONAL"].includes(file.attachment_kind))}/>}
+          {!detail.sandboxSigning&&detail.v11&&detail.letter.status==="WAITING_SIGNATURE"&&canHandleSecretariat(user.role)&&
             <V11SigningPanel key={detail.letter.id} id={detail.letter.id} files={generalAttachments} onReady={setSigningReady}/>}
           <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:13}}>
             {canEditDetail()&&<button className="btn btn-secondary" onClick={openEdit}>Edit Metadata</button>}
