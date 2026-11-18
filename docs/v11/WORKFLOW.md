@@ -74,3 +74,26 @@ Notifikasi di aplikasi mengikuti penerima review surat, disposisi baru, pengemba
 Header aplikasi memperbarui jumlah notifikasi setiap 15 detik saat halaman aktif. Klik notifikasi membuka dokumen atau tugas dan mencatat waktu baca. Histori surat dan disposisi menyimpan rincian transisi.
 
 Bagian verifikasi invoice menampilkan **Menunggu Verifikasi**, **Disetujui**, atau **Ditolak**. Persetujuan hasil unit berlaku untuk revisi aktif. Penolakan final pada dokumen menampilkan Ditolak. Pembayaran dapat diproses setelah persetujuan dokumen dan instruksi Manager KSU kepada Finance.
+
+## Persyaratan sebelum Finance
+
+Dari detail Invoice Masuk V11, Pengajuan Persekot, atau Pengajuan Pembayaran Nonpersekot, buka **Persyaratan sebelum Finance**. Penyusun, pihak yang berwenang di jalur review, atau Staff yang sedang mengerjakan disposisi bisa memilih kategori dan mengunggah berkas PDF, JPG, atau PNG. Sistem memeriksa tipe berkas dan mencatat pengunggah di audit. Dokumen lama yang hanya dicentang perlu dilengkapi lewat panel ini.
+
+| Persyaratan | Persekot | Nonpersekot dan Invoice Masuk |
+| --- | --- | --- |
+| BPK Pengajuan | Wajib | Wajib |
+| SPB dalam PDF | Wajib sejak pengajuan | Dikecualikan |
+| Nota Dinas ke Keuangan/Direksi | Wajib | Wajib |
+| Kontrak Perjanjian | Wajib | Wajib |
+| SPK | Wajib | Wajib, rujukan SPK invoice yang masih berlaku dan memiliki berkas dapat dihitung |
+| Perhitungan Margin | Wajib | Wajib |
+| Surat Pesanan | Wajib | Wajib |
+| Surat Informasi Pembayaran / Rekening Penerima | Wajib bila ke vendor | Wajib bila ke vendor |
+
+Tentukan apakah pembayaran ditujukan kepada vendor atau selain vendor. Invoice Masuk menggunakan vendor sebagai nilai awal. Jika invoice dicatat tanpa rujukan SPK, unggah berkas SPK pada kategorinya sebelum instruksi bayar. Nota Dinas biasa tetap tersedia untuk surat internal di luar pengajuan pembayaran.
+
+Manager KSU membuat disposisi pembayaran setelah pengajuan disetujui dan semua persyaratan terisi. Finance mengunggah bukti hasil pembayaran. Manager KSU memeriksa dan meng-ACC hasil. Untuk Invoice Masuk, verifikasi unit tetap wajib dan pencatatan terhubung ke buku utang. Untuk Nota Dinas, instruksi dan bukti tercatat di disposisi pembayaran pengajuan.
+
+### Penerapan
+
+Terapkan `database/migrations/2026-11-18-v11-payment-documents.sql` setelah migrasi V11 yang sudah terpasang dan sebelum memulai build baru di produksi. Migrasi menambah dua tabel, mempertahankan SPB lama, dan tidak mengubah data historis. Pengajuan V11 yang masih berjalan perlu mengisi persyaratan yang kurang sebelum masuk atau meneruskan proses Finance. Alur dokumen historis di luar V11 mengikuti aturan awalnya.

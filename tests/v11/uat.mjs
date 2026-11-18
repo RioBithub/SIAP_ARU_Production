@@ -121,6 +121,15 @@ async function approveOut(id, prepare = true) {
   assert.deepEqual(states, ["MANAGER_REVIEW", "DIRECTOR_OPS_REVIEW", "PRESIDENT_DIRECTOR_REVIEW", "READY_TO_ISSUE"]);
   if (prepare) assert.equal((await letterAction("secretariat", id, "PREPARE_ISSUE")).status, "WAITING_SIGNATURE");
 }
+const payDocuments = ["BPK", "NOTA", "KONTRAK", "SPK", "MARGIN", "PESANAN", "REKENING"];
+const payFile = (role, id, code, status = 200) =>
+  post(role, "/api/letters/" + id + "/payment-documents", multipart({ document_code: code }, ["file"]), status);
+const payRecipient = (role, id, recipient, status = 200) =>
+  post(role, "/api/letters/" + id + "/payment-documents", multipart({ recipient_type: recipient }, []), status);
+async function fillPayDocs(role, id, codes) {
+  for (const code of codes) await payFile(role, id, code);
+}
+
 const pay = (ref, amount) => ({
   payment_amount: String(amount), payment_date: d, payment_payee: "Vendor Fiktif",
   payment_account: "SIMULASI-REKENING", payment_reference: ref, bookkeeping_note: "Pencatatan simulasi",
@@ -300,12 +309,19 @@ try {
     return "ACC Direksi memindahkan approval saja; nominal bayar masih nol.";
   });
   await test(19, async () => {
+    const missing = await assign("ksu", state.invoice, "finance", { purpose: "INVOICE_PAYMENT" }, 400);
+    assert.match(missing.error, /BPK Pengajuan/);
+    await payFile("sdm", state.invoice, "BPK", 403);
+    const spk = (await detail("ksu", state.invoice)).v11.payment_documents.documents.find(doc => doc.code === "SPK");
+    assert.equal(spk.linked, true);
+    await fillPayDocs("staff", state.invoice, payDocuments.filter(code => code !== "SPK"));
+    assert.deepEqual((await detail("ksu", state.invoice)).v11.payment_documents.missing, []);
     state.paymentTask = (await assign("ksu", state.invoice, "finance", { purpose: "INVOICE_PAYMENT" })).id;
     const task = await taskDetail("finance", state.paymentTask);
     assert.equal(task.disposition.purpose, "INVOICE_PAYMENT");
     assert.equal(task.disposition.visibility, "PRIVATE");
     await start("finance", state.paymentTask);
-    return "Instruksi pembayaran KSU diterima Finance dengan akses privat.";
+    return "Invoice dengan SPK tertaut diblokir bila berkas lain kurang. Finance mendapat instruksi privat begitu lengkap.";
   });
   await test(20, async () => {
     await submit("finance", state.paymentTask, "Pembayaran parsial pertama", ["files"], pay(runId + "-PAY1", 40000));
@@ -354,7 +370,15 @@ try {
     const row = await incoming("invoice-no-spb", { type: "INVOICE_MASUK", business: { total: "70000", due_date: due } });
     await register(row.id);
     assert.equal((await detail("ops", row.id)).v11.spb_attachment_id, null);
-    return "Invoice biasa diterima tanpa SPB.";
+    await verify(row.id);
+    await letterAction("ops", row.id, "APPROVE_FINAL");
+    await payFile("staff", row.id, "SPB", 400);
+    await fillPayDocs("staff", row.id, payDocuments.filter(code => code !== "SPK"));
+    const blocked = await assign("ksu", row.id, "finance", { purpose: "INVOICE_PAYMENT" }, 400);
+    assert.match(blocked.error, /Surat Perintah Kerja/);
+    await payFile("staff", row.id, "SPK");
+    await assign("ksu", row.id, "finance", { purpose: "INVOICE_PAYMENT" });
+    return "Invoice tanpa rujukan tetap butuh berkas SPK sebelum Finance. SPB dikecualikan.";
   });
   await test(25, async () => {
     const row = await post("staff", "/api/letters", {
@@ -373,7 +397,36 @@ try {
     assert(note.v11.spb_attachment_id);
     assert.deepEqual(note.v11.persekot_checklist, ["BPK", "SPK", "MARGIN"]);
     assert.equal(note.letter.status, "MANAGER_REVIEW");
-    return "PDF SPB dan checklist opsional tersimpan; Nota Dinas dapat dilanjutkan.";
+    await letterAction("ops", state.persekot, "APPROVE_FINAL");
+    const blocked = await assign("ksu", state.persekot, "finance", { purpose: "REQUEST_PAYMENT" }, 400);
+    assert.match(blocked.error, /BPK Pengajuan/);
+    await payRecipient("staff", state.persekot, "VENDOR");
+    await fillPayDocs("staff", state.persekot, payDocuments.filter(code => code !== "REKENING"));
+    const missingAccount = await assign("ksu", state.persekot, "finance", { purpose: "REQUEST_PAYMENT" }, 400);
+    assert.match(missingAccount.error, /Rekening Penerima/);
+    await payFile("staff", state.persekot, "REKENING");
+    await assign("ksu", state.persekot, "finance", {}, 400);
+    const task = await assign("ksu", state.persekot, "finance", { purpose: "REQUEST_PAYMENT" });
+    await start("finance", task.id);
+    await submit("finance", task.id, "Bayar simulasi", [], {}, 400);
+    await submit("finance", task.id, "Bayar simulasi", ["files"]);
+    await taskAction("ksu", task.id, "APPROVE_RESULT");
+
+    const request = await post("staff", "/api/letters", {
+      direction: "INTERNAL", document_type: "NOTA_DINAS", payment_request: true, subject: subject("Nonpersekot"),
+      letter_date: old, routing_target_user_id: roles.ops.id,
+    }, 201);
+    await letterAction("staff", request.id, "SUBMIT");
+    await letterAction("ops", request.id, "APPROVE_FINAL");
+    await payRecipient("staff", request.id, "NON_VENDOR");
+    await fillPayDocs("staff", request.id, payDocuments.filter(code => !["REKENING", "KONTRAK"].includes(code)));
+    await payFile("staff", request.id, "SPB", 400);
+    const blockedRequest = await assign("ksu", request.id, "finance", { purpose: "REQUEST_PAYMENT" }, 400);
+    assert.match(blockedRequest.error, /Kontrak Perjanjian/);
+    await payFile("staff", request.id, "KONTRAK");
+    assert.deepEqual((await detail("ksu", request.id)).v11.payment_documents.missing, []);
+    await assign("ksu", request.id, "finance", { purpose: "REQUEST_PAYMENT" });
+    return "Persekot butuh SPB serta rekening vendor. Nonpersekot tetap butuh berkas dasar tanpa SPB; rekening dikecualikan untuk nonvendor.";
   });
   await test(27, async () => {
     state.hierarchy = (await incoming("hirarki")).id;

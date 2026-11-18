@@ -149,7 +149,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
     if(prefill){
       setSelectedLetterId(prefill);
       const wanted=params.get("purpose");
-      if(wanted==="INVOICE_VERIFY"||wanted==="INVOICE_PAYMENT") setPurpose(wanted);
+      if(wanted==="INVOICE_VERIFY"||wanted==="INVOICE_PAYMENT"||wanted==="REQUEST_PAYMENT") setPurpose(wanted);
       setOpen(true);
     }
     void load();
@@ -168,6 +168,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
   const strict=Boolean(v11Enabled||selectedLetter?.v11_kind);
   const scope=users.find(account=>account.id===user.id)?.v11_scope;
   const invoice=selectedLetter?.v11_kind&&selectedLetter.document_type===INVOICE_INCOMING;
+  const notePayment=["PERSEKOT","PAYMENT_REQUEST"].includes(selectedLetter?.v11_kind);
   function canDisposeLetter(letter:any) {
     if(letter.direction==="OUTGOING") return letter.status==="ISSUED";
     if(letter.v11_kind) {
@@ -183,8 +184,8 @@ export default function DispositionsClient({user}:{user:SessionUser}){
     const accountScope=account.role==="FINANCE"?"KSU":unitManagerScope(staffUnit(account.unit_name));
     if(strict&&user.role==="MANAGER"&&accountScope&&accountScope!==scope) return false;
     if(purpose==="INVOICE_VERIFY") return account.role==="STAFF"&&staffCanVerify(selectedLetter?.v11_unit,account.unit_name);
-    if(purpose==="INVOICE_PAYMENT") return account.role==="FINANCE";
-    return !invoice||account.role!=="FINANCE";
+    if(purpose==="INVOICE_PAYMENT"||purpose==="REQUEST_PAYMENT") return account.role==="FINANCE";
+    return !(invoice||notePayment)||account.role!=="FINANCE";
   });
 
   async function create(e:FormEvent<HTMLFormElement>){
@@ -577,14 +578,15 @@ export default function DispositionsClient({user}:{user:SessionUser}){
             </span>
           </div>
 
-          {invoice&&<label className="field">
+          {(invoice||notePayment)&&<label className="field">
             <span>Tujuan Tugas</span>
             <select className="select" name="purpose" value={purpose} onChange={e=>setPurpose(e.target.value as TaskPurpose)}>
               <option value="GENERAL">{TASK_PURPOSES.GENERAL}</option>
-              {user.role==="MANAGER"&&selectedLetter.status==="MANAGER_REVIEW"&&selectedLetter.current_owner_user_id===user.id&&
+              {invoice&&user.role==="MANAGER"&&selectedLetter.status==="MANAGER_REVIEW"&&selectedLetter.current_owner_user_id===user.id&&
                 <option value="INVOICE_VERIFY">{TASK_PURPOSES.INVOICE_VERIFY}</option>}
               {!parent&&scope==="KSU"&&selectedLetter.status==="APPROVED"&&
-                <option value="INVOICE_PAYMENT">{TASK_PURPOSES.INVOICE_PAYMENT}</option>}
+                (invoice ? <option value="INVOICE_PAYMENT">{TASK_PURPOSES.INVOICE_PAYMENT}</option>
+                  : <option value="REQUEST_PAYMENT">{TASK_PURPOSES.REQUEST_PAYMENT}</option>)}
             </select>
           </label>}
           <div className="field">

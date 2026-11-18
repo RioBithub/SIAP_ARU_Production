@@ -1,3 +1,4 @@
+import { paymentKind, requirePaymentDocuments } from "@/lib/v11-payment-documents";
 import crypto from "crypto";
 import { NextResponse } from "next/server";
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
@@ -72,7 +73,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
       const [rows]=await conn.query<RowDataPacket[]>(
         `SELECT d.*,
           l.direction AS letter_direction,
-          l.status AS letter_status,
+          l.status AS letter_status,l.document_type AS letter_document_type,
           fu.role AS originator_role,
           tu.role AS assignee_role,v.purpose,v.invoice_revision AS task_revision
          FROM siap_dispositions d
@@ -94,16 +95,17 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
       const strict = Boolean(d.purpose);
       const verification = d.purpose === "INVOICE_VERIFY";
       const payment = d.purpose === "INVOICE_PAYMENT";
+      const requestPayment = d.purpose === "REQUEST_PAYMENT";
       const cancel = action === "CANCEL_TASK";
 
       if (cancel ? !isRoot && d.from_user_id !== user.id : !isRoot && currentOwner !== user.id) {
         throw new Error("Disposisi ini sedang berada pada pihak lain.");
       }
-      if ((verification || payment) && !cancel) {
+      if ((verification || payment || requestPayment) && !cancel) {
         const assigneeAction = ["SEEN", "START", "SUBMIT_RESULT", "RETURN_TASK"].includes(action);
-        if (assigneeAction ? user.id !== d.to_user_id || user.role !== (payment ? "FINANCE" : "STAFF")
+        if (assigneeAction ? user.id !== d.to_user_id || user.role !== (verification ? "STAFF" : "FINANCE")
           : user.id !== d.from_user_id || user.role !== "MANAGER") {
-          throw new Error("Tugas invoice harus dikerjakan dan diperiksa oleh peserta yang ditetapkan.");
+          throw new Error("Tugas verifikasi atau pembayaran harus dikerjakan dan diperiksa oleh peserta yang ditetapkan.");
         }
         if (verification && ["SUBMIT_RESULT","APPROVE_RESULT"].includes(action) &&
             (!workflow || workflow.invoice_revision !== d.task_revision || d.letter_status !== "MANAGER_REVIEW")) {
@@ -112,6 +114,12 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         if (payment && (!workflow?.payable_id || d.letter_status !== "APPROVED")) {
           throw new Error("Invoice tidak berada pada tahap pembayaran.");
         }
+      }
+
+      if (workflow && d.assignee_role === "FINANCE" && ["START","SUBMIT_RESULT","APPROVE_RESULT"].includes(action)
+          && paymentKind(workflow, d.letter_document_type)) {
+        if (d.letter_status !== "APPROVED") throw new Error("Pengajuan belum berada pada tahap pembayaran.");
+        await requirePaymentDocuments(conn, d.letter_id, workflow, d.letter_document_type);
       }
 
       const before=String(d.status);
@@ -157,7 +165,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         if(!isRoot && String(d.to_user_id)!==String(user.id))
           throw new Error("Hanya penerima tugas yang dapat mengirim hasil.");
 
-        if ((verification || payment) && resultLetterId) throw new Error("Tugas invoice meminta bukti pemeriksaan atau pembayaran.");
+        if ((verification || payment || requestPayment) && resultLetterId) throw new Error("Tugas ini meminta bukti pemeriksaan atau pembayaran.");
         if (d.result_requirement === "ATTACHMENT" && !files.length) {
           throw new Error("Lampiran hasil wajib diunggah untuk disposisi ini.");
         }
@@ -300,7 +308,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
       let evidenceId: string | null = null;
 
       for(const file of files){
-        const isEvidence = action === "SUBMIT_RESULT" && (verification || payment) && !evidenceId;
+        const isEvidence = action === "SUBMIT_RESULT" && (verification || payment || requestPayment) && !evidenceId;
         const saved = isEvidence ? await saveProof(file) : await saveUpload(file,"ADDITIONAL");
         stored.push(saved);
         const attachmentId=crypto.randomUUID();

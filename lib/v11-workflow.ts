@@ -15,8 +15,12 @@ export const PERSEKOT_DOCUMENTS = {
   KONTRAK: "Kontrak Perjanjian", SPK: "Surat Perintah Kerja", MARGIN: "Perhitungan Margin",
   PESANAN: "Surat Pesanan", REKENING: "Informasi Pembayaran / Rekening Penerima",
 } as const;
+export type PaymentDocumentCode = keyof typeof PERSEKOT_DOCUMENTS;
+export type PaymentRecipient = "VENDOR" | "NON_VENDOR";
+
 export const TASK_PURPOSES = {
   GENERAL: "Tindak lanjut umum", INVOICE_VERIFY: "Verifikasi invoice oleh unit", INVOICE_PAYMENT: "Pembayaran dan pencatatan",
+  REQUEST_PAYMENT: "Pembayaran pengajuan Nota Dinas",
 } as const;
 export type TaskPurpose = keyof typeof TASK_PURPOSES;
 export const TERMINAL_TASK_STATES = ["COMPLETED", "RETURNED", "CANCELLED"];

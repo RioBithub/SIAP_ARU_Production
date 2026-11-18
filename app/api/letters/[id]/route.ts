@@ -1,3 +1,4 @@
+import { canEditPaymentDocuments, paymentDocuments } from "@/lib/v11-payment-documents";
 import { sandboxAttachmentsEnabled } from "@/lib/mekari-sign";
 import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
@@ -77,7 +78,9 @@ export async function GET(_:Request,{params}:{params:{id:string}}) {
     const checklist = typeof safe.persekot_checklist === "string" ? JSON.parse(safe.persekot_checklist) : safe.persekot_checklist;
     const verified = letter.document_type === INVOICE_INCOMING
       ? await invoiceVerified(db, params.id, safe.invoice_revision, letter.routing_target_user_id) : null;
-    v11 = { ...safe, persekot_checklist: checklist ?? [], verified,
+    const requirements = await paymentDocuments(db, params.id, workflow, letter.document_type);
+    v11 = { ...safe,
+      payment_documents: requirements && { ...requirements, editable: await canEditPaymentDocuments(db, letter, user) }, persekot_checklist: checklist ?? [], verified,
       verification_status: verified === null ? null : invoiceVerificationStatus(letter.status, verified),
       payment: business?.invoice && letter.document_type === INVOICE_INCOMING
         ? await invoicePaymentSummary(safe.payable_id, business.invoice.total) : null,

@@ -9,6 +9,7 @@ import BusinessDocumentFields, { BusinessDocumentSummary, ReferencePicker } from
 import { INVOICE_INCOMING, INVOICE_OUTGOING, SPK_INCOMING, SPK_OUTGOING, isBusinessDocument, isInvoice, type DocumentReference } from "@/lib/business-documents";
 
 import { DELIVERY_METHODS, MANAGER_SCOPES, staffUnit, type ManagerScope } from "@/lib/v11-workflow";
+import PaymentDocumentsPanel from "@/components/PaymentDocumentsPanel";
 import AttachmentSandbox from "@/components/AttachmentSandbox";
 import V11SigningPanel from "@/components/V11SigningPanel";
 import { PersekotFields, ReceiptFields, UnitField, WorkflowSummary } from "@/components/V11LetterFields";
@@ -100,7 +101,8 @@ export default function LettersClient({direction,user}:Props){
   const [documentTypes,setDocumentTypes]=useState<any[]>([]);
   const [routingUsers,setRoutingUsers]=useState<RoutingUser[]>([]);
   const [v11Enabled,setV11Enabled]=useState(false);
-  const [persekot,setPersekot]=useState(false);
+  const [notaKind,setNotaKind]=useState("NOTA");
+  const persekot=notaKind==="PERSEKOT";
   const [signatureMethod,setSignatureMethod]=useState("");
   const [signingReady,setSigningReady]=useState(false);
   const [queue,setQueue]=useState(direction!=="INTERNAL"&&user.role==="SECRETARIAT");
@@ -205,7 +207,7 @@ export default function LettersClient({direction,user}:Props){
   },[direction]);
 
   function openCreate(){
-    setPersekot(false);
+    setNotaKind("NOTA");
     setSourceLetter([]);
     setSourceDispositionId("");
     setError("");
@@ -259,9 +261,9 @@ export default function LettersClient({direction,user}:Props){
       body.is_public = body.is_public === "on";
       delete body.original_file;
       delete body.additional_files;
+      if (direction==="INTERNAL" && notaKind==="PAYMENT_REQUEST") body.payment_request=true;
       if (direction==="INTERNAL" && persekot) {
         body.persekot=true;
-        body.persekot_checklist=form.getAll("persekot_checklist");
       }
 
       if(direction==="OUTGOING"){
@@ -413,7 +415,6 @@ export default function LettersClient({direction,user}:Props){
     const body=formObject(fd);
     body.is_public=body.is_public==="on";
     if(canChangeSource()) body.source_letter_id=sourceLetter[0]?.id||"";
-    if (detail.v11?.kind==="PERSEKOT") body.persekot_checklist=fd.getAll("persekot_checklist");
     const spb=fd.get("spb_file");
     const upload=new FormData();
     if(spb&&typeof spb!=="string"&&spb.size) {
@@ -605,8 +606,9 @@ export default function LettersClient({direction,user}:Props){
           <label>Jenis Dokumen</label>
           {direction==="INTERNAL"
             ? <><input type="hidden" name="document_type" value="NOTA_DINAS"/>
-                {v11Enabled ? <select className="select" aria-label="Jenis Nota Dinas" value={persekot?"PERSEKOT":"NOTA"}
-                  onChange={e=>setPersekot(e.target.value==="PERSEKOT")}><option value="NOTA">Nota Dinas</option><option value="PERSEKOT">Pengajuan Persekot</option></select>
+                {v11Enabled ? <select className="select" aria-label="Jenis Nota Dinas" value={notaKind}
+                  onChange={e=>setNotaKind(e.target.value)}><option value="NOTA">Nota Dinas</option>
+                  <option value="PERSEKOT">Pengajuan Persekot</option><option value="PAYMENT_REQUEST">Pengajuan Pembayaran Nonpersekot</option></select>
                   : <div className="input">Nota Dinas</div>}</>
             : <select aria-label="Jenis Dokumen" className="select" name={createType==="__CUSTOM__"?undefined:"document_type"} required value={createType} onChange={e=>setCreateType(e.target.value)}>
                 {typeOptions.map(([value,label])=><option key={value} value={value}>{label}</option>)}
@@ -719,6 +721,8 @@ export default function LettersClient({direction,user}:Props){
           <div style={{marginTop:13}} className="notice">{detail.letter.summary||"Belum ada ringkasan."}</div>
           {detail.business&&<BusinessDocumentSummary details={detail.business} documentType={detail.letter.document_type}/>}
           <WorkflowSummary data={detail.v11} date={detail.letter.received_date}/>
+          {detail.v11?.payment_documents && <PaymentDocumentsPanel key={detail.letter.id} id={detail.letter.id}
+            data={detail.v11.payment_documents} onSaved={() => openDetail(detail.letter.id)}/>}
           {detail.sandboxSigning && <AttachmentSandbox key={detail.letter.id}
             files={generalAttachments.filter((file:any) => ["ORIGINAL","ADDITIONAL"].includes(file.attachment_kind))}/>}
           {!detail.sandboxSigning&&detail.v11&&detail.letter.status==="WAITING_SIGNATURE"&&canHandleSecretariat(user.role)&&
@@ -733,8 +737,11 @@ export default function LettersClient({direction,user}:Props){
             {detail.v11?.payment && !detail.v11.verified && user.role==="MANAGER" &&
                 detail.letter.current_owner_user_id===user.id && detail.letter.status==="MANAGER_REVIEW" &&
               <a className="btn btn-primary" href={`/dispositions?letter_id=${detail.letter.id}&purpose=INVOICE_VERIFY`}>Tugaskan Verifikasi Invoice</a>}
-            {detail.v11?.payment && detail.letter.status==="APPROVED" && financeManager && detail.v11.payment.status!=="PAID" &&
+            {detail.v11?.payment && detail.letter.status==="APPROVED" && financeManager && detail.v11.payment.status!=="PAID" && !detail.v11.payment_documents?.missing.length &&
               <a className="btn btn-primary" href={`/dispositions?letter_id=${detail.letter.id}&purpose=INVOICE_PAYMENT`}>Instruksi Bayar & Catat</a>}
+            {["PERSEKOT","PAYMENT_REQUEST"].includes(detail.v11?.kind) && detail.letter.status==="APPROVED" &&
+              financeManager && !detail.v11.payment_documents?.missing.length &&
+              <a className="btn btn-primary" href={`/dispositions?letter_id=${detail.letter.id}&purpose=REQUEST_PAYMENT`}>Instruksi Bayar Pengajuan</a>}
             {direction!=="OUTGOING"&&canDraftOutgoing&&!["CANCELLED","REJECTED"].includes(detail.letter.status)&&
               <a className="btn btn-secondary" href={"/letters/outgoing?source_letter_id="+encodeURIComponent(detail.letter.id)}>Buat Draf Surat Keluar</a>}
             {actionButtons()}
@@ -798,7 +805,7 @@ export default function LettersClient({direction,user}:Props){
           </select></label>
           <ReceiptFields initial={detail.v11}/>
         </>}
-        {detail.v11?.kind==="PERSEKOT"&&<PersekotFields checklist={detail.v11.persekot_checklist} proof={detail.v11.spb_attachment_id}/>}
+        {detail.v11?.kind==="PERSEKOT"&&<PersekotFields proof={detail.v11.spb_attachment_id}/>}
         <div className="field"><label>Sifat</label><select className="select" name="confidentiality" defaultValue={detail.letter.confidentiality}><option>BIASA</option><option>PENTING</option><option>RAHASIA</option></select></div>
         <div className="field full"><label>Ringkasan</label><textarea className="textarea" name="summary" defaultValue={detail.letter.summary||""}/></div>
         <div className="field full"><label>Catatan</label><textarea className="textarea" name="notes" defaultValue={detail.letter.notes||""}/></div>

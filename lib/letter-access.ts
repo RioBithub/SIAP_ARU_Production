@@ -18,10 +18,11 @@ export function letterAccess(user: SessionUser) {
             OR EXISTS (SELECT 1 FROM siap_disposition_actions review
               WHERE review.disposition_id=d.id AND review.actor_user_id=?))
       )
-      OR (l.direction='INCOMING' AND l.document_type='INVOICE_MASUK'
-        AND l.status IN ('APPROVED','COMPLETED') AND EXISTS (
+      OR (l.status IN ('APPROVED','COMPLETED') AND EXISTS (
           SELECT 1 FROM siap_v11_letters v JOIN siap_v11_managers m ON m.scope='KSU'
           WHERE v.letter_id=l.id AND m.user_id=? AND ?='MANAGER'
+            AND ((l.direction='INCOMING' AND l.document_type='INVOICE_MASUK')
+              OR (l.direction='INTERNAL' AND v.kind IN ('PERSEKOT','PAYMENT_REQUEST')))
         ))
       OR EXISTS (SELECT 1 FROM siap_letter_actions a WHERE a.letter_id=l.id AND a.actor_user_id=?)
     )`,
@@ -30,10 +31,10 @@ export function letterAccess(user: SessionUser) {
   };
 }
 
-export async function getAccessibleLetter(user: SessionUser, id: string, conn: Pick<PoolConnection, "query"> = db) {
+export async function getAccessibleLetter(user: SessionUser, id: string, conn: Pick<PoolConnection, "query"> = db, lock = false) {
   const access = letterAccess(user);
   const [rows] = await conn.query<RowDataPacket[]>(
-    `SELECT l.* FROM siap_letters l WHERE l.id=? AND ${access.clause} LIMIT 1`,
+    `SELECT l.* FROM siap_letters l WHERE l.id=? AND ${access.clause} LIMIT 1` + (lock ? " FOR UPDATE" : ""),
     [id, ...access.params]
   );
   return rows[0] ?? null;

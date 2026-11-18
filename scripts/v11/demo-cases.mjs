@@ -128,6 +128,14 @@ try {
     const invoice = await incoming("CV Sinar Jaya", "INV/115", "SIMULASI DEMO - Invoice Pengadaan ATK CV Sinar Jaya", {
       total: "45000000", due_date: addDays(14), requires_spk: false,
     });
+    const invoiceDetail = await call("staff", "/api/letters/" + invoice);
+    for (const document of invoiceDetail.v11.payment_documents?.documents ?? []) {
+      if (document.attachment || document.linked) continue;
+      await call("staff", "/api/letters/" + invoice + "/payment-documents",
+        form({ document_code: document.code }, "file", "SIMULASI-" + document.code + ".pdf", [
+          "SIMULASI - LAMPIRAN PERSYARATAN INVOICE", document.code, "CV Sinar Jaya / INV/115",
+        ]));
+    }
     const project = await incoming("PT XYZ", "SIMULASI/XYZ/XI/2026", "SIMULASI DEMO - Permintaan Kerjasama Proyek Pengadaan PT XYZ");
     await toDirectors(project);
     const projectTask = await task("dirut", project, "ops", "SIMULASI Survei proyek PT XYZ, delegasikan ke Staff dan ajukan laporan kembali.");
