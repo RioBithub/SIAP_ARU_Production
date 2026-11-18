@@ -781,7 +781,8 @@ export default function LettersClient({direction,user}:Props){
           :<div className="field full">
             <ReferencePicker kind="source" selected={sourceLetter} onChange={setSourceLetter} limit={1}/>
           </div>)}
-        {businessForm&&<BusinessDocumentFields key={createType} documentType={createType} outgoing={direction==="OUTGOING"}/>}
+        {businessForm&&<BusinessDocumentFields key={createType} documentType={createType} outgoing={direction==="OUTGOING"}
+          requireDueDate={v11Enabled&&createType===INVOICE_INCOMING}/>}
         <div className="field full"><label>{incomingFileRequired?"Dokumen Asli (wajib)":direction==="OUTGOING"?"File Draft / Dokumen Utama (opsional)":direction==="INTERNAL"?"Dokumen Utama / Pengantar (opsional)":"Surat Asli (opsional)"}</label><input aria-label="Dokumen asli" className="input" type="file" name="original_file" required={incomingFileRequired} accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg"/><span className="hint">Maksimal 10 MB. Dokumen original disimpan tanpa kompresi. Lampiran proses/tambahan dikompresi bila efektif.</span></div>
         <div className="field full"><label>Lampiran Tambahan <span className="muted">(opsional, maksimal 5 file)</span></label><input className="input" type="file" name="additional_files" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.txt,.csv"/><span className="hint">Lampiran tambahan maksimal 10 MB per file dan dikompresi otomatis bila hasilnya lebih kecil. Cocok untuk data pendukung, hasil telaah, atau bukti proses.</span></div>
         <div className="field full" style={{display:"flex",justifyContent:"flex-end",gap:8,flexDirection:"row"}}><button type="button" className="btn btn-secondary" disabled={createBusy} onClick={()=>setCreateOpen(false)}>Batal</button><button className="btn btn-primary" disabled={createBusy||sourceLoading}>{createBusy?"Menyimpan...":direction==="INCOMING"?(incomingToSecretariat?"Kirim ke Sekretariat":"Registrasi & Teruskan"):"Simpan Draft"}</button></div>
@@ -915,7 +916,7 @@ export default function LettersClient({direction,user}:Props){
         {canChangeSource()&&<div className="field full">
           <ReferencePicker kind="source" letterId={detail.letter.id} selected={sourceLetter} onChange={setSourceLetter} limit={1}/>
         </div>}
-        {detail.business&&<BusinessDocumentFields documentType={detail.letter.document_type} outgoing={direction==="OUTGOING"} initial={detail.business} letterId={detail.letter.id}/>}
+        {detail.business&&<BusinessDocumentFields documentType={detail.letter.document_type} outgoing={direction==="OUTGOING"} initial={detail.business} letterId={detail.letter.id} requireDueDate={Boolean(detail.v11)&&detail.letter.document_type===INVOICE_INCOMING}/>}
         <div className="field full" style={{display:"flex",flexDirection:"row",justifyContent:"flex-end",gap:8}}><button type="button" className="btn btn-secondary" onClick={()=>setEditOpen(false)}>Batal</button><button className="btn btn-primary">Simpan Perubahan</button></div>
       </form>
     </Modal>}

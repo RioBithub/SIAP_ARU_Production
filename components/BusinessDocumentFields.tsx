@@ -18,13 +18,14 @@ function referenceLabel(reference: DocumentReference) {
 }
 
 export function ReferencePicker({
-  kind, letterId, selected, onChange, limit,
+  kind, letterId, selected, onChange, limit, mandatory = false,
 }: {
   kind: ReferenceKind;
   letterId?: string;
   selected: DocumentReference[];
   onChange: (references: DocumentReference[]) => void;
   limit: number;
+  mandatory?: boolean;
 }) {
   const [query, setQuery] = useState("");
   const [options, setOptions] = useState<DocumentReference[]>([]);
@@ -61,7 +62,7 @@ export function ReferencePicker({
 
   const available = options.filter(option => !selected.some(item => item.id === option.id));
   return (
-    <div className="field">
+    <div className="field" data-need={mandatory ? "Wajib" : undefined}>
       <label>
         Cari {label}
         <input
@@ -101,8 +102,8 @@ export function ReferencePicker({
 
 type EditableLine = { key: number; description: string; quantity: string; unit_price: string };
 
-function InvoiceFields({ outgoing, initial, letterId }: {
-  outgoing: boolean; initial?: BusinessDocumentDetails; letterId?: string;
+function InvoiceFields({ outgoing, initial, letterId, requireDueDate }: {
+  outgoing: boolean; initial?: BusinessDocumentDetails; letterId?: string; requireDueDate?: boolean;
 }) {
   const invoice = initial?.invoice;
   const [requiresSpk, setRequiresSpk] = useState(invoice?.requires_spk ?? false);
@@ -143,6 +144,7 @@ function InvoiceFields({ outgoing, initial, letterId }: {
           id={letterId ? "due-" + letterId : "invoice-due"}
           type="date"
           value={dueDate}
+          required={requireDueDate}
           onChange={event => setDueDate(event.target.value)}
         />
       </div>
@@ -223,7 +225,7 @@ function InvoiceFields({ outgoing, initial, letterId }: {
         {invoice?.has_spk_reference && !invoice.spk_reference && !changedReference && (
           <span className="hint">Rujukan tersimpan. Hak akses dokumen SPK mengikuti pengaturan SPK tersebut.</span>
         )}
-        <ReferencePicker kind="spk" letterId={letterId} selected={references} limit={1} onChange={value => {
+        <ReferencePicker kind="spk" mandatory={requiresSpk} letterId={letterId} selected={references} limit={1} onChange={value => {
           setReferences(value);
           setChangedReference(true);
         }} />
@@ -252,11 +254,11 @@ function SpkFields({ initial, letterId }: { initial?: BusinessDocumentDetails; l
   );
 }
 
-export default function BusinessDocumentFields({ documentType, outgoing, initial, letterId }: {
-  documentType: string; outgoing: boolean; initial?: BusinessDocumentDetails; letterId?: string;
+export default function BusinessDocumentFields({ documentType, outgoing, initial, letterId, requireDueDate }: {
+  documentType: string; outgoing: boolean; initial?: BusinessDocumentDetails; letterId?: string; requireDueDate?: boolean;
 }) {
   return isInvoice(documentType)
-    ? <InvoiceFields outgoing={outgoing} initial={initial} letterId={letterId} />
+    ? <InvoiceFields outgoing={outgoing} initial={initial} letterId={letterId} requireDueDate={requireDueDate} />
     : <SpkFields initial={initial} letterId={letterId} />;
 }
 
