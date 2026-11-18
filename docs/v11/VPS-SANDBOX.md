@@ -55,7 +55,7 @@ pm2 save
 curl -fsS http://127.0.0.1:33317/api/health
 ```
 
-Perintah `smoke` memakai import TypeScript native Node.js. Jalankan dengan Node.js 22.18+ atau 24. Hasil yang diharapkan adalah List Documents HTTP 200 dengan HMAC valid dan HTTP 401 dengan HMAC salah. Get Profile juga ditampilkan. Kode HTTP membantu mendeteksi kredensial atau scope yang belum siap. Jika jaringan atau autentikasi gagal, perbaiki lalu ulangi `smoke` sebelum mengirim dokumen.
+Perintah `smoke` berjalan pada Node.js 20.20.2 atau Node.js 24. Hasil yang diharapkan adalah List Documents HTTP 200 dengan HMAC valid dan HTTP 401 dengan HMAC salah. Get Profile juga ditampilkan. Kode HTTP membantu mendeteksi kredensial atau scope yang belum siap. Jika jaringan atau autentikasi gagal, perbaiki lalu ulangi `smoke` sebelum mengirim dokumen.
 
 Ganti port health check jika memilih port lain pada wizard. Proses web mengikat ke loopback VPS. Kredensial dibaca dari file privat saat proses dimulai, termasuk setelah `pm2 restart`.
 

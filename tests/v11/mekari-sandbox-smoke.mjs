@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { hmacHeaders, MEKARI_SANDBOX_BASE } from "../../lib/mekari-sign.ts";
+import { hmacHeaders, MEKARI_SANDBOX_BASE } from "../../lib/mekari-hmac.mjs";
 
 async function checkReadOnly(path, credentials) {
   const url = new URL(MEKARI_SANDBOX_BASE + path);

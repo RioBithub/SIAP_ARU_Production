@@ -1,24 +1,13 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { hmacHeaders, MEKARI_SANDBOX_BASE } from "./mekari-hmac.mjs";
 
-export const MEKARI_SANDBOX_BASE = "https://sandbox-api.mekari.com/v2/esign-hmac";
+export { hmacHeaders, MEKARI_SANDBOX_BASE } from "./mekari-hmac.mjs";
 const MAX_PDF_SIZE = 10 * 1024 * 1024;
 
 export function mekariMode() {
   const mode = process.env.SIAP_V11_MEKARI_MODE;
   if (process.env.SIAP_V11_STAGE !== "1" || !/^siap_aru_sqa_v11_[a-z0-9]{4,24}$/.test(process.env.DB_NAME ?? "")) return null;
   return mode === "mock" || mode === "sandbox" ? mode : null;
-}
-
-export function hmacHeaders(method: string, url: URL, config: { id: string; secret: string }, date = new Date()) {
-  if (!/^[\w.\-]{1,150}$/.test(config.id) || !config.secret) throw new Error("Kredensial sandbox Mekari belum siap.");
-  const dateValue = date.toUTCString();
-  const signature = createHmac("sha256", config.secret)
-    .update(`date: ${dateValue}\n${method.toUpperCase()} ${url.pathname}${url.search} HTTP/1.1`)
-    .digest("base64");
-  return {
-    Date: dateValue,
-    Authorization: `hmac username="${config.id}", algorithm="hmac-sha256", headers="date request-line", signature="${signature}"`,
-  };
 }
 
 export function sandboxCredentials() {
