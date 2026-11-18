@@ -3,11 +3,24 @@ import { hmacHeaders, MEKARI_SANDBOX_BASE } from "./mekari-hmac.mjs";
 
 export { hmacHeaders, MEKARI_SANDBOX_BASE } from "./mekari-hmac.mjs";
 const MAX_PDF_SIZE = 10 * 1024 * 1024;
+export const MEKARI_PILOT_JOB_MODE = "sandbox-test";
 
-export function mekariMode() {
+const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+
+export function mekariPilotAttachmentId(letterId: string) {
+  if (process.env.SIAP_V11_STAGE === "1") return null;
+  const pilotLetterId = process.env.SIAP_V11_MEKARI_PILOT_LETTER_ID?.trim() ?? "";
+  const attachmentId = process.env.SIAP_V11_MEKARI_PILOT_ATTACHMENT_ID?.trim() ?? "";
+  if (!UUID.test(pilotLetterId) || !UUID.test(attachmentId)) return null;
+  return pilotLetterId.toLowerCase() === letterId.toLowerCase() ? attachmentId.toLowerCase() : null;
+}
+
+export function mekariMode(letterId?: string) {
   const mode = process.env.SIAP_V11_MEKARI_MODE;
-  if (process.env.SIAP_V11_STAGE !== "1" || !/^siap_aru_sqa_v11_[a-z0-9]{4,24}$/.test(process.env.DB_NAME ?? "")) return null;
-  return mode === "mock" || mode === "sandbox" ? mode : null;
+  if (process.env.SIAP_V11_STAGE === "1" && /^siap_aru_sqa_v11_[a-z0-9]{4,24}$/.test(process.env.DB_NAME ?? "")) {
+    return mode === "mock" || mode === "sandbox" ? mode : null;
+  }
+  return mode === "sandbox" && letterId && mekariPilotAttachmentId(letterId) ? mode : null;
 }
 
 export function sandboxCredentials() {
@@ -28,8 +41,9 @@ export class MekariError extends Error {
   }
 }
 
-async function request(method: "GET" | "POST", route: string, body?: unknown, timeoutMs = 12_000) {
-  if (mekariMode() !== "sandbox") throw new Error("Mode sandbox tidak aktif.");
+async function request(method: "GET" | "POST", route: string, options: { body?: unknown; timeoutMs?: number; letterId?: string } = {}) {
+  const { body, timeoutMs = 12_000, letterId } = options;
+  if (mekariMode(letterId) !== "sandbox") throw new Error("Mode sandbox tidak aktif.");
   const url = new URL(MEKARI_SANDBOX_BASE + route);
   const headers = hmacHeaders(method, url, sandboxCredentials());
   const payload = JSON.stringify(body);
@@ -117,13 +131,14 @@ export function configuredSandboxSigning(input: Record<string, unknown>) {
   return { signers, signing_order: input.signing_order === true };
 }
 
-export async function predictSandboxAnnotations(filename: string, pdf: Buffer, input: Record<string, unknown>) {
+export async function predictSandboxAnnotations(filename: string, pdf: Buffer, input: Record<string, unknown>, letterId?: string) {
   const recipients = configuredSandboxRecipients(input).map(({ name, email }) => ({ name, email }));
   let response: Response;
   try {
     response = await request("POST", "/v1/documents/predict_annotations", {
-      doc: pdf.toString("base64"), filename, recipients, annotation_types: ["signature"],
-    }, 45_000);
+      body: { doc: pdf.toString("base64"), filename, recipients, annotation_types: ["signature"] },
+      timeoutMs: 45_000, letterId,
+    });
   } catch (error) {
     if (error instanceof MekariError && error.status === 403) {
       throw new Error("Akun sandbox ini belum memiliki akses Predict Annotation.");
@@ -167,12 +182,15 @@ function providerId(value: unknown) {
   return value;
 }
 
-export async function sendSandboxSignature(filename: string, pdf: Buffer, signing: ReturnType<typeof configuredSandboxSigning>, callback: string | null) {
+export async function sendSandboxSignature(filename: string, pdf: Buffer, signing: ReturnType<typeof configuredSandboxSigning>, callback: string | null, letterId?: string) {
   const signers = signing.signing_order ? signing.signers.map((signer, index) => ({ ...signer, order: index + 1 })) : signing.signers;
   const response = await request("POST", "/v1/documents/request_global_sign", {
-    filename, doc: pdf.toString("base64"), signers, receivers: [],
-    ...(signing.signing_order ? { signing_order: true } : {}),
-    ...(callback ? { callback_url: callback } : {}),
+    letterId,
+    body: {
+      filename, doc: pdf.toString("base64"), signers, receivers: [],
+      ...(signing.signing_order ? { signing_order: true } : {}),
+      ...(callback ? { callback_url: callback } : {}),
+    },
   });
   const result = await response.json();
   return providerId(result?.data?.id);
@@ -186,16 +204,16 @@ export function providerStatus(value: unknown) {
   return status;
 }
 
-export async function sandboxStatus(id: string) {
-  const response = await request("GET", "/v1/documents/" + providerId(id));
+export async function sandboxStatus(id: string, letterId?: string) {
+  const response = await request("GET", "/v1/documents/" + providerId(id), { letterId });
   const result = await response.json();
   if (result?.data?.id !== id) throw new Error("Respons dokumen sandbox tidak cocok.");
   return providerStatus(result?.data?.attributes?.signing_status);
 }
 
 // Caller must check authoritative COMPLETED status before fetching the PDF.
-export async function sandboxPdf(id: string) {
-  const response = await request("GET", "/v1/documents/" + providerId(id) + "/download");
+export async function sandboxPdf(id: string, letterId?: string) {
+  const response = await request("GET", "/v1/documents/" + providerId(id) + "/download", { letterId });
   if (Number(response.headers.get("Content-Length")) > MAX_PDF_SIZE || !response.body) {
     throw new Error("Berkas final sandbox melebihi batas atau kosong.");
   }

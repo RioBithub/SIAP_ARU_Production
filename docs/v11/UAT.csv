@@ -41,7 +41,7 @@ UAT-039,P0,Surat Keluar,Surat hasil disposisi yang salah,Tautkan outgoing bukan 
 UAT-040,P0,Nota Dinas,Nota Manager langsung ke Dirut,Manager membuat Nota Internal ke Dirut,Diizinkan sesuai ketentuan,PASS,Nota Dinas pengusul Manager dapat langsung ke Dirut.
 UAT-041,P0,Audit,Attachment salah user,Akun nonberhak akses download attachment,403; file tidak bocor,PASS,Bukti penerimaan dan bukti bayar menolak user di luar ACL.
 UAT-042,P1,Audit,Tracing,Tinjau histori penerimaan→review→dispo→payment,Actor/timestamp/file/status lengkap,PASS,"Riwayat penerimaan, review, disposisi dan bukti bayar memuat actor, waktu dan transisi."
-UAT-043,P1,Mekari,HMAC sandbox valid/invalid,GET docs dengan signature baru dan salah,200 valid bila punya scope; 401 invalid; tak expose secret,SKIP,Sandbox eksternal: kredensial/scope belum tersedia. Tes lokal HMAC full path + query lulus.
+UAT-043,P1,Mekari,HMAC sandbox valid/invalid,GET docs dengan signature baru dan salah,200 valid bila punya scope; 401 invalid; tak expose secret,PASS,"Smoke HTTPS dari VPS: Get Profile / Quota 200, List Documents 200 dan HMAC salah 401."
 UAT-044,P1,Mekari,Webhook duplicate,Kirim callback sama dua kali,Idempotent; single transition,PASS,"Mock: token salah 403, dua webhook hanya satu event, status belum berubah tanpa polling."
 UAT-045,P1,Mekari,Status completed dan PDF,Selesaikan demo signing di sandbox,Final PDF diunduh dan tercatat; signed berbeda manual,SKIP,"Signing eksternal belum dijalankan. Mock lulus: polling, PDF terproteksi, idempoten, provenance dan penerbitan."
 UAT-046,P0,Regression,Modul Finance dan Rekening Koran existing,Jalankan smoke suite,Tidak ada perubahan angka/bug,PASS,"Utang manual, saldo Rekening Koran, impor BRI fiktif dan deduplikasi lulus."

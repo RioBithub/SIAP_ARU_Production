@@ -38,6 +38,12 @@ Pengulangan setup memperbarui kredensial Mekari dan daftar email penguji. Schema
 
 Koneksi HMAC ke layanan Mekari tetap menunggu kredensial sandbox operator dan jaringan VPS. [Panduan pemasangan](VPS-SANDBOX.md) memuat perintah setup, smoke, PM2, tunnel SSH dan skenario multi-signer.
 
+## Pemeriksaan Sandbox eksternal dari VPS
+
+UAT-043 **PASS** berdasarkan output terminal VPS dengan Node 20.20.2. Get Profile / Quota dan List Documents mengembalikan HTTP 200. List Documents dengan HMAC yang sengaja dibuat salah mengembalikan HTTP 401. Tes hanya melakukan GET dengan kredensial Sandbox yang dimasukkan secara privat.
+
+Hasil kumulatif 50 skenario menjadi **49 PASS, 0 FAIL, 1 SKIP**. UAT-045 untuk pengiriman, penandatanganan dan PDF final pada Mekari Sandbox eksternal masih SKIP. Hasil ini menggabungkan suite staging dengan smoke VPS.
+
 ## Empat kasus Pak Nor
 
 Suite `tests/v11/demo-cases.mjs` lulus untuk keempat kasus pada data simulasi. Seed dijalankan dua kali dengan jumlah tetap empat dokumen utama. API web dan koneksi database dicocokkan melalui marker staging sebelum data dibuat.
@@ -52,3 +58,9 @@ Suite `tests/v11/demo-cases.mjs` lulus untuk keempat kasus pada data simulasi. S
 Notifikasi diperiksa dengan akun penerima dan akun lain. Akun lain tidak dapat membaca daftar penerima atau mengubah penanda baca miliknya. Penandaan baca berulang mempertahankan waktu baca yang sama. Uji browser 390 px memeriksa label invoice dan membuka tugas melalui notifikasi. Panel notifikasi ditempatkan di luar header agar dapat dipakai pada layar ponsel.
 
 Pengujian tambahan memigrasikan staging lama dari 35 menjadi 36 tabel, menjalankan migrasi kembali dan mencocokkan seluruh baris lama. Panduan presenter ada di [SKENARIO-PAK-NOR.md](SKENARIO-PAK-NOR.md).
+
+## Uji pembatasan Sandbox dari situs utama
+
+Typecheck dan build lulus pada Node 20.20.2. Lima tes adapter dan suite regresi lokal lulus (48 PASS, 2 SKIP untuk panggilan vendor). Uji API dan Chromium memakai database lokal terisolasi, konfigurasi service tanpa mode staging, serta gateway simulasi. Surat lain, PDF lain, akun tanpa izin, dan email di luar daftar ditolak. Prediksi dua posisi, dua penandatangan berurutan, polling dan unduhan bukti uji lulus. Penerbitan ditolak lewat opsi Mekari maupun unggah manual. Setelah konfigurasi pilot dilepas, panel tersembunyi dan surat simulasi tetap ditolak saat diajukan untuk penerbitan.
+
+[Langkah tes UAT-045 pada situs utama](PILOT-MEKARI.md)

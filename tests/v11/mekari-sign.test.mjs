@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test, { beforeEach } from "node:test";
 import {
-  configuredSandboxSigning, mockSignedPdf, predictSandboxAnnotations, sandboxStatus, sendSandboxSignature,
+  configuredSandboxSigning, mekariMode, mekariPilotAttachmentId, mockSignedPdf, predictSandboxAnnotations, sandboxStatus, sendSandboxSignature,
 } from "../../lib/mekari-sign.ts";
 
 beforeEach(t => {
@@ -13,6 +13,8 @@ beforeEach(t => {
     MEKARI_CLIENT_ID: "fixture-client",
     MEKARI_CLIENT_SECRET: "fixture-only-hmac-test",
     SIAP_V11_MEKARI_ALLOW_SEND: "1",
+    SIAP_V11_MEKARI_PILOT_LETTER_ID: "",
+    SIAP_V11_MEKARI_PILOT_ATTACHMENT_ID: "",
     SIAP_V11_MEKARI_TEST_RECIPIENTS: "signer@example.invalid,reviewer@example.invalid",
   };
   const previous = Object.fromEntries(Object.keys(fixture).map(key => [key, process.env[key]]));
@@ -109,4 +111,33 @@ test("Prediksi mengirim PDF dan recipient sesuai skema serta hanya meneruskan ko
   await assert.rejects(predictSandboxAnnotations("SIMULASI.pdf", pdf, { signers }), /belum memiliki akses/);
   fetchMock.mock.mockImplementation(async () => Response.json({ data: { data: { unknown_layout: {} } }, error: false }));
   assert.deepEqual(await predictSandboxAnnotations("SIMULASI.pdf", pdf, { signers }), []);
+});
+
+test("Di luar staging, Sandbox hanya menjangkau surat dan PDF uji yang dikonfigurasi", async t => {
+  process.env.DB_NAME = "aru_siap";
+  process.env.SIAP_V11_STAGE = "0";
+  const id = "9f074828-f7d4-49eb-9db4-85c9cbe02125";
+  const other = "f808248e-1191-4132-9b87-3b6dfd073b2f";
+  const attachment = "da970cba-a4b0-4bc1-89ff-fa5742673d38";
+  const fetchMock = t.mock.method(globalThis, "fetch", async () =>
+    Response.json({ data: { id: "fixture-document", attributes: { signing_status: "in_progress" } } }));
+
+  process.env.SIAP_V11_MEKARI_PILOT_LETTER_ID = id;
+  assert.equal(mekariMode(id), null);
+  process.env.SIAP_V11_MEKARI_PILOT_ATTACHMENT_ID = attachment;
+
+  assert.equal(mekariMode(), null);
+  assert.equal(mekariMode(other), null);
+  assert.equal(mekariPilotAttachmentId(other), null);
+  assert.equal(mekariPilotAttachmentId(id), attachment);
+  await assert.rejects(predictSandboxAnnotations("SIMULASI.pdf", pdf, firstSigner, other), /sandbox tidak aktif/);
+  assert.equal(fetchMock.mock.callCount(), 0);
+  assert.equal(await sandboxStatus("fixture-document", id), "IN_PROGRESS");
+  assert.equal(fetchMock.mock.callCount(), 1);
+
+  process.env.SIAP_V11_MEKARI_MODE = "mock";
+  assert.equal(mekariMode(id), null);
+  process.env.SIAP_V11_MEKARI_MODE = "sandbox";
+  process.env.SIAP_V11_STAGE = "1";
+  assert.equal(mekariMode(id), null);
 });

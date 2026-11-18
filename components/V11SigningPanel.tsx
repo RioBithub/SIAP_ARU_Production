@@ -30,6 +30,7 @@ function newSigner(id: number): DraftSigner {
 
 export default function V11SigningPanel({ id, files, onReady }: { id: string; files: Source[]; onReady: (ready: boolean) => void }) {
   const [mode, setMode] = useState<Mode | null>(null);
+  const [pilotAttachmentId, setPilotAttachmentId] = useState<string | null>(null);
   const [job, setJob] = useState<Job | null>(null);
   const [busy, setBusy] = useState<"START" | "REFRESH" | "PREDICT" | null>(null);
   const [message, setMessage] = useState("");
@@ -43,13 +44,15 @@ export default function V11SigningPanel({ id, files, onReady }: { id: string; fi
     const controller = new AbortController();
     onReady(false);
     setMode(null);
+    setPilotAttachmentId(null);
     setJob(null);
     void fetch(path, { signal: controller.signal }).then(async response => {
       if (!response.ok) return;
       const json = await response.json();
       setMode(json.mode);
+      setPilotAttachmentId(json.pilot_attachment_id);
       setJob(json.data);
-      onReady(json.data?.status === "COMPLETED");
+      onReady(!json.pilot_attachment_id && json.data?.status === "COMPLETED");
     }).catch(() => {});
     return () => controller.abort();
   }, [path, onReady]);
@@ -105,7 +108,7 @@ export default function V11SigningPanel({ id, files, onReady }: { id: string; fi
       const fields = kind === "START" ? { attachment_id: attachmentId, ...sandboxFields } : {};
       const json = await postAction(kind, fields);
       setJob(json.data);
-      onReady(json.data?.status === "COMPLETED");
+      onReady(!pilotAttachmentId && json.data?.status === "COMPLETED");
       if (json.retry_after) setMessage("PDF belum siap. Segarkan setelah " + json.retry_after + " detik.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Proses Mekari gagal.");
@@ -115,15 +118,17 @@ export default function V11SigningPanel({ id, files, onReady }: { id: string; fi
   }
 
   if (!mode) return null;
-  const pdfs = files.filter(file => file.attachment_kind === "ORIGINAL" && /\.pdf$/i.test(file.original_name));
+  const pdfs = files.filter(file => file.attachment_kind === "ORIGINAL" && /\.pdf$/i.test(file.original_name)
+    && (!pilotAttachmentId || file.id.toLowerCase() === pilotAttachmentId));
   return <details className="card" style={{ marginTop: 12 }}>
     <summary className="card-head"><b>{(job?.mode ?? mode) === "mock" ? "Simulasi Mekari Sign" : "Mekari Sign Sandbox"}</b></summary>
     <div className="card-body">
+      {pilotAttachmentId && <p className="notice">Surat simulasi. PDF hasil Sandbox tersedia sebagai bukti uji.</p>}
       {message && <p className="notice" role="status">{message}</p>}
       {job ? <>
         <p>Status {job.status}</p>
         {job.status === "IN_PROGRESS" && job.mode === mode && <button className="btn btn-secondary" disabled={!!busy} onClick={() => void action("REFRESH")}>Segarkan Status Mekari</button>}
-        {job.final_attachment_id && <a href={"/api/attachments/" + job.final_attachment_id} download>Unduh PDF final</a>}
+        {job.final_attachment_id && <a href={"/api/attachments/" + job.final_attachment_id} download>{pilotAttachmentId ? "Unduh PDF bukti uji" : "Unduh PDF final"}</a>}
       </> : <form onSubmit={event => void action("START", event)}>
         <fieldset className="form-grid signing-form" disabled={!!busy}>
           <label className="field full"><span>PDF Draf yang Disetujui</span>
