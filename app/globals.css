@@ -392,6 +392,28 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit;
   color: #124781;
 }
 .workflow-form .field[data-need] > :is(label, span):first-child::after { content: attr(data-need); }
+.disposition-letter-search:focus { border-color: var(--blue); }
+.disposition-letter-results {
+  max-height: min(250px, 32vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+}
+.disposition-letter-results > li {
+  display: grid;
+  gap: 3px;
+  padding: 10px 11px;
+  cursor: pointer;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.disposition-letter-results > li + li { border-top: 1px solid var(--line); }
+.disposition-letter-results > li:is(:hover, [aria-selected=true]) { background: #eaf4ff; color: var(--navy); }
+.disposition-letter-results > li > span { font-size: 11px; }
 .letter-activity { min-width: 155px; white-space: nowrap; }
 .letter-activity span { display: block; }
 .letter-activity span + span { margin-top: 4px; }

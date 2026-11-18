@@ -30,7 +30,8 @@ export async function GET(request: Request) {
   const status = url.searchParams.get("status");
   const documentType = url.searchParams.get("document_type");
   const year = url.searchParams.get("year");
-  const q = (url.searchParams.get("q") || "").trim();
+  const q = (url.searchParams.get("q") || "").trim().slice(0, 100);
+  const forDisposition = url.searchParams.get("for_disposition") === "1";
   const requestedLimit = Number(url.searchParams.get("limit") || 100);
   const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 2500) : 100;
   const trash = url.searchParams.get("trash") === "1";
@@ -41,7 +42,7 @@ export async function GET(request: Request) {
 
   const id = url.searchParams.get("id");
   if (id) { where.push("l.id=?"); params.push(id.slice(0, 36)); }
-  if (url.searchParams.get("for_disposition") === "1") {
+  if (forDisposition) {
     where.push(`(
       (l.direction='OUTGOING' AND l.status='ISSUED')
       OR (l.direction<>'OUTGOING' AND (l.status='APPROVED'
@@ -61,16 +62,27 @@ export async function GET(request: Request) {
   if (documentType) { where.push("l.document_type=?"); params.push(documentType); }
   if (year && /^\d{4}$/.test(year)) { where.push("YEAR(l.letter_date)=?"); params.push(Number(year)); }
 
+  const displayNumber = `COALESCE(NULLIF(l.legacy_number_text,''),
+    CASE WHEN nl.seq_base IS NULL THEN NULL
+         WHEN nl.variant>0 THEN CONCAT(nl.seq_base,'.',nl.variant)
+         ELSE CAST(nl.seq_base AS CHAR) END)`;
   if (q) {
-    where.push("(l.letter_number LIKE ? OR l.external_number LIKE ? OR l.subject LIKE ? OR l.sender LIKE ? OR l.recipient LIKE ? OR l.legacy_number_text LIKE ? OR CAST(nl.seq_base AS CHAR) LIKE ?)");
-    const like = `%${q.slice(0,100)}%`;
-    params.push(like,like,like,like,like,like,like);
+    const columns = ["l.letter_number", "l.external_number", "l.subject", "l.sender", "l.recipient",
+      "l.legacy_number_text", "CAST(nl.seq_base AS CHAR)"];
+    if (forDisposition) columns.push(displayNumber);
+    where.push(`(${columns.map(column => `${column} LIKE ?`).join(" OR ")})`);
+    params.push(...columns.map(() => `%${q}%`));
   }
 
   const access = trash ? { clause: "l.deleted_at IS NOT NULL", params: [] } : letterAccess(user);
   where.push(access.clause);
   params.push(...access.params);
 
+  const order = ["l.letter_date DESC", "l.created_at DESC"];
+  if (forDisposition && q) {
+    order.unshift(`CASE WHEN ? IN (${displayNumber}, l.letter_number, l.external_number) THEN 0 ELSE 1 END`);
+    params.push(q);
+  }
   params.push(limit);
   const [rows] = await db.query<RowDataPacket[]>(
       `SELECT l.*, v.kind AS v11_kind,v.requesting_unit AS v11_unit,
@@ -83,10 +95,7 @@ export async function GET(request: Request) {
       nf.code AS format_code,
       nl.seq_base,
       nl.variant,
-      COALESCE(NULLIF(l.legacy_number_text,''),
-        CASE WHEN nl.seq_base IS NULL THEN NULL
-             WHEN nl.variant>0 THEN CONCAT(nl.seq_base,'.',nl.variant)
-             ELSE CAST(nl.seq_base AS CHAR) END) AS display_number,
+      ${displayNumber} AS display_number,
       (SELECT COUNT(*) FROM siap_attachments a WHERE a.letter_id=l.id AND a.disposition_id IS NULL) AS attachment_count
      FROM siap_letters l
      JOIN siap_users u ON u.id=l.created_by
@@ -96,7 +105,7 @@ export async function GET(request: Request) {
      LEFT JOIN siap_number_formats nf ON nf.id=l.number_format_id
      LEFT JOIN siap_number_ledger nl ON nl.letter_id=l.id
      WHERE ${where.join(" AND ")}
-     ORDER BY l.letter_date DESC, l.created_at DESC
+     ORDER BY ${order.join(", ")}
      LIMIT ?`,
     params
   );
