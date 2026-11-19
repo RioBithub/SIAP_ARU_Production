@@ -78,7 +78,7 @@ async function fetchDispositionLetters(params: URLSearchParams, signal: AbortSig
 const ASSIGNEE_TASK_STATES = ["UNSEEN", "SEEN", "IN_PROGRESS"];
 const SOURCE_FILE_LABELS: Record<string, string> = {
   ORIGINAL: "Dokumen surat", ADDITIONAL: "Lampiran surat", PROCESS: "Bukti proses surat",
-  RECEIPT: "Bukti serah terima", SPB: "SPB", SIGNED: "Surat bertanda tangan", DISPATCH: "Bukti pengiriman",
+  RECEIPT: "Bukti serah terima", SIGNED: "Surat bertanda tangan", DISPATCH: "Bukti pengiriman",
 };
 
 function reviewButtonLabel(d:any){
@@ -356,15 +356,21 @@ export default function DispositionsClient({user}:{user:SessionUser}){
     }
   }
 
+  async function readDetail(id:string){
+    const response=await fetch(`/api/dispositions/${id}`,{cache:"no-store"});
+    const result=await response.json().catch(()=>null);
+    if(!response.ok||!result?.data?.disposition) throw new Error(result?.error||"Gagal membuka detail disposisi.");
+    return result.data;
+  }
+
+  async function refreshDetail(id:string){
+    const next=await readDetail(id);
+    setDetail((current:typeof detail)=>current?.disposition.id===id?next:current);
+  }
+
   async function openDetail(id:string){
     try{
-      const r=await fetch(`/api/dispositions/${id}`,{cache:"no-store"});
-      const j=await r.json();
-      if(!r.ok){
-        setError(j.error||"Gagal membuka detail.");
-        return false;
-      }
-      setDetail(j.data);
+      setDetail(await readDetail(id));
       setDetailOpen(true);
       return true;
     }catch(e){
@@ -381,8 +387,16 @@ export default function DispositionsClient({user}:{user:SessionUser}){
     tone:"primary"|"success"|"danger"="primary"
   ){
     setError("");
-    if(action==="SUBMIT_RESULT"&&d.purpose==="INVOICE_VERIFY"&&
-      (!detailOpen||detail?.disposition.id!==d.id)&&!await openDetail(d.id)) return;
+    const needsDetail=(action==="SUBMIT_RESULT"&&d.purpose==="INVOICE_VERIFY")||
+      (["APPROVE_RESULT","RETURN_RESULT"].includes(action)&&d.purpose==="INVOICE_PAYMENT");
+    if(needsDetail&&(!detailOpen||detail?.disposition.id!==d.id)){
+      try{
+        setDetail(await readDetail(d.id));
+      }catch(e){
+        setError(e instanceof Error?e.message:"Gagal membuka detail disposisi.");
+        return;
+      }
+    }
     setProcessFiles([]);
     setProcess({
       id:d.id,action,label,requiredNote,tone,resultRequirement:d.result_requirement,purpose:d.purpose,
@@ -811,7 +825,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
       </Modal>
     }
 
-    {detailOpen&&detail&&
+    {detailOpen&&detail&&<div hidden={Boolean(process)}>
       <Modal
         title={detail.disposition.subject}
         subtitle={`Dari ${detail.disposition.from_name} → PIC ${detail.disposition.to_name}`}
@@ -923,8 +937,8 @@ export default function DispositionsClient({user}:{user:SessionUser}){
               </div>
             </section>
 
-            {detail.paymentDocuments&&<PaymentDocumentsPanel key={detail.disposition.id} id={detail.disposition.letter_id}
-              data={detail.paymentDocuments} onSaved={async()=>{await openDetail(detail.disposition.id);}}/>}
+            {!process&&detail.paymentDocuments&&<PaymentDocumentsPanel key={detail.disposition.id} id={detail.disposition.letter_id}
+              data={detail.paymentDocuments} attachments={sourceAttachments} onSaved={()=>refreshDetail(detail.disposition.id)}/>}
 
             {detail.sandboxSigning && <AttachmentSandbox key={detail.disposition.id}
               files={detail.attachments.filter((file:any) =>
@@ -1008,7 +1022,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
           </div>
         </div>
       </Modal>
-    }
+    </div>}
 
     {process&&
       <Modal
@@ -1022,7 +1036,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
             seperti berita acara atau bukti barang diterima. Hasil dikirim ke Manager untuk diperiksa.
           </p>
           {detail.paymentDocuments&&<PaymentDocumentsPanel id={detail.disposition.letter_id}
-            data={detail.paymentDocuments} onSaved={async()=>{await openDetail(process.id);}}/>}
+            data={detail.paymentDocuments} attachments={sourceAttachments} onSaved={()=>refreshDetail(process.id)}/>}
         </>}
         <form className="form-grid workflow-form" onSubmit={submitProcess}>
           {error&&<div className="field full error" role="alert">{error}</div>}
@@ -1091,7 +1105,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
             />
           </div>
 
-          {detail?.payments?.length>0&&["APPROVE_RESULT","RETURN_RESULT"].includes(process.action)&&
+          {detail?.disposition.id===process.id&&detail.payments?.length>0&&["APPROVE_RESULT","RETURN_RESULT"].includes(process.action)&&
             <div className="field full notice">
               {detail.payments.filter((item:any)=>item.status==="PENDING").map((item:any)=><div key={item.id}>
                 <b>{formatInvoiceAmount(item.amount)} · {String(item.payment_date).slice(0,10)}</b>

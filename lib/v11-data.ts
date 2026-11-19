@@ -64,22 +64,22 @@ export function takeFile(value: FormDataEntryValue | null | undefined): File | n
   return value && typeof value !== "string" && value.size > 0 ? value : null;
 }
 
-export async function saveProof(file: File, pdfOnly = false, kind: "ORIGINAL" | "ADDITIONAL" = "ADDITIONAL") {
+export async function proofMimeType(file: File, pdfOnly = false) {
   if (file.size < 8 || file.size > MAX_FILE_BYTES) throw new Error("Ukuran bukti tidak valid (maksimal 10 MB).");
   const header = Buffer.from(await file.slice(0, 8).arrayBuffer());
   const ext = file.name.split(".").pop()?.toLowerCase();
-  let type: string;
   if (ext === "pdf" && header.subarray(0, 5).toString("ascii") === "%PDF-") {
     const tail = await file.slice(Math.max(0, file.size - 2048)).text();
     if (!tail.includes("%%EOF")) throw new Error("Berkas PDF tidak lengkap.");
-    type = "application/pdf";
-  } else if (!pdfOnly && ext === "png" && header.equals(Buffer.from("89504e470d0a1a0a", "hex"))) {
-    type = "image/png";
-  } else if (!pdfOnly && (ext === "jpg" || ext === "jpeg") && header.subarray(0, 3).equals(Buffer.from("ffd8ff", "hex"))) {
-    type = "image/jpeg";
-  } else {
-    throw new Error(pdfOnly ? "Unggah berkas PDF yang valid." : "Unggah bukti PDF, JPG, atau PNG yang valid.");
+    return "application/pdf";
   }
+  if (!pdfOnly && ext === "png" && header.equals(Buffer.from("89504e470d0a1a0a", "hex"))) return "image/png";
+  if (!pdfOnly && (ext === "jpg" || ext === "jpeg") && header.subarray(0, 3).equals(Buffer.from("ffd8ff", "hex"))) return "image/jpeg";
+  throw new Error(pdfOnly ? "Unggah berkas PDF yang valid." : "Unggah bukti PDF, JPG, atau PNG yang valid.");
+}
+
+export async function saveProof(file: File, pdfOnly = false, kind: "ORIGINAL" | "ADDITIONAL" = "ADDITIONAL") {
+  const type = await proofMimeType(file, pdfOnly);
   return saveUpload(new File([file], file.name, { type }), kind);
 }
 

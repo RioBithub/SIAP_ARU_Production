@@ -16,7 +16,7 @@ import { checkedDate, invoiceKey, invoiceVerified, officialManager, persekotChec
   requestingUnit, saveProof, takeFile, v11Letter } from "@/lib/v11-data";
 import { invoiceVerificationStatus, jakartaDate } from "@/lib/v11-workflow";
 import { invoicePaymentSummary } from "@/lib/v11-finance";
-import { discardUncommittedFiles, insertLetterAttachment, listLetterAttachments, type StoredLetterFile } from "@/lib/letter-uploads";
+import { discardUncommittedFiles, insertLetterAttachment, listLetterAttachments, markPaymentAttachment, type StoredLetterFile } from "@/lib/letter-uploads";
 
 export const runtime = "nodejs";
 
@@ -186,7 +186,8 @@ export async function PATCH(request: Request, { params }: { params: { id: string
         if (spbFile) {
           const proof = await saveProof(spbFile, true);
           stored.push(proof);
-          spb = await insertLetterAttachment(conn, params.id, user.id, proof, "ADDITIONAL");
+          await markPaymentAttachment(conn, params.id, spb);
+          spb = await insertLetterAttachment(conn, params.id, user.id, proof, "PAYMENT_DOCUMENT");
         }
         await conn.execute(
           "UPDATE siap_v11_letters SET persekot_checklist=?,spb_attachment_id=? WHERE letter_id=?",

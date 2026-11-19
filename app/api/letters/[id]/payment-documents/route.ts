@@ -3,8 +3,10 @@ import { auditLog } from "@/lib/audit";
 import { getCurrentUser } from "@/lib/auth";
 import { withTransaction } from "@/lib/db";
 import { getAccessibleLetter } from "@/lib/letter-access";
-import { discardUncommittedFiles, insertLetterAttachment, type StoredLetterFile } from "@/lib/letter-uploads";
-import { saveProof, takeFile, v11Letter } from "@/lib/v11-data";
+import { discardUncommittedFiles, insertLetterAttachment, markPaymentAttachment, paymentAttachmentJoins,
+  paymentAttachmentKind, type StoredLetterFile } from "@/lib/letter-uploads";
+import { readStoredFile } from "@/lib/upload";
+import { proofMimeType, saveProof, takeFile, v11Letter } from "@/lib/v11-data";
 import { canEditPaymentDocuments, paymentKind } from "@/lib/v11-payment-documents";
 import { PERSEKOT_DOCUMENTS } from "@/lib/v11-workflow";
 import type { RowDataPacket } from "mysql2/promise";
@@ -20,18 +22,19 @@ export async function POST(request: Request, { params }: { params: { id: string 
     const form = await request.formData();
     const code = String(form.get("document_code") || "");
     const file = takeFile(form.get("file"));
+    const attachmentId = String(form.get("attachment_id") || "").trim();
     const recipient = String(form.get("recipient_type") || "");
-    const changingRecipient = ["VENDOR", "NON_VENDOR"].includes(recipient) && !code && !file;
-    const uploadingDocument = !recipient && Object.hasOwn(PERSEKOT_DOCUMENTS, code) && file;
-    if (!changingRecipient && !uploadingDocument) {
-      throw new Error("Pilih jenis tujuan pembayaran atau unggah satu dokumen persyaratan.");
+    const changingRecipient = ["VENDOR", "NON_VENDOR"].includes(recipient) && !code && !file && !attachmentId;
+    const changingDocument = !recipient && Object.hasOwn(PERSEKOT_DOCUMENTS, code) && Boolean(file) !== Boolean(attachmentId);
+    if (!changingRecipient && !changingDocument) {
+      throw new Error("Pilih tujuan pembayaran atau pilih satu berkas untuk jenis dokumen persyaratan.");
     }
 
     const result = await withTransaction(async conn => {
       const letter = await getAccessibleLetter(user, params.id, conn, true);
       const workflow = letter ? await v11Letter(params.id, conn) : null;
       const kind = paymentKind(workflow, letter?.document_type);
-      if (!letter || !kind || !await canEditPaymentDocuments(conn, letter, user)) return null;
+      if (!letter || !workflow || !kind || !await canEditPaymentDocuments(conn, letter, user)) return null;
       if (code === "SPB" && kind !== "PERSEKOT") throw new Error("SPB hanya dapat diunggah untuk pengajuan persekot.");
 
       if (changingRecipient) {
@@ -50,10 +53,28 @@ export async function POST(request: Request, { params }: { params: { id: string 
         return { recipient };
       }
 
-      const saved = await saveProof(file!, code === "SPB");
-      staged.push(saved);
-      const id = await insertLetterAttachment(conn, params.id, user.id, saved, "ADDITIONAL");
+      let id: string;
+      if (file) {
+        const saved = await saveProof(file, code === "SPB");
+        staged.push(saved);
+        id = await insertLetterAttachment(conn, params.id, user.id, saved, "PAYMENT_DOCUMENT");
+      } else {
+        const [[existing]] = await conn.query<RowDataPacket[]>(
+          `SELECT a.id,a.original_name,a.storage_path,a.is_compressed FROM siap_attachments a
+           ${paymentAttachmentJoins}
+           WHERE a.id=? AND a.letter_id=? AND a.disposition_id IS NULL AND a.letter_action_id IS NULL
+             AND a.attachment_kind='ADDITIONAL' AND ${paymentAttachmentKind}='ADDITIONAL'
+             AND NOT (a.id<=>v.receipt_attachment_id OR a.id<=>v.signature_attachment_id OR a.id<=>v.dispatch_attachment_id)`,
+          [attachmentId, params.id],
+        );
+        if (!existing) throw new Error("Pilih lampiran umum yang tersedia pada surat ini.");
+        const bytes = await readStoredFile(existing.storage_path, Boolean(existing.is_compressed));
+        await proofMimeType(new File([new Uint8Array(bytes)], existing.original_name), code === "SPB");
+        id = existing.id;
+        await markPaymentAttachment(conn, params.id, id);
+      }
       if (code === "SPB") {
+        await markPaymentAttachment(conn, params.id, workflow.spb_attachment_id);
         await conn.execute("UPDATE siap_v11_letters SET spb_attachment_id=? WHERE letter_id=?", [id, params.id]);
       } else {
         await conn.execute(
@@ -62,7 +83,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
         );
       }
       await auditLog({ user, action: "LETTER_PAYMENT_DOCUMENT", entityType: "LETTER",
-        entityId: params.id, metadata: { documentCode: code, attachmentId: id }, request }, conn);
+        entityId: params.id, metadata: { documentCode: code, attachmentId: id, reused: Boolean(attachmentId) }, request }, conn);
       return { id };
     });
 

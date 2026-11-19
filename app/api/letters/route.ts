@@ -282,14 +282,14 @@ export async function POST(request: Request) {
       }
 
       if (v11) {
-        const extra = async (proof: File | null, pdfOnly = false) => {
+        const extra = async (proof: File | null, kind: "ADDITIONAL" | "PAYMENT_DOCUMENT") => {
           if (!proof) return null;
-          const saved = await saveProof(proof, pdfOnly);
+          const saved = await saveProof(proof, kind === "PAYMENT_DOCUMENT");
           stored.push(saved);
-          return insertLetterAttachment(conn, id, user.id, saved, "ADDITIONAL");
+          return insertLetterAttachment(conn, id, user.id, saved, kind);
         };
-        const receiptId = await extra(receiptProof);
-        const spbId = await extra(spbFile, true);
+        const receiptId = await extra(receiptProof, "ADDITIONAL");
+        const spbId = await extra(spbFile, "PAYMENT_DOCUMENT");
         await conn.execute(
           `INSERT INTO siap_v11_letters
            (letter_id,kind,requesting_unit,received_time,delivery_method,delivered_by,received_by,

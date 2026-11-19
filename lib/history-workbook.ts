@@ -115,7 +115,8 @@ export async function buildHistoryWorkbook(
     ...histories.flatMap(({ document, actions, files }, index) => {
       const numbers = new Map(actions.map((action, position) => [action.id, position + 1]));
       return files.map(file => [
-        selected || index > 0 ? "Surat asal" : "Surat keluar", numbers.get(file.letter_action_id) || "",
+        file.source_kind === "PAYMENT_DOCUMENT" ? "Persyaratan Finance" : selected || index > 0 ? "Surat asal" : "Surat keluar",
+        numbers.get(file.letter_action_id) || "",
         file.original_name, file.uploaded_by_name, formatWorkflowTime(file.created_at), document.subject,
       ]);
     }),
@@ -123,7 +124,7 @@ export async function buildHistoryWorkbook(
       taskNumbers.get(file.disposition_id)!, actionRows.get(file.disposition_action_id) || "",
       file.original_name, file.uploaded_by_name, formatWorkflowTime(file.created_at), subjectByTask.get(file.disposition_id) || "",
     ]),
-  ], [15, 11, 50, 30, 26, 45], true);
+  ], [22, 11, 50, 30, 26, 45], true);
 
   const data: Buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx", compression: true });
   const prefix = selected ? "riwayat-disposisi" : "riwayat-surat-keluar";
