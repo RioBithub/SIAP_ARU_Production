@@ -1,11 +1,24 @@
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { db } from "@/lib/db";
-import { REVIEW_ROLES, type ReviewRole } from "@/lib/correspondence-workflow";
+import { REVIEW_ROLES, type LetterHistoryEntry, type ReviewRole } from "@/lib/correspondence-workflow";
 import { getAccessibleLetter, letterAccess } from "@/lib/letter-access";
 import type { DocumentReference } from "@/lib/business-documents";
 import type { SessionUser } from "@/lib/types";
 
 type Queryable = Pick<PoolConnection, "query">;
+
+export async function listLetterActions(conn: Queryable, user: SessionUser, letterId: string) {
+  const access = letterAccess(user);
+  const [actions] = await conn.query<(RowDataPacket & LetterHistoryEntry)[]>(
+    `SELECT a.*,u.name AS actor_name,u.role AS actor_role
+     FROM siap_letter_actions a
+     JOIN siap_letters l ON l.id=a.letter_id
+     JOIN siap_users u ON u.id=a.actor_user_id
+     WHERE l.id=? AND ${access.clause}
+     ORDER BY a.created_at,(a.from_status IS NOT NULL),a.id`, [letterId, ...access.params],
+  );
+  return actions;
+}
 
 export async function hasActiveSecretariat(conn: Queryable = db) {
   const [rows] = await conn.query<RowDataPacket[]>(

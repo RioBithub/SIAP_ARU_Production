@@ -7,6 +7,7 @@ import { dispositionAccess } from "@/lib/disposition-access";
 import { v11Letter } from "@/lib/v11-data";
 import { paymentDocuments } from "@/lib/v11-payment-documents";
 import { findLetterReferences } from "@/lib/business-document-data";
+import { listLetterActions } from "@/lib/correspondence-data";
 import { listLetterAttachments } from "@/lib/letter-uploads";
 
 export const runtime="nodejs";
@@ -59,7 +60,10 @@ export async function GET(_:Request,{params}:{params:{id:string}}){
      ORDER BY a.created_at ASC`,
     [params.id]
   );
-  const sourceAttachments = await listLetterAttachments(db, user, d.letter_id);
+  const [sourceActions, sourceAttachments] = await Promise.all([
+    listLetterActions(db, user, d.letter_id),
+    listLetterAttachments(db, user, d.letter_id),
+  ]);
   const [related] = await db.query<RowDataPacket[]>(
     `SELECT d.id,d.parent_id,d.status,f.name AS from_name,t.name AS to_name,c.name AS current_owner_name
      FROM siap_dispositions d
@@ -89,7 +93,7 @@ export async function GET(_:Request,{params}:{params:{id:string}}){
   const requirements = workflow ? await paymentDocuments(db, d.letter_id, workflow, d.document_type) : null;
   return NextResponse.json({
     ok:true,
-    data:{disposition:d,actions:history,attachments,sourceAttachments,parent,children,payments,paymentDocuments:requirements,
+    data:{disposition:d,actions:history,attachments,sourceActions,sourceAttachments,parent,children,payments,paymentDocuments:requirements,
       sandboxSigning: sandboxAttachmentsEnabled() && (user.role === "ROOT_ADMIN" ||
         [d.from_user_id,d.to_user_id,d.current_owner_user_id].includes(user.id))}
   });

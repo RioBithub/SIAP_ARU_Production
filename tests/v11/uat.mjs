@@ -270,6 +270,7 @@ try {
     assert.equal(doc.letter.status, "MANAGER_REVIEW");
     const task = await taskDetail("ops", state.verify);
     assert.equal(task.disposition.status, "COMPLETED");
+    assert(task.sourceActions.some(action => action.action === "REGISTER_INCOMING"));
     assert(task.sourceAttachments.some(file => file.id === doc.originalId && file.source_kind === "ORIGINAL"));
     assert(task.sourceAttachments.some(file => file.id === state.receipt && file.source_kind === "RECEIPT"));
     return "Staff verifikasi bukti dan Manager ACC. Invoice asli dan bukti terima ikut tampil tanpa unggah ulang.";
@@ -567,7 +568,11 @@ try {
     await submit("staff", state.reviewTask, "Surat hasil", [], { result_letter_id: row.id });
     await taskAction("ops", state.reviewTask, "APPROVE_RESULT");
     assert.equal((await detail("ops", state.general)).letter.status,"MANAGER_REVIEW");
-    return "Surat terbit di luar disposisi ditolak. Surat hasil yang terkait diterima.";
+    const followUp = await assign("ops", row.id, "staff");
+    const { sourceActions } = await taskDetail("staff", followUp.id);
+    assert(sourceActions.some(action => action.action === "CREATE_OUTGOING"));
+    assert(sourceActions.some(action => action.action === "ISSUE" && action.to_status === "ISSUED"));
+    return "Surat hasil yang terkait diterima. Riwayat draf dan penerbitan ikut tampil pada disposisi Surat Keluar.";
   });
   await test(40, async () => {
     const nota = await post("ops", "/api/letters", {
@@ -576,7 +581,11 @@ try {
     }, 201);
     assert.equal((await letterAction("ops", nota.id, "SUBMIT")).status,"PRESIDENT_DIRECTOR_REVIEW");
     await letterAction("dirut", nota.id, "APPROVE");
-    return "Nota Dinas pengusul Manager dapat langsung ke Dirut.";
+    const task = await assign("ops", nota.id, "staff");
+    const { sourceActions } = await taskDetail("staff", task.id);
+    assert(sourceActions.some(action => action.action === "CREATE_INTERNAL"));
+    assert(sourceActions.some(action => action.action === "APPROVE" && action.to_status === "APPROVED"));
+    return "Riwayat pembuatan Nota Dinas oleh Manager dan persetujuan Dirut tampil pada disposisinya.";
   });
   await test(41, async () => {
     await call("sdm", "/api/attachments/" + state.receipt, { status: 403 });
@@ -748,6 +757,10 @@ try {
       assert.deepEqual(managerOptions.slice(1).sort(), ["Manager Keuangan, SDM & Umum", "Manager Operasional"].sort());
       assert(await mobile.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
       await mobile.screenshot({ path: path.join(out, "01-penerimaan-mobile.png") });
+      const registrationFile = "SIMULASI-Catatan-Registrasi.pdf";
+      await mobile.getByRole("dialog").last().locator('input[type="file"]:not([name])').setInputFiles({
+        name: registrationFile, mimeType: "application/pdf", buffer: pdf,
+      });
       const save = mobile.getByRole("button", { name: "Registrasi & Teruskan", exact: true }).last();
       await Promise.all([mobile.waitForResponse(res => res.url().endsWith("/actions") && res.request().method()==="POST" && res.ok()), save.click()]);
       await mobile.getByRole("button", { name: "Terapkan", exact: true }).click();
@@ -807,6 +820,22 @@ try {
       const staff = await pageFor("staff", true);
       await staff.goto(new URL("/dispositions?disposition_id=" + task.id, base).href);
       const taskDialog=staff.getByRole("dialog");
+      await taskDialog.getByRole("heading", { name: "Riwayat Disposisi", exact: true }).waitFor();
+      const sourceHistory = taskDialog.locator("details").filter({
+        hasText: "Riwayat Surat Masuk Asal",
+      });
+      const registered = sourceHistory.locator(".timeline-row").filter({ hasText: "Surat Diregistrasi" });
+      assert.equal(await sourceHistory.getAttribute("open"), null);
+      assert.equal(await registered.isVisible(), false);
+      await sourceHistory.locator("summary").click();
+      await registered.getByText(registrationFile, { exact: true }).waitFor();
+      assert(await taskDialog.getByText(/^Disposisi dibuat/).isVisible());
+      assert(await sourceHistory.evaluate(el => el.scrollWidth <= el.clientWidth + 1));
+      await staff.screenshot({ path: path.join(out, "02b-riwayat-dokumen-asal-mobile.png") });
+      await registered.getByRole("button", { name: "Pratinjau", exact: true }).click();
+      const historyPreview = taskDialog.last();
+      await historyPreview.locator(".pdf-page canvas").waitFor();
+      await historyPreview.getByRole("button", { name: "Tutup dialog" }).click();
       const sourceFiles = taskDialog.locator("section").filter({
         has: staff.getByRole("heading", { name: "Lampiran Surat Asal", exact: true }),
       });
@@ -867,7 +896,7 @@ try {
       await dialog.waitFor({ state: "hidden" });
       await rowFor().waitFor({ state: "hidden" });
       await call("root", "/api/letters/" + cleanup.id, { status: 404 });
-      return "Chromium 390/1440 px: pencarian pulih dari respons kosong, pratinjau lampiran asal, navigasi induk/delegasi, serta alur sebelumnya lulus.";
+      return "Chromium 390/1440 px: riwayat disposisi tampil utama, riwayat surat dapat dibuka dan lampiran proses dapat dipratinjau.";
     } finally {
       await browser.close();
     }
@@ -1021,9 +1050,10 @@ try {
       return XLSX.read(bytes, { type: "buffer" });
     };
     const reference = "=SIMULASI Teks, bukan formula";
+    const approvalNote = "SIMULASI catatan review surat asal";
     const secret = await incoming("ekspor-rahasia", { confidentiality: "RAHASIA" });
     await register(secret.id);
-    await letterAction("ops", secret.id, "APPROVE");
+    await letterAction("ops", secret.id, "APPROVE", { comment: approvalNote });
     const parent = await assign("dirops", secret.id, "ops", { visibility: "PUBLIC", due_date: due, due_time: "13:45" });
     assert.equal((await taskDetail("ops", parent.id)).disposition.visibility, "ROUTE");
     await start("ops", parent.id);
@@ -1038,6 +1068,13 @@ try {
     assert.match(sheet(full, "Tugas")[1][9], /13:45 WIB/);
     assert(sheet(full, "Lampiran").some(row => row[0] === "1.1" && row[2] === "SIMULASI-dokumen.pdf"));
     assert.equal(sheet(full, "Lampiran").filter(row => row[0] === "Surat asal").length, 2);
+    const sourceLog = sheet(full, "Riwayat Dokumen Asal");
+    const registrationIndex = sourceLog.findIndex(row => row[2] === "Surat Diregistrasi");
+    assert(registrationIndex > 0);
+    assert.match(sourceLog[registrationIndex][1], /WIB$/);
+    assert.deepEqual(sourceLog[registrationIndex].slice(5, 7), ["SECRETARIAT_INTAKE", "MANAGER_REVIEW"]);
+    assert(sourceLog.some(row => row[7].includes(approvalNote)));
+    assert(sheet(full, "Lampiran").some(row => row[0] === "Surat asal" && row[1] === registrationIndex));
     const log = sheet(full, "Log Proses");
     const resultIndex = log.findIndex(row => row[8] === reference);
     assert(resultIndex > 0);
@@ -1057,12 +1094,23 @@ try {
       const task = await assign("ops", row.id, "staff");
       const sheetRows = sheet(await report("staff", task.id), "Ringkasan");
       assert.equal(sheetRows.find(row => row[0] === "Sifat surat")[1], confidentiality);
+      if (confidentiality === "BIASA") {
+        await sql.execute("UPDATE siap_dispositions SET visibility='PUBLIC' WHERE id=?", [task.id]);
+        await call("staffkeu", "/api/letters/" + row.id, { status: 403 });
+        const publicTask = await taskDetail("staffkeu", task.id);
+        assert(publicTask.actions.some(action => action.action === "CREATE"));
+        assert.deepEqual(publicTask.sourceActions, []);
+        assert.deepEqual(publicTask.sourceAttachments, []);
+        const publicWorkbook = await report("staffkeu", task.id);
+        assert.equal(sheet(publicWorkbook, "Riwayat Dokumen Asal").length, 1);
+        assert.equal(sheet(publicWorkbook, "Lampiran").length, 1);
+      }
     }
     const [[audit]] = await sql.query(
       "SELECT user_id FROM siap_audit_logs WHERE action='DISPOSITION_EXPORT' AND entity_id=? ORDER BY id DESC LIMIT 1", [parent.id],
     );
     assert.equal(audit.user_id, roles.ops.id);
-    return "Excel berisi tiga sifat surat, tenggat, log, dan daftar lampiran. Hak akses, data rahasia, teks sebagai data, dan Audit Log lulus.";
+    return "Excel memuat riwayat disposisi dan dokumen asal, termasuk kaitan lampiran. Akses PUBLIC tidak membocorkan riwayat surat.";
   });
   await test(58, async () => {
     const reason = "SIMULASI uji penghapusan permanen";

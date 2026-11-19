@@ -4,7 +4,8 @@ import * as XLSX from "xlsx";
 import { getCurrentUser } from "@/lib/auth";
 import { auditLog } from "@/lib/audit";
 import { withTransaction } from "@/lib/db";
-import { dispositionActionLabel, RESULT_REQUIREMENTS, type ResultRequirement } from "@/lib/correspondence-workflow";
+import { dispositionActionLabel, letterActionLabel, RESULT_REQUIREMENTS, type ResultRequirement } from "@/lib/correspondence-workflow";
+import { listLetterActions } from "@/lib/correspondence-data";
 import { dispositionAccess } from "@/lib/disposition-access";
 import { letterAccess } from "@/lib/letter-access";
 import { ROLE_LABELS, type Role } from "@/lib/types";
@@ -95,8 +96,10 @@ export async function GET(request: Request, { params }: { params: { id: string }
          FROM siap_attachments a JOIN siap_users u ON u.id=a.uploaded_by
          WHERE a.disposition_id IN (?) ORDER BY a.created_at,a.id`, [ids],
       );
+      const sourceActions = await listLetterActions(conn, user, letter.id);
       const sourceFiles = await listLetterAttachments(conn, user, letter.id);
       const actionRows = new Map(actions.map((action, index) => [action.id, index + 1]));
+      const sourceActionRows = new Map(sourceActions.map((action, index) => [action.id, index + 1]));
 
       const workbook = XLSX.utils.book_new();
       addSheet(workbook, "Ringkasan", [
@@ -131,10 +134,19 @@ export async function GET(request: Request, { params }: { params: { id: string }
           action.from_status || "", action.to_status || "", action.note || "", action.result_number || "",
         ]),
       ], [7, 11, 26, 27, 28, 24, 20, 20, 72, 26], true);
+      addSheet(workbook, "Riwayat Dokumen Asal", [
+        ["No.", "Waktu (WIB)", "Aksi", "Pelaku", "Peran", "Dari status", "Ke status", "Catatan"],
+        ...sourceActions.map((action, index) => [
+          index + 1, formatWorkflowTime(action.created_at), letterActionLabel(action.action, action.to_status),
+          action.actor_name, ROLE_LABELS[action.actor_role] || action.actor_role,
+          action.from_status || "", action.to_status || "", action.comment || "",
+        ]),
+      ], [7, 26, 28, 28, 24, 24, 24, 72], true);
       addSheet(workbook, "Lampiran", [
         ["Bagian", "No. log", "Nama file", "Diunggah oleh", "Waktu (WIB)"],
         ...sourceFiles.map(file => [
-          "Surat asal", "", file.original_name, file.uploaded_by_name, formatWorkflowTime(file.created_at),
+          "Surat asal", sourceActionRows.get(file.letter_action_id) || "",
+          file.original_name, file.uploaded_by_name, formatWorkflowTime(file.created_at),
         ]),
         ...files.map(file => [
           taskNumbers.get(file.disposition_id)!, actionRows.get(file.disposition_action_id) || "",
@@ -144,7 +156,8 @@ export async function GET(request: Request, { params }: { params: { id: string }
 
       const data: Buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx", compression: true });
       await auditLog({ user, action: "DISPOSITION_EXPORT", entityType: "DISPOSITION", entityId: root.id,
-        metadata: { tasks: tasks.length, events: actions.length, confidentiality: letter.confidentiality }, request }, conn);
+        metadata: { tasks: tasks.length, events: actions.length, sourceEvents: sourceActions.length,
+          confidentiality: letter.confidentiality }, request }, conn);
       return { data, name: safeFilename(`riwayat-disposisi-${letter.confidentiality}-${root.id.slice(0, 8)}.xlsx`) };
     });
 

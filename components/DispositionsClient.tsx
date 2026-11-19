@@ -5,13 +5,14 @@ import type { SessionUser } from "@/lib/types";
 import ConfidentialityBadge from "@/components/ConfidentialityBadge";
 import DispositionLetterPicker, { type DispositionLetterOption } from "@/components/DispositionLetterPicker";
 import AttachmentActions from "@/components/AttachmentActions";
+import LetterHistory from "@/components/LetterHistory";
 import PaymentDocumentsPanel from "@/components/PaymentDocumentsPanel";
 import SearchableSelect from "@/components/SearchableSelect";
 import { dispositionDeadline, formatWorkflowTime } from "@/lib/workflow-time";
 import AttachmentSandbox from "@/components/AttachmentSandbox";
 import Modal from "@/components/Modal";
 import StatusBadge from "@/components/StatusBadge";
-import { dispositionActionLabel, RESULT_REQUIREMENTS, type ResultRequirement } from "@/lib/correspondence-workflow";
+import { dispositionActionLabel, letterDirectionLabel, RESULT_REQUIREMENTS, type ResultRequirement } from "@/lib/correspondence-workflow";
 import { INVOICE_INCOMING, formatInvoiceAmount, type DocumentReference } from "@/lib/business-documents";
 import { dispositionTargetRoles, jakartaDate, staffCanVerify, staffUnit, TASK_PURPOSES, TERMINAL_TASK_STATES,
   unitManagerScope, type RequestingUnit, type TaskPurpose } from "@/lib/v11-workflow";
@@ -57,7 +58,7 @@ type DispositionLetter = {
 };
 
 function letterOption(letter: DispositionLetter): DispositionLetterOption {
-  const type = letter.direction === "INCOMING" ? "Surat Masuk" : letter.direction === "INTERNAL" ? "Nota Dinas" : "Surat Keluar";
+  const type = letterDirectionLabel(letter.direction);
   const number = letter.display_number || letter.letter_number || letter.external_number;
   return { id: letter.id, subject: letter.subject, reference: number ? `${type} · ${number}` : type };
 }
@@ -950,14 +951,11 @@ export default function DispositionsClient({user}:{user:SessionUser}){
 
           <div>
             <div className="disposition-history-heading">
-              <h3 style={{fontSize:13}}>Riwayat Proses</h3>
+              <h3 style={{fontSize:13}}>Riwayat Disposisi</h3>
               <a className="btn btn-secondary" href={`/api/dispositions/${detail.disposition.id}/export`} download>
                 Unduh Riwayat (.xlsx)
               </a>
             </div>
-            <p className="muted" style={{fontSize:11}}>
-              Seluruh Seen, Mulai, Kirim Hasil, Review, Return, catatan, dan lampiran proses tercatat.
-            </p>
 
             <div className="timeline">
               {detail.actions?.map((a:any,i:number)=>{
@@ -998,6 +996,12 @@ export default function DispositionsClient({user}:{user:SessionUser}){
                 </div>
               })}
             </div>
+            <details className="disposition-source-history" key={detail.disposition.id}>
+              <summary>Riwayat {letterDirectionLabel(detail.disposition.direction)} Asal</summary>
+              <div className="disposition-source-history-content">
+                <LetterHistory actions={detail.sourceActions??[]} attachments={sourceAttachments}/>
+              </div>
+            </details>
           </div>
         </div>
       </Modal>
