@@ -40,10 +40,12 @@ export default function WorkflowNotifications() {
     void refresh();
     const timer = window.setInterval(() => { if (!document.hidden) void refresh(); }, 15_000);
     window.addEventListener("focus", refresh);
+    window.addEventListener("siap-notification-change", refresh);
     return () => {
       controller.abort();
       window.clearInterval(timer);
       window.removeEventListener("focus", refresh);
+      window.removeEventListener("siap-notification-change", refresh);
     };
   }, [open, marking]);
 

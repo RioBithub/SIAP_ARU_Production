@@ -63,6 +63,9 @@ const letterActions: Record<string, string> = {
   CANCEL: "Dibatalkan",
   COMPLETE: "Diselesaikan",
   RESPONSE: "Tanggapan",
+  GENERATE_NOTA_PDF: "PDF Nota Dinas dibuat",
+  DECLARE_NOTA_SIGNED: "Tanda tangan dicatat oleh pengirim",
+  RESET_NOTA_SIGNATURE: "Nota Dinas ditandai belum ditandatangani",
   UPDATE_INVOICE_PAYMENT_MODE: "Jenis pembayaran invoice diperbarui",
   REVIEW_INVOICE_PAYMENT_MODE: "Jenis pembayaran invoice disetujui ulang",
   IMPORT_LEGACY_EXCEL: "Diimpor dari Excel Lama",
@@ -95,6 +98,7 @@ const dispositionActions: Record<string, string> = {
   RETURN_RESULT: "Hasil dikembalikan",
   RETURN_TASK: "Disposisi dikembalikan",
   REASSIGN_TASK: "Disposisi ditugaskan ulang",
+  ROUTE_REVIEW_DIROPS: "Hasil diarahkan ke review Dirops",
   CANCEL_TASK: "Disposisi dibatalkan",
 };
 

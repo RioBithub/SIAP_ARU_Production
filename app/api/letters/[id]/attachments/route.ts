@@ -5,7 +5,8 @@ import { withTransaction } from "@/lib/db";
 import { saveUpload } from "@/lib/upload";
 import { auditLog } from "@/lib/audit";
 import { INVOICE_INCOMING } from "@/lib/business-documents";
-import { v11Letter } from "@/lib/v11-data";
+import { saveProof, v11Letter } from "@/lib/v11-data";
+import { saveNotaSource } from "@/lib/nota-document";
 import { canHandleSecretariat } from "@/lib/correspondence-workflow";
 import { discardUncommittedFiles, insertLetterAttachment, type StoredLetterFile } from "@/lib/letter-uploads";
 
@@ -56,9 +57,11 @@ export async function POST(request:Request,{params}:{params:{id:string}}){
         }
         if (!allowed) throw new Error("Anda tidak memiliki akses menambah lampiran pada surat ini.");
       }
-      const saved = await saveUpload(file, kind);
+      const nota = Boolean(workflow && kind === "ORIGINAL" && letter.direction === "INTERNAL");
+      const saved = nota ? await saveProof(file, true, "ORIGINAL") : await saveUpload(file, kind);
       staged = saved;
       const id = await insertLetterAttachment(conn, params.id, user.id, saved, kind);
+      if (nota) await saveNotaSource(conn, params.id, id, "UPLOAD");
       await conn.execute(
         "UPDATE siap_letters SET active_original_attachment_id=IF(?, ?, active_original_attachment_id), updated_by=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
         [Number(kind === "ORIGINAL"), id, user.id, params.id],

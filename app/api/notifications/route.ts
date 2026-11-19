@@ -30,7 +30,7 @@ export async function GET() {
     `SELECT CAST(n.id AS CHAR) AS id,n.entity_type,n.entity_id,n.title,n.created_at,n.read_at,
       COALESCE(l.subject,source.subject) AS subject,l.direction,
       COALESCE(l.letter_number,l.external_number,source.letter_number,source.external_number) AS document_number,
-      au.name AS actor_name,d.priority,d.due_date,d.due_time,
+      au.name AS actor_name,au_event.action AS audit_action,d.priority,d.due_date,d.due_time,
       NULLIF(JSON_UNQUOTE(JSON_EXTRACT(au_event.metadata_json,'$.to')),'null') AS event_status,
       LEFT(COALESCE(
         NULLIF(JSON_UNQUOTE(JSON_EXTRACT(au_event.metadata_json,'$.comment')),'null'),
@@ -48,10 +48,11 @@ export async function GET() {
   );
   return NextResponse.json({ ok: true, data: {
     enabled: true, unread: Number(count.unread),
-    items: items.map(({ entity_type, entity_id, direction, ...item }) => ({
+    items: items.map(({ entity_type, entity_id, direction, audit_action, ...item }) => ({
       ...item, entity_type,
       href: entity_type === "DISPOSITION" ? "/dispositions?disposition_id=" + entity_id
-        : "/letters/" + ({ INCOMING: "incoming", INTERNAL: "internal", OUTGOING: "outgoing" } as Record<string, string>)[direction] + "?letter_id=" + entity_id,
+        : "/letters/" + ({ INCOMING: "incoming", INTERNAL: "internal", OUTGOING: "outgoing" } as Record<string, string>)[direction] +
+          "?letter_id=" + entity_id + (audit_action === "LETTER_RESPONSE" ? "&tanggapan=1" : ""),
     })),
   } }, { headers: { "Cache-Control": "private, no-store" } });
 }

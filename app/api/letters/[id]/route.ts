@@ -16,6 +16,7 @@ import { checkedDate, invoiceKey, invoiceVerified, officialManager, persekotChec
   requestingUnit, saveProof, takeFile, v11Letter } from "@/lib/v11-data";
 import { invoiceVerificationStatus, jakartaDate } from "@/lib/v11-workflow";
 import { invoicePaymentSummary } from "@/lib/v11-finance";
+import { canEditNotaDocument, notaDocument, saveNotaSource } from "@/lib/nota-document";
 import { discardUncommittedFiles, insertLetterAttachment, listLetterAttachments, markPaymentAttachment, type StoredLetterFile } from "@/lib/letter-uploads";
 
 export const runtime = "nodejs";
@@ -86,7 +87,9 @@ export async function GET(_:Request,{params}:{params:{id:string}}) {
         ? await invoicePaymentSummary(safe.payable_id, business.invoice.total) : null,
     };
   }
+  const nota = workflow && letter.direction === "INTERNAL" ? await notaDocument(db, params.id) : null;
   return NextResponse.json({ok:true,data:{letter,actions,attachments,business,v11,originalId,approvalId:approval?.id,
+    notaDocument: nota && { ...nota, editable: canEditNotaDocument(user, letter), sandbox: sandboxAttachmentsEnabled() },
     sandboxSigning: sandboxAttachmentsEnabled() && canHandleSecretariat(user.role),
     sourceLetter, sourceDisposition, hasSourceDisposition: Boolean(sourceDispositionId), hasSourceLetter: Boolean(sourceLetterId)}});
 }
@@ -135,6 +138,7 @@ export async function PATCH(request: Request, { params }: { params: { id: string
       const sender = str(body.sender, 255) || letter.sender;
       const subject = str(body.subject, 500) || letter.subject;
       const summary = body.summary === undefined ? letter.summary : str(body.summary, 5000) || null;
+      const recipient = str(body.recipient, 255) || letter.recipient;
       const unit = v11?.requesting_unit && body.requesting_unit !== undefined ? requestingUnit(body.requesting_unit) : v11?.requesting_unit;
       let managerId = letter.routing_target_user_id;
       if (v11?.requesting_unit && body.routing_target_user_id !== undefined) {
@@ -163,6 +167,10 @@ export async function PATCH(request: Request, { params }: { params: { id: string
       await saveBusinessDocument(conn, user, {
         id: params.id, document_type: letter.document_type, direction: letter.direction,
       }, body.business, false);
+      if (v11 && letter.direction === "INTERNAL" && (subject !== letter.subject || summary !== letter.summary ||
+          sender !== letter.sender || recipient !== letter.recipient || (conf && conf !== letter.confidentiality))) {
+        await saveNotaSource(conn, params.id, null, "GENERATED");
+      }
       let revision = v11?.invoice_revision;
       if (v11?.requesting_unit) {
         const receipt = receiptFields({ ...v11, ...body }, false);

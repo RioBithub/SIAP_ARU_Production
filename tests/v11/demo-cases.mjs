@@ -169,11 +169,15 @@ try {
   await taskAction("staff",survey.id,"START");
   await taskAction("staff",survey.id,"SUBMIT_RESULT",{note:"Survei proyek PT XYZ selesai."},true);
   await taskAction("ops",survey.id,"APPROVE_RESULT");
-  await taskAction("ops",project.task,"SUBMIT_RESULT",{note:"Hasil survei Staff disetujui dan diajukan ke Direksi."});
+  const projectReview=await taskAction("ops",project.task,"SUBMIT_RESULT",{note:"Hasil survei Staff disetujui dan diajukan ke Dirops."});
+  assert.equal(projectReview.status,"REVIEW_DIROPS");
+  assert.equal((await taskAction("dirops",project.task,"APPROVE_RESULT")).status,"REVIEW_DIRUT");
   await taskAction("dirut",project.task,"APPROVE_RESULT");
   await action("dirut",project.id,"APPROVE");
   assert.equal((await letter("dirut",project.id)).letter.status,"APPROVED");
-  console.log("DEMO-3 PASS Direksi-Manager-Staff dan laporan naik, notifikasi otomatis di browser.");
+  const projectPdf=await call("dirut","/api/dispositions/"+project.task+"/pdf",undefined,{raw:true});
+  assert.equal(projectPdf.subarray(0,5).toString(),"%PDF-");
+  console.log("DEMO-3 PASS laporan naik Staff, Manager, Dirops, Dirut. Notifikasi browser dan PDF selesai tersedia.");
 
   for(const role of ["staff","ops","dirops","dirut"]) await action(role,outgoing.id,role==="staff"?"SUBMIT":"APPROVE");
   assert((await call("secretariat","/api/notifications")).items.some(item=>item.href.includes(outgoing.id)));
@@ -195,6 +199,7 @@ try {
   await taskAction("staff",outgoing.task,"SUBMIT_RESULT",{note:"Surat balasan telah terbit.",result_letter_id:outgoing.id});
   await taskAction("ops",outgoing.task,"APPROVE_RESULT");
   await taskAction("ops",offer.task,"SUBMIT_RESULT",{note:"Tanggapan PT ABC selesai.",result_letter_id:outgoing.id});
+  await taskAction("dirops",offer.task,"APPROVE_RESULT");
   await taskAction("dirut",offer.task,"APPROVE_RESULT");
   await action("dirut",offer.id,"APPROVE");
   const history=await call("dirut","/api/dispositions/"+offer.task);

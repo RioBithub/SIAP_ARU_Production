@@ -15,6 +15,7 @@ import { activeReviewer, hasActiveSecretariat, outgoingSources } from "@/lib/cor
 import { REVIEW_ROLES, REVIEW_STATUS, canHandleSecretariat } from "@/lib/correspondence-workflow";
 import { discardUncommittedFiles, insertLetterAttachment, type StoredLetterFile } from "@/lib/letter-uploads";
 import { saveUpload } from "@/lib/upload";
+import { generatedNotaFile, saveNotaSource } from "@/lib/nota-document";
 import { checkedDate, invoiceKey, officialManager, persekotChecklist, receiptFields,
   requestingUnit, saveProof, takeFile, v11Enabled } from "@/lib/v11-data";
 import { jakartaDate } from "@/lib/v11-workflow";
@@ -244,7 +245,14 @@ export async function POST(request: Request) {
       throw new Error("Nomor dasar custom harus angka bulat minimal 1.");
     }
 
-    const original = file ? await saveUpload(file, "ORIGINAL") : null;
+    const nota = v11 && direction === "INTERNAL";
+    const generateNota = nota && body.nota_document_source === "GENERATED";
+    if (generateNota && file) throw new Error("Pilih buat PDF dari SIAP atau unggah satu PDF sendiri.");
+    if (nota && body.nota_document_source === "UPLOAD" && !file) throw new Error("Unggah PDF Nota Dinas.");
+    const original = generateNota ? await generatedNotaFile({
+      id, date: letterDate, author: user.name, unit: user.unit_name, recipient, subject,
+      summary: required(summary, "Isi Nota Dinas", 5000), confidentiality,
+    }) : file ? await (nota ? saveProof(file, true, "ORIGINAL") : saveUpload(file, "ORIGINAL")) : null;
     if (original) stored.push(original);
     const data = await withTransaction(async conn => {
       const { sourceLetterId, sourceDispositionId } = direction === "OUTGOING"
@@ -279,6 +287,7 @@ export async function POST(request: Request) {
       if (original) {
         const originalId = await insertLetterAttachment(conn, id, user.id, original, "ORIGINAL");
         await conn.execute("UPDATE siap_letters SET active_original_attachment_id=? WHERE id=?", [originalId, id]);
+        if (nota) await saveNotaSource(conn, id, originalId, generateNota ? "GENERATED" : "UPLOAD");
       }
 
       if (v11) {

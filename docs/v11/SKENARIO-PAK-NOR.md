@@ -45,7 +45,7 @@ Dokumen asal bernomor **012/ABC/XI/2026**. Registrasi Sekretariat dan review men
 3. Lanjutkan kasus 4 untuk menyelesaikan surat tanggapan.
 4. Setelah surat terbit, Staff membuka tugasnya dan mengirim hasil dengan memilih surat balasan yang terkait.
 5. Manager memeriksa dan menyetujui hasil Staff. Manager kemudian mengirim hasil pada tugas dari Direksi dengan memilih surat balasan tersebut.
-6. Direksi menerima notifikasi hasil, memeriksa surat tanggapan, dan menyetujui hasil disposisi. Selesaikan review dokumen asal melalui aksi persetujuan yang tersedia.
+6. Pada data awal demo, Dirut yang menugaskan Manager. Dirops menerima dan memeriksa hasil Manager, lalu meneruskannya ke Dirut untuk konfirmasi akhir. Selesaikan review dokumen asal melalui aksi persetujuan yang tersedia.
 
 Tampilkan posisi surat, pemilik tugas, tenggat, lampiran dan histori persetujuan. Nomor surat tanggapan terhubung ke tugas asal.
 
@@ -71,7 +71,7 @@ Surat **Permintaan Kerjasama Proyek Pengadaan** sudah memiliki tugas dari Direks
 2. Staff menerima notifikasi, memulai tugas, menulis ringkasan survei dan mengunggah PDF laporan.
 3. Staff mengirim hasil. Manager menerima notifikasi, memeriksa laporan dan menyetujuinya. Gunakan pengembalian hasil dengan catatan bila ingin menunjukkan revisi.
 4. Manager mengirim ringkasan hasil pada tugas induk setelah tugas Staff selesai.
-5. Direksi menerima notifikasi dan menyetujui hasil Manager. Selesaikan review surat asal melalui aksi persetujuan yang tersedia.
+5. Dirops menerima hasil Manager dan memilih **Setujui & Teruskan ke Dirut**. Dirut memilih **Konfirmasi & Selesaikan**, mengunduh **Lembar Disposisi (PDF)**, lalu menyelesaikan review surat asal.
 
 Perlihatkan hubungan tugas induk-anak, pemilik pekerjaan pada setiap tahap dan histori laporan yang kembali naik.
 

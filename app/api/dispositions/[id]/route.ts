@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { listDispositionEvents, listDispositionHistoryFiles, listHistoryTasks, previousDispositionTasks } from "@/lib/disposition-history";
+import { listDispositionEvents, listDispositionHistoryFiles, listHistoryTasks, missingDiropsReview, previousDispositionTasks } from "@/lib/disposition-history";
 import { dispositionAccess } from "@/lib/disposition-access";
 import { v11Letter } from "@/lib/v11-data";
 import { canEditPaymentDocuments, invoicePaymentAccess, paymentDocuments } from "@/lib/v11-payment-documents";
@@ -29,7 +29,8 @@ export async function GET(_:Request,{params}:{params:{id:string}}){
       v.purpose,v.invoice_revision AS task_revision,
       fu.name AS from_name,fu.role AS from_role,
       tu.name AS to_name,tu.role AS to_role,
-      cu.name AS current_owner_name,cu.role AS current_owner_role
+      cu.name AS current_owner_name,cu.role AS current_owner_role,
+      ${missingDiropsReview} AS needs_dirops_review
      FROM siap_dispositions d
      JOIN siap_letters l ON l.id=d.letter_id
      LEFT JOIN siap_v11_dispositions v ON v.disposition_id=d.id

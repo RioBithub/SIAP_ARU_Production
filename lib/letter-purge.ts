@@ -12,7 +12,8 @@ async function purgeBlocker(conn: PoolConnection, id: string) {
   const [[checks]] = await conn.query<RowDataPacket[]>(
     `SELECT
       (EXISTS(SELECT 1 FROM siap_v11_letters WHERE letter_id=? AND payable_id IS NOT NULL)
-       OR EXISTS(SELECT 1 FROM siap_v11_payments WHERE letter_id=?)) AS finance,
+       OR EXISTS(SELECT 1 FROM siap_v11_payments WHERE letter_id=?)
+       OR EXISTS(SELECT 1 FROM siap_v11_bpk WHERE letter_id=?)) AS finance,
       (EXISTS(SELECT 1 FROM siap_business_documents WHERE invoice_spk_id=? AND letter_id<>?)
        OR EXISTS(SELECT 1 FROM siap_spk_letter_links WHERE supporting_letter_id=? AND spk_letter_id<>?)) AS business,
       (EXISTS(SELECT 1 FROM siap_v11_signing WHERE letter_id=? AND status IN ('REQUESTING','IN_PROGRESS','RECONCILE'))
@@ -25,9 +26,9 @@ async function purgeBlocker(conn: PoolConnection, id: string) {
         LEFT JOIN siap_disposition_actions x ON x.disposition_id=d.id AND v.disposition_id IS NULL
         WHERE d.letter_id<>? AND d.status NOT IN ('COMPLETED','RETURNED','CANCELLED')
           AND (v.result_letter_id=? OR x.result_letter_id=?)) AS result`,
-    [id, id, id, id, id, id, id, id, id, id, id, id],
+    [id, id, id, id, id, id, id, id, id, id, id, id, id],
   );
-  if (checks.finance) return "Surat terhubung ke utang atau catatan pembayaran Finance.";
+  if (checks.finance) return "Surat terhubung ke BPK, utang, atau catatan pembayaran Finance.";
   if (checks.business) return "Surat masih dipakai sebagai rujukan SPK atau dokumen pendukung surat lain.";
   if (checks.signing) return "Permintaan tanda tangan masih aktif. Pulihkan surat untuk memeriksa statusnya.";
   if (checks.result) return "Surat masih menjadi hasil disposisi lain yang sedang berjalan.";

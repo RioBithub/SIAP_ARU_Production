@@ -13,6 +13,7 @@ import {
   sendSandboxSignature, type SandboxProgress,
 } from "@/lib/mekari-sign";
 import { latestMekariSendFailure, type MekariSendFailureNotice } from "@/lib/mekari-signing-audit";
+import { canEditNotaDocument, notaDocument } from "@/lib/nota-document";
 import type { SessionUser } from "@/lib/types";
 import { readStoredFile } from "@/lib/upload";
 import { saveProof } from "@/lib/v11-data";
@@ -24,10 +25,12 @@ const error = (status: number, message: string, reference?: string) =>
 
 async function sourceFor(user: SessionUser, id: string, conn: Pick<PoolConnection, "query"> = db) {
   const [rows] = await conn.query<RowDataPacket[]>(
-    `SELECT a.id,a.letter_id,a.disposition_id,a.original_name,a.storage_path,a.is_compressed,
+    `SELECT a.id,a.letter_id,a.disposition_id,a.original_name,a.storage_path,a.is_compressed,a.attachment_kind,l.direction,
+            v.letter_id AS workflow_id,
             d.from_user_id,d.to_user_id,d.current_owner_user_id
      FROM siap_attachments a
      JOIN siap_letters l ON l.id=a.letter_id AND l.deleted_at IS NULL
+     LEFT JOIN siap_v11_letters v ON v.letter_id=l.id
      LEFT JOIN siap_dispositions d ON d.id=a.disposition_id
      LEFT JOIN siap_disposition_actions da ON da.id=a.disposition_action_id AND da.disposition_id=d.id
      WHERE a.id=? AND a.letter_id IS NOT NULL AND a.original_size BETWEEN 8 AND 10485760
@@ -43,6 +46,12 @@ async function sourceFor(user: SessionUser, id: string, conn: Pick<PoolConnectio
   if (source.disposition_id) {
     return user.role === "ROOT_ADMIN" || [source.from_user_id, source.to_user_id, source.current_owner_user_id].includes(user.id)
       ? source : null;
+  }
+  if (source.direction === "INTERNAL" && source.workflow_id && source.attachment_kind === "ORIGINAL") {
+    const letter = await getAccessibleLetter(user, source.letter_id, conn);
+    if (!letter || !canEditNotaDocument(user, letter)) return null;
+    const nota = await notaDocument(conn, source.letter_id);
+    return nota?.source?.id === id ? source : null;
   }
   return canHandleSecretariat(user.role) && await getAccessibleLetter(user, source.letter_id, conn) ? source : null;
 }

@@ -88,7 +88,7 @@ function reviewButtonLabel(d:any){
       ? "Setujui & Teruskan ke Dirut"
       : "Setujui & Selesaikan";
   }
-  if(d.status==="REVIEW_DIRUT") return "Konfirmasi & Selesaikan";
+  if(d.status==="REVIEW_DIRUT") return d.needs_dirops_review ? "Teruskan Hasil ke Dirops" : "Konfirmasi & Selesaikan";
   return "Setujui Hasil";
 }
 
@@ -892,6 +892,8 @@ export default function DispositionsClient({user}:{user:SessionUser}){
 
             <div style={{display:"flex",gap:7,flexWrap:"wrap",marginTop:12}}>
               {actionButtons(detail.disposition)}
+              {detail.paymentDocuments?.kind==="INVOICE"&&<a className="btn btn-secondary"
+                href={`/bpk?invoice_id=${detail.disposition.letter_id}`}>BPK untuk Invoice</a>}
               {detail.disposition.status==="IN_PROGRESS"&&(detail.disposition.to_user_id===user.id||user.role==="ROOT_ADMIN")&&<>
                 {(!detail.disposition.purpose||detail.disposition.purpose==="GENERAL")&&
                   ["STAFF","FINANCE","ROOT_ADMIN"].includes(user.role)&&
@@ -1001,6 +1003,10 @@ export default function DispositionsClient({user}:{user:SessionUser}){
               <a className="btn btn-secondary" href={`/api/dispositions/${detail.disposition.id}/export`} download>
                 Unduh Riwayat (.xlsx)
               </a>
+              {detail.disposition.status==="COMPLETED"&&
+                <a className="btn btn-secondary" href={`/api/dispositions/${detail.disposition.id}/pdf`} download>
+                  Unduh Lembar Disposisi (PDF)
+                </a>}
             </div>
 
             <DispositionHistory actions={detail.actions??[]} attachments={detail.attachments??[]}/>

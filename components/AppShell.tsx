@@ -45,6 +45,7 @@ export default function AppShell({ user, rootName, targetId, children }: {
       {href:"/archive",label:"Arsip Dokumen",icon:"▰"},
     ]},
     {label:"Keuangan",items:[
+      {href:"/bpk",label:"Bukti Pengeluaran (BPK)",icon:"▤"},
       {href:"/finance",label:"Ringkasan & Dokumen",icon:"▥",roles:["ROOT_ADMIN","FINANCE","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR"]},
       {href:"/finance/receivables",label:"Piutang",icon:"⇢",roles:["ROOT_ADMIN","FINANCE","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR"]},
       {href:"/finance/payables",label:"Utang",icon:"⇠",roles:["ROOT_ADMIN","FINANCE","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR"]},
