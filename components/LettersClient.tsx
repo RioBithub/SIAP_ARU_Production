@@ -2,7 +2,7 @@
 
 import { FormEvent,useEffect,useMemo,useRef,useState } from "react";
 import type { Role, SessionUser } from "@/lib/types";
-import { PURGE_CONFIRMATION, REVIEW_ROLES, canHandleSecretariat, reviewRole } from "@/lib/correspondence-workflow";
+import { PURGE_CONFIRMATION, REVIEW_ROLES, canHandleSecretariat, formatLetterFileSize as size, letterDirectionLabel, reviewRole } from "@/lib/correspondence-workflow";
 import Modal from "@/components/Modal";
 import StatusBadge, { statusLabel } from "@/components/StatusBadge";
 import BusinessDocumentFields, { BusinessDocumentSummary, ReferencePicker } from "@/components/BusinessDocumentFields";
@@ -12,6 +12,7 @@ import { DELIVERY_METHODS, MANAGER_SCOPES, staffUnit, type ManagerScope } from "
 import PaymentDocumentsPanel from "@/components/PaymentDocumentsPanel";
 import ConfidentialityBadge from "@/components/ConfidentialityBadge";
 import AttachmentActions from "@/components/AttachmentActions";
+import LetterHistory from "@/components/LetterHistory";
 import SearchableSelect from "@/components/SearchableSelect";
 import { formatWorkflowTime } from "@/lib/workflow-time";
 import AttachmentSandbox from "@/components/AttachmentSandbox";
@@ -28,7 +29,6 @@ const isReviewer=(account:RoutingUser)=>REVIEW_ROLES.some(role=>role===account.r
 
 const today=()=>new Date().toISOString().slice(0,10);
 const fmtDate=(v:any)=>v?new Date(String(v).slice(0,10)+"T00:00:00").toLocaleDateString("id-ID",{day:"2-digit",month:"short",year:"numeric"}):"-";
-const size=(n:number)=>n<1024*1024?`${(n/1024).toFixed(0)} KB`:`${(n/1024/1024).toFixed(2)} MB`;
 const DOC_LABELS:Record<string,string>={
   PERJANJIAN_KERJA_SAMA:"Perjanjian Kerja Sama",
   SURAT_DIREKSI:"Surat Keluar Direksi",
@@ -90,16 +90,6 @@ const INCOMING_TYPE_OPTIONS=[
   [SPK_INCOMING,"Surat Perintah Kerja (SPK) Masuk"],
   [INVOICE_INCOMING,"Invoice Masuk"],
 ] as const;
-const humanAction=(a:string)=>({
-  RECEIVE_INCOMING:"Diserahkan ke Sekretariat",RETURN_PREVIOUS:"Kembali satu tingkat",
-  UNDO_APPROVAL:"Persetujuan dibatalkan",PREPARE_ISSUE:"Nomor difinalisasi",MARK_SENT:"Pengiriman dicatat",REJECT:"Ditolak",SUBMIT:"Diajukan",APPROVE:"Disetujui & Diteruskan",APPROVE_FINAL:"Disetujui / Selesai",RETURN:"Dikembalikan",ISSUE:"Diterbitkan",CANCEL:"Dibatalkan",COMPLETE:"Diselesaikan",RESPONSE:"Tanggapan",CREATE_OUTGOING:"Draft Dibuat",CREATE_INTERNAL:"Nota Dinas Dibuat",REGISTER_INCOMING:"Surat Diregistrasi",IMPORT_LEGACY_EXCEL:"Diimpor dari Excel Lama"}[a]||a.replace(/_/g," "));
-
-function titleFor(direction:Direction){
-  if(direction==="INCOMING") return "Surat Masuk";
-  if(direction==="OUTGOING") return "Surat Keluar";
-  return "Nota Dinas";
-}
-
 export default function LettersClient({direction,user}:Props){
   const [rows,setRows]=useState<any[]>([]);
   const [formats,setFormats]=useState<any[]>([]);
@@ -606,7 +596,6 @@ export default function LettersClient({direction,user}:Props){
   const receiptFile=detail?.attachments?.find((file:any)=>file.id===detail.v11?.receipt_attachment_id);
   const signingFiles=generalAttachments.filter((file:any)=>file.attachment_kind==="ADDITIONAL"||
     (file.attachment_kind==="ORIGINAL"&&file.id===detail?.originalId));
-  const processAttachmentsFor=(actionId:string)=>detail?.attachments?.filter((a:any)=>a.letter_action_id===actionId)||[];
 
   const pageDescription=direction==="INCOMING"
     ?"Registrasi surat eksternal yang diterima perusahaan, review, return, attachment, dan histori."
@@ -678,7 +667,7 @@ export default function LettersClient({direction,user}:Props){
     :trashTarget?.operation==="restore"?"Pulihkan Surat":"Pindah ke Sampah";
 
   return <main className="page">
-    <div className="page-head"><div><h2>{titleFor(direction)}</h2><p>{pageDescription}</p></div><div style={{display:"flex",gap:8,flexWrap:"wrap",justifyContent:"flex-end"}}>{direction==="OUTGOING"&&<a className="btn btn-secondary" href="/api/letters/outgoing-excel">↓ Export Excel</a>}{direction==="OUTGOING"&&user.role==="ROOT_ADMIN"&&<button className="btn btn-secondary" onClick={()=>{setImportOpen(true);setImportResult(null);setImportFile(null)}}>↑ Import Excel Lama</button>}{isRoot&&<button className="btn btn-secondary" aria-pressed={trash}
+    <div className="page-head"><div><h2>{letterDirectionLabel(direction)}</h2><p>{pageDescription}</p></div><div style={{display:"flex",gap:8,flexWrap:"wrap",justifyContent:"flex-end"}}>{direction==="OUTGOING"&&<a className="btn btn-secondary" href="/api/letters/outgoing-excel">↓ Export Excel</a>}{direction==="OUTGOING"&&user.role==="ROOT_ADMIN"&&<button className="btn btn-secondary" onClick={()=>{setImportOpen(true);setImportResult(null);setImportFile(null)}}>↑ Import Excel Lama</button>}{isRoot&&<button className="btn btn-secondary" aria-pressed={trash}
       onClick={()=>{setTrash(!trash);resetFilters(!trash);}}>{trash?"Kembali ke Daftar Surat":"Sampah"}</button>}{!trash&&canCreate&&<button className="btn btn-primary" onClick={openCreate}>+ {createLabel}</button>}</div></div>
 
     {direction==="OUTGOING"&&<div className="notice" style={{marginBottom:13}}>
@@ -937,10 +926,7 @@ export default function LettersClient({direction,user}:Props){
         <div>
           <h3 style={{fontSize:13}}>Riwayat Proses & Lampiran</h3>
           <p className="muted" style={{fontSize:11}}>Setiap submit, approval, return, penerbitan, atau pembatalan dapat membawa catatan dan maksimal 5 lampiran proses.</p>
-          <div className="timeline">{detail.actions?.map((a:any,i:number)=>{
-            const af=processAttachmentsFor(a.id);
-            return <div className="timeline-row" key={a.id}><div className="timeline-dot">{i+1}</div><div style={{width:"100%"}}><b>{humanAction(a.action)} • {a.actor_name}</b><p className="muted">{formatWorkflowTime(a.created_at)}</p><p>{a.from_status?`${a.from_status} → ${a.to_status}`:a.to_status}{a.comment?` • ${a.comment}`:""}</p>{af.length>0&&<div style={{display:"grid",gap:6,marginTop:7}}>{af.map((f:any)=><div key={f.id} style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",padding:"7px 9px",border:"1px solid var(--line)",borderRadius:9}}><span style={{fontSize:10.5}}><b>{f.original_name}</b><br/><span className="muted">{size(Number(f.original_size))}{f.is_compressed?" • compressed":""}</span></span><AttachmentActions id={f.id} name={f.original_name}/></div>)}</div>}</div></div>
-          })}</div>
+          <LetterHistory actions={detail.actions??[]} attachments={detail.attachments??[]}/>
         </div>
       </div>
     </Modal>}

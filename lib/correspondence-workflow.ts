@@ -33,6 +33,57 @@ export function resultRequirement(value: unknown): ResultRequirement {
 
 export const PURGE_CONFIRMATION = "HAPUS PERMANEN";
 
+export type LetterHistoryEntry = {
+  id: string;
+  action: string;
+  actor_name: string;
+  actor_role: Role;
+  created_at: string | Date;
+  from_status: string | null;
+  to_status: string | null;
+  comment: string | null;
+};
+
+const letterActions: Record<string, string> = {
+  RECEIVE_INCOMING: "Diserahkan ke Sekretariat",
+  REGISTER_INCOMING: "Surat Diregistrasi",
+  CREATE_OUTGOING: "Draft Dibuat",
+  CREATE_INTERNAL: "Nota Dinas Dibuat",
+  SUBMIT: "Diajukan",
+  APPROVE: "Disetujui & Diteruskan",
+  APPROVE_FINAL: "Disetujui / Selesai",
+  UNDO_APPROVAL: "Persetujuan dibatalkan",
+  RETURN: "Dikembalikan",
+  RETURN_PREVIOUS: "Kembali satu tingkat",
+  REJECT: "Ditolak",
+  PREPARE_ISSUE: "Nomor difinalisasi",
+  MEKARI_PDF_READY: "PDF tanda tangan tersedia",
+  ISSUE: "Diterbitkan",
+  MARK_SENT: "Pengiriman dicatat",
+  CANCEL: "Dibatalkan",
+  COMPLETE: "Diselesaikan",
+  RESPONSE: "Tanggapan",
+  IMPORT_LEGACY_EXCEL: "Diimpor dari Excel Lama",
+};
+
+export function letterActionLabel(action: string, resultingStatus?: string | null) {
+  if (action === "APPROVE" && resultingStatus === "APPROVED") return "Disetujui";
+  return letterActions[action] || action.replace(/_/g, " ");
+}
+
+export function letterDirectionLabel(direction: string) {
+  if (direction === "INCOMING") return "Surat Masuk";
+  if (direction === "OUTGOING") return "Surat Keluar";
+  if (direction === "INTERNAL") return "Nota Dinas";
+  return "Dokumen";
+}
+
+export function formatLetterFileSize(bytes: number) {
+  return bytes < 1024 * 1024
+    ? (bytes / 1024).toFixed(0) + " KB"
+    : (bytes / (1024 * 1024)).toFixed(2) + " MB";
+}
+
 const dispositionActions: Record<string, string> = {
   CREATE: "Disposisi dibuat",
   SEEN: "Dilihat",

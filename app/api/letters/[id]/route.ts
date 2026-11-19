@@ -11,7 +11,7 @@ import { INVOICE_INCOMING, isBusinessDocument, isInvoice } from "@/lib/business-
 import { letterAccess } from "@/lib/letter-access";
 import { reversibleApproval } from "@/lib/letter-approval";
 import { canHandleSecretariat } from "@/lib/correspondence-workflow";
-import { outgoingSources } from "@/lib/correspondence-data";
+import { listLetterActions, outgoingSources } from "@/lib/correspondence-data";
 import { checkedDate, invoiceKey, invoiceVerified, officialManager, persekotChecklist, receiptFields,
   requestingUnit, saveProof, takeFile, v11Letter } from "@/lib/v11-data";
 import { invoiceVerificationStatus, jakartaDate } from "@/lib/v11-workflow";
@@ -46,10 +46,10 @@ export async function GET(_:Request,{params}:{params:{id:string}}) {
       ? NextResponse.json({ ok: false, error: "Surat tidak ditemukan." }, { status: 404 })
       : NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
   }
-  const [actions]=await db.query<RowDataPacket[]>(
-    `SELECT a.*,u.name actor_name FROM siap_letter_actions a JOIN siap_users u ON u.id=a.actor_user_id
-     WHERE a.letter_id=? ORDER BY a.created_at ASC`,[params.id]);
-  const attachments=await listLetterAttachments(db,user,params.id);
+  const [actions, attachments] = await Promise.all([
+    listLetterActions(db, user, params.id),
+    listLetterAttachments(db, user, params.id),
+  ]);
   const approval = await reversibleApproval(db, user, letters[0]);
   const { source_letter_id: sourceLetterId, source_disposition_id: sourceDispositionId, approval_snapshot, ...letter } = letters[0];
   const originalId = letter.active_original_attachment_id ??
