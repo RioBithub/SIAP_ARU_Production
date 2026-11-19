@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { auditLog } from "@/lib/audit";
 import { getCurrentUser } from "@/lib/auth";
@@ -7,8 +8,9 @@ import { discardUncommittedFiles, insertLetterAttachment, markPaymentAttachment,
   paymentAttachmentKind, type StoredLetterFile } from "@/lib/letter-uploads";
 import { readStoredFile } from "@/lib/upload";
 import { proofMimeType, saveProof, takeFile, v11Letter } from "@/lib/v11-data";
-import { canEditPaymentDocuments, paymentKind } from "@/lib/v11-payment-documents";
-import { PERSEKOT_DOCUMENTS } from "@/lib/v11-workflow";
+import { canEditPaymentDocuments, invoicePaymentAccess, invoicePaymentMode, invoicePaymentNeedsReview,
+  paymentInstructionExists, paymentKind } from "@/lib/v11-payment-documents";
+import { INVOICE_PAYMENT_MODES, PERSEKOT_DOCUMENTS, type InvoicePaymentMode } from "@/lib/v11-workflow";
 import type { RowDataPacket } from "mysql2/promise";
 
 export const runtime = "nodejs";
@@ -24,26 +26,74 @@ export async function POST(request: Request, { params }: { params: { id: string 
     const file = takeFile(form.get("file"));
     const attachmentId = String(form.get("attachment_id") || "").trim();
     const recipient = String(form.get("recipient_type") || "");
-    const changingRecipient = ["VENDOR", "NON_VENDOR"].includes(recipient) && !code && !file && !attachmentId;
-    const changingDocument = !recipient && Object.hasOwn(PERSEKOT_DOCUMENTS, code) && Boolean(file) !== Boolean(attachmentId);
-    if (!changingRecipient && !changingDocument) {
-      throw new Error("Pilih tujuan pembayaran atau pilih satu berkas untuk jenis dokumen persyaratan.");
+    const modeAction = String(form.get("invoice_payment_action") || "");
+    const changingMode = ["SAVE_MODE", "REVIEW_MODE"].includes(modeAction) && !recipient && !code && !file && !attachmentId;
+    const changingRecipient = !modeAction && ["VENDOR", "NON_VENDOR"].includes(recipient) && !code && !file && !attachmentId;
+    const changingDocument = !modeAction && !recipient && Object.hasOwn(PERSEKOT_DOCUMENTS, code) && Boolean(file) !== Boolean(attachmentId);
+    if (!changingMode && !changingRecipient && !changingDocument) {
+      throw new Error("Pilih jenis atau tujuan pembayaran, atau pilih satu berkas persyaratan.");
     }
 
     const result = await withTransaction(async conn => {
       const letter = await getAccessibleLetter(user, params.id, conn, true);
       const workflow = letter ? await v11Letter(params.id, conn) : null;
       const kind = paymentKind(workflow, letter?.document_type);
-      if (!letter || !workflow || !kind || !await canEditPaymentDocuments(conn, letter, user)) return null;
-      if (code === "SPB" && kind !== "PERSEKOT") throw new Error("SPB hanya dapat diunggah untuk pengajuan persekot.");
+      if (!letter || !workflow || !kind) return null;
+      const invoiceAccess = await invoicePaymentAccess(conn, letter, workflow, user);
+      const invoice = kind === "INVOICE" ? invoicePaymentMode(workflow) : null;
+
+      if (changingMode && invoice && invoiceAccess) {
+        if (invoiceAccess.locked) throw new Error("Jenis pembayaran dikunci karena instruksi Finance sudah dibuat.");
+        const reviewing = modeAction === "REVIEW_MODE";
+        if (reviewing ? !invoiceAccess.canReview : !invoiceAccess.editable) return null;
+        if (form.get("invoice_payment_revision") !== String(invoice.revision)) {
+          throw new Error("Jenis pembayaran atau SPB sudah berubah. Muat ulang detail sebelum melanjutkan.");
+        }
+        const requested = reviewing ? invoice.mode : String(form.get("invoice_payment_mode") || "");
+        if (!Object.hasOwn(INVOICE_PAYMENT_MODES, requested)) throw new Error("Pilih jenis pembayaran yang tersedia.");
+        const mode = requested as InvoicePaymentMode;
+        const reason = mode !== "PERSEKOT" ? null : reviewing ? invoice.reason : String(form.get("persekot_reason") || "").trim();
+        if (mode === "PERSEKOT" && (!reason || reason.length > 1000)) {
+          throw new Error("Isi alasan persekot, maksimal 1000 karakter.");
+        }
+
+        if (reviewing) {
+          if (!invoice.reviewRequired) return { mode };
+          if (mode === "PERSEKOT" && !workflow.spb_attachment_id) throw new Error("Unggah SPB sebelum menyetujui ulang persekot.");
+        } else if (invoice.mode === mode && invoice.reason === reason) {
+          return { mode };
+        }
+        const reviewRequired = !reviewing && await invoicePaymentNeedsReview(conn, letter, workflow);
+        await conn.execute(
+          `UPDATE siap_v11_letters SET invoice_persekot_reason=?,invoice_payment_review_required=?,
+             invoice_payment_mode_revision=invoice_payment_mode_revision+1 WHERE letter_id=?`,
+          [reason, Number(reviewRequired), params.id],
+        );
+        await conn.execute("UPDATE siap_letters SET updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", [user.id, params.id]);
+        const action = reviewing ? "REVIEW_INVOICE_PAYMENT_MODE" : "UPDATE_INVOICE_PAYMENT_MODE";
+        const label = INVOICE_PAYMENT_MODES[mode];
+        const comment = reviewing ? label : INVOICE_PAYMENT_MODES[invoice.mode] + " → " + label;
+        await conn.execute(
+          `INSERT INTO siap_letter_actions (id,letter_id,actor_user_id,action,from_status,to_status,comment)
+           VALUES (?,?,?,?,?,?,?)`,
+          [randomUUID(), params.id, user.id, action, letter.status, letter.status, reason ? comment + " · " + reason : comment],
+        );
+        await auditLog({ user, action, entityType: "LETTER", entityId: params.id,
+          metadata: { previousMode: invoice.mode, mode, reason, reviewRequired }, request }, conn);
+        return { mode };
+      }
+      if (changingMode) return null;
+      if (!invoiceAccess?.editable && !await canEditPaymentDocuments(conn, letter, user)) return null;
+      if (code === "SPB") {
+        if (kind !== "PERSEKOT" && invoice?.mode !== "PERSEKOT") {
+          throw new Error("SPB hanya dapat diunggah untuk pengajuan persekot.");
+        }
+        if (invoice && invoiceAccess?.locked) throw new Error("SPB dikunci karena instruksi Finance sudah dibuat.");
+        if (invoice && !invoiceAccess?.editable) return null;
+      }
 
       if (changingRecipient) {
-        const [active] = await conn.query<RowDataPacket[]>(
-          `SELECT 1 FROM siap_dispositions d JOIN siap_v11_dispositions v ON v.disposition_id=d.id
-           WHERE d.letter_id=? AND v.purpose IN ('REQUEST_PAYMENT','INVOICE_PAYMENT')
-             AND d.status NOT IN ('RETURNED','CANCELLED') LIMIT 1`, [params.id],
-        );
-        if (active.length) throw new Error("Tujuan pembayaran sudah ditetapkan pada instruksi Finance.");
+        if (await paymentInstructionExists(conn, params.id)) throw new Error("Tujuan pembayaran sudah ditetapkan pada instruksi Finance.");
         await conn.execute(
           `INSERT INTO siap_v11_payment_recipients (letter_id,recipient_type) VALUES (?,?)
            ON DUPLICATE KEY UPDATE recipient_type=VALUES(recipient_type)`, [params.id, recipient],
@@ -76,6 +126,14 @@ export async function POST(request: Request, { params }: { params: { id: string 
       if (code === "SPB") {
         await markPaymentAttachment(conn, params.id, workflow.spb_attachment_id);
         await conn.execute("UPDATE siap_v11_letters SET spb_attachment_id=? WHERE letter_id=?", [id, params.id]);
+        if (invoice) {
+          const reviewRequired = await invoicePaymentNeedsReview(conn, letter, workflow);
+          await conn.execute(
+            `UPDATE siap_v11_letters SET invoice_payment_review_required=?,
+               invoice_payment_mode_revision=invoice_payment_mode_revision+1 WHERE letter_id=?`,
+            [Number(reviewRequired), params.id],
+          );
+        }
       } else {
         await conn.execute(
           `INSERT INTO siap_v11_payment_documents (letter_id,document_code,attachment_id) VALUES (?,?,?)

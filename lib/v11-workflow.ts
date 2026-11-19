@@ -17,6 +17,8 @@ export const PERSEKOT_DOCUMENTS = {
 } as const;
 export type PaymentDocumentCode = keyof typeof PERSEKOT_DOCUMENTS;
 export type PaymentRecipient = "VENDOR" | "NON_VENDOR";
+export const INVOICE_PAYMENT_MODES = { REGULAR: "Pembayaran Biasa", PERSEKOT: "Persekot" } as const;
+export type InvoicePaymentMode = keyof typeof INVOICE_PAYMENT_MODES;
 
 export const TASK_PURPOSES = {
   GENERAL: "Tindak lanjut umum", INVOICE_VERIFY: "Verifikasi invoice oleh unit", INVOICE_PAYMENT: "Pembayaran dan pencatatan",

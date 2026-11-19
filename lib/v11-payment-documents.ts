@@ -1,7 +1,8 @@
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import type { SessionUser } from "@/lib/types";
 import { INVOICE_INCOMING, SPK_INCOMING, SPK_OUTGOING } from "@/lib/business-documents";
-import { PERSEKOT_DOCUMENTS, type PaymentDocumentCode, type PaymentRecipient } from "@/lib/v11-workflow";
+import { invoiceVerified } from "@/lib/v11-data";
+import { PERSEKOT_DOCUMENTS, type InvoicePaymentMode, type PaymentDocumentCode, type PaymentRecipient } from "@/lib/v11-workflow";
 
 type Queryable = Pick<PoolConnection, "query">;
 
@@ -12,10 +13,56 @@ export function paymentKind(workflow: RowDataPacket | null, documentType: unknow
   return null;
 }
 
+export function invoicePaymentMode(workflow: RowDataPacket) {
+  const reason = (workflow.invoice_persekot_reason as string | null) ?? null;
+  const mode: InvoicePaymentMode = reason ? "PERSEKOT" : "REGULAR";
+  return { mode, reason, revision: Number(workflow.invoice_payment_mode_revision ?? 0),
+    reviewRequired: Boolean(workflow.invoice_payment_review_required) };
+}
+
+export async function paymentInstructionExists(conn: Queryable, letterId: string) {
+  const [[task]] = await conn.query<RowDataPacket[]>(
+    `SELECT 1 FROM siap_dispositions d JOIN siap_v11_dispositions v ON v.disposition_id=d.id
+     WHERE d.letter_id=? AND v.purpose IN ('REQUEST_PAYMENT','INVOICE_PAYMENT')
+       AND d.status NOT IN ('RETURNED','CANCELLED') LIMIT 1`, [letterId],
+  );
+  return Boolean(task);
+}
+
+export async function invoicePaymentAccess(conn: Queryable, letter: RowDataPacket, workflow: RowDataPacket,
+  user: SessionUser) {
+  if (letter.document_type !== INVOICE_INCOMING) return null;
+  const locked = await paymentInstructionExists(conn, letter.id);
+  const denied = { locked, editable: false, canReview: false };
+  if (locked || ["CANCELLED", "REJECTED", "COMPLETED"].includes(letter.status)) return denied;
+
+  if (user.role === "MANAGER" && user.id === letter.routing_target_user_id) {
+    return { locked, editable: true, canReview: true };
+  }
+  if (user.role !== "STAFF") return denied;
+  if (user.id === letter.created_by) return { ...denied, editable: true };
+
+  const [[verification]] = await conn.query<RowDataPacket[]>(
+    `SELECT 1 FROM siap_dispositions d JOIN siap_v11_dispositions v ON v.disposition_id=d.id
+     WHERE d.letter_id=? AND d.to_user_id=? AND d.from_user_id=?
+       AND v.purpose='INVOICE_VERIFY' AND v.invoice_revision=?
+       AND d.status NOT IN ('CANCELLED','RETURNED') LIMIT 1`,
+    [letter.id, user.id, letter.routing_target_user_id, workflow.invoice_revision],
+  );
+  return { ...denied, editable: Boolean(verification) };
+}
+
+export async function invoicePaymentNeedsReview(conn: Queryable, letter: RowDataPacket, workflow: RowDataPacket) {
+  return Boolean(workflow.invoice_payment_review_required) || letter.status === "APPROVED" ||
+    await invoiceVerified(conn, letter.id, workflow.invoice_revision, letter.routing_target_user_id);
+}
+
 export async function paymentDocuments(conn: Queryable, letterId: string, workflow: RowDataPacket,
   documentType: unknown) {
   const kind = paymentKind(workflow, documentType);
   if (!kind) return null;
+  const invoice = kind === "INVOICE" ? invoicePaymentMode(workflow) : null;
+  const requiresSpb = kind === "PERSEKOT" || invoice?.mode === "PERSEKOT";
 
   const [rows] = await conn.query<RowDataPacket[]>(
     `SELECT d.document_code,a.id,a.original_name
@@ -39,13 +86,13 @@ export async function paymentDocuments(conn: Queryable, letterId: string, workfl
            AND (a.attachment_kind='ORIGINAL' OR signed.action='ISSUE')
        ) LIMIT 1`, [letterId, SPK_OUTGOING, SPK_INCOMING],
   ) : [[]];
-  const [spb] = kind === "PERSEKOT" && workflow.spb_attachment_id ? await conn.query<RowDataPacket[]>(
+  const [spb] = requiresSpb && workflow.spb_attachment_id ? await conn.query<RowDataPacket[]>(
     "SELECT id,original_name FROM siap_attachments WHERE id=? AND letter_id=? AND disposition_id IS NULL",
     [workflow.spb_attachment_id, letterId],
   ) : [[]];
 
   const documents = (Object.keys(PERSEKOT_DOCUMENTS) as PaymentDocumentCode[])
-    .filter(code => code !== "SPB" || kind === "PERSEKOT")
+    .filter(code => code !== "SPB" || requiresSpb)
     .map(code => {
       const row = code === "SPB" ? spb[0] : rows.find(item => item.document_code === code);
       const attachment = row ? { id: String(row.id), name: String(row.original_name) } : null;
@@ -57,7 +104,8 @@ export async function paymentDocuments(conn: Queryable, letterId: string, workfl
   const missing: string[] = documents.filter(doc => doc.required && !doc.attachment && !doc.linked)
     .map(doc => PERSEKOT_DOCUMENTS[doc.code]);
   if (!recipient) missing.unshift("Tujuan pembayaran (vendor atau nonvendor)");
-  return { kind, recipient, documents, missing };
+  if (invoice?.reviewRequired) missing.push("Persetujuan ulang jenis pembayaran oleh Manager");
+  return { kind, recipient, documents, missing, invoice };
 }
 
 export async function requirePaymentDocuments(conn: Queryable, letterId: string, workflow: RowDataPacket, documentType: unknown) {

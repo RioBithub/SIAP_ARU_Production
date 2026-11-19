@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import type { PaymentDocuments } from "@/lib/v11-payment-documents";
+import type { invoicePaymentAccess, PaymentDocuments } from "@/lib/v11-payment-documents";
 import AttachmentActions from "@/components/AttachmentActions";
-import { PERSEKOT_DOCUMENTS } from "@/lib/v11-workflow";
+import { INVOICE_PAYMENT_MODES, PERSEKOT_DOCUMENTS, type InvoicePaymentMode } from "@/lib/v11-workflow";
 
 type SourceAttachment = {
   id: string;
@@ -14,7 +14,7 @@ type SourceAttachment = {
 
 export default function PaymentDocumentsPanel({ id, data, attachments, onSaved }: {
   id: string;
-  data: PaymentDocuments & { editable: boolean };
+  data: PaymentDocuments & { editable: boolean; invoiceAccess: Awaited<ReturnType<typeof invoicePaymentAccess>> };
   attachments: SourceAttachment[];
   onSaved: () => Promise<void>;
 }) {
@@ -24,6 +24,11 @@ export default function PaymentDocumentsPanel({ id, data, attachments, onSaved }
   const [useExisting, setUseExisting] = useState(false);
   const [recipient, setRecipient] = useState(data.recipient ?? "");
   const [saved, setSaved] = useState(false);
+  const [modeDraft, setModeDraft] = useState<{ revision: number; mode: InvoicePaymentMode } | null>(null);
+  const { invoice, invoiceAccess } = data;
+  const selectedMode = modeDraft && modeDraft.revision === invoice?.revision ? modeDraft.mode : invoice?.mode;
+  const spbAttached = data.documents.some(doc => doc.code === "SPB" && doc.attachment);
+  const uploadChoices = data.documents.filter(doc => doc.code !== "SPB" || !invoice || invoiceAccess?.editable);
   const acceptedNames = code === "SPB" ? /\.pdf$/i : /\.(pdf|png|jpe?g)$/i;
   const available = attachments.filter(file =>
     file.source_kind === "ADDITIONAL" && !file.letter_action_id && acceptedNames.test(file.original_name));
@@ -65,6 +70,35 @@ export default function PaymentDocumentsPanel({ id, data, attachments, onSaved }
       <p className={data.missing.length ? "notice" : "success"}>
         {data.missing.length ? "Belum lengkap. Instruksi pembayaran belum bisa dibuat." : "Berkas persyaratan lengkap."}
       </p>
+      {invoice && invoiceAccess && <>
+        {invoiceAccess.editable ? <form key={invoice.revision} onSubmit={submit} className="form-grid workflow-form">
+          <input type="hidden" name="invoice_payment_action" value="SAVE_MODE"/>
+          <input type="hidden" name="invoice_payment_revision" value={invoice.revision}/>
+          <label className="field"><span>Jenis pembayaran</span>
+            <select className="select" name="invoice_payment_mode" value={selectedMode} required disabled={busy}
+              onChange={event => setModeDraft({ revision: invoice.revision, mode: event.target.value as InvoicePaymentMode })}>
+              {Object.entries(INVOICE_PAYMENT_MODES).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </label>
+          {selectedMode === "PERSEKOT" && <label className="field full"><span>Alasan persekot</span>
+            <textarea className="textarea" name="persekot_reason" defaultValue={invoice.reason ?? ""} required maxLength={1000} disabled={busy}/>
+            {invoice.mode !== "PERSEKOT" && <small className="hint">Simpan jenis pembayaran untuk menampilkan baris unggah SPB.</small>}
+          </label>}
+          <div className="field"><button className="btn btn-secondary" disabled={busy}>Simpan jenis pembayaran</button></div>
+        </form> : <div className="kpi-list">
+          <div className="kpi-row"><span>Jenis pembayaran</span><b>{INVOICE_PAYMENT_MODES[invoice.mode]}</b></div>
+          {invoice.reason && <div className="kpi-row"><span>Alasan persekot</span><b>{invoice.reason}</b></div>}
+          {invoiceAccess.locked && <small className="hint">Jenis pembayaran dikunci setelah instruksi Finance dibuat.</small>}
+        </div>}
+        {invoice.reviewRequired && <p className="notice">Manager penanggung jawab perlu menyetujui ulang jenis pembayaran sebelum instruksi Finance dibuat.</p>}
+        {invoice.reviewRequired && invoiceAccess.canReview && <form onSubmit={submit}>
+          <input type="hidden" name="invoice_payment_action" value="REVIEW_MODE"/>
+          <input type="hidden" name="invoice_payment_revision" value={invoice.revision}/>
+          <button className="btn btn-primary" disabled={busy || (invoice.mode === "PERSEKOT" && !spbAttached)}>
+            Setujui ulang jenis pembayaran
+          </button>
+        </form>}
+      </>}
       {data.editable ? <form onSubmit={submit} className="form-grid workflow-form">
         <label className="field"><span>Tujuan pembayaran</span>
           <select className="select" name="recipient_type" value={recipient} onChange={event =>
@@ -96,7 +130,7 @@ export default function PaymentDocumentsPanel({ id, data, attachments, onSaved }
           <select className="select" name="document_code" value={code} required
             onChange={event => setCode(event.target.value)} disabled={busy}>
             <option value="">Pilih dokumen</option>
-            {data.documents.map(doc => <option key={doc.code} value={doc.code}>{PERSEKOT_DOCUMENTS[doc.code]}</option>)}
+            {uploadChoices.map(doc => <option key={doc.code} value={doc.code}>{PERSEKOT_DOCUMENTS[doc.code]}</option>)}
           </select>
           {replacing && <small className="hint">Berkas ini akan menggantikan versi aktif untuk jenis yang dipilih.</small>}
         </label>

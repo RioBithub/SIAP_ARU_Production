@@ -16,6 +16,7 @@ Jalankan dari sesi operator VPS yang mengelola PM2 `siap-aru`. Langkah ini untuk
   migrations=(
     database/migrations/2026-11-18-persuratan-production.sql
     database/migrations/2026-11-18-letter-purge.sql
+    database/migrations/2026-11-19-v11-invoice-payment-mode.sql
   )
   for migration in "${migrations[@]}"; do
     git cat-file -e "$target:$migration"
@@ -60,7 +61,7 @@ Jalankan dari sesi operator VPS yang mengelola PM2 `siap-aru`. Langkah ini untuk
 )
 ```
 
-Ketik password admin MariaDB saat muncul prompt. Jika backup basis data atau lampiran gagal, periksa penyebabnya sebelum meneruskan rilis. Jika proses berhenti di migrasi atau build, lihat baris error pertama. Kedua migrasi bisa dijalankan ulang. Setelah restart, health yang diharapkan ialah `{"ok":true,"status":"healthy","database":"connected"}`.
+Ketik password admin MariaDB saat muncul prompt. Jika backup basis data atau lampiran gagal, periksa penyebabnya sebelum meneruskan rilis. Jika proses berhenti di migrasi atau build, lihat baris error pertama. Migrasi bisa dijalankan ulang. Setelah restart, health yang diharapkan ialah `{"ok":true,"status":"healthy","database":"connected"}`.
 
 ## Verifikasi dari situs utama
 

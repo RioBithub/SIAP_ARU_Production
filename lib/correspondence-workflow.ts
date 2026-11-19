@@ -63,6 +63,8 @@ const letterActions: Record<string, string> = {
   CANCEL: "Dibatalkan",
   COMPLETE: "Diselesaikan",
   RESPONSE: "Tanggapan",
+  UPDATE_INVOICE_PAYMENT_MODE: "Jenis pembayaran invoice diperbarui",
+  REVIEW_INVOICE_PAYMENT_MODE: "Jenis pembayaran invoice disetujui ulang",
   IMPORT_LEGACY_EXCEL: "Diimpor dari Excel Lama",
 };
 

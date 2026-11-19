@@ -888,12 +888,12 @@ export default function LettersClient({direction,user}:Props){
           <div style={{marginTop:13}} className="notice">{detail.letter.summary||"Belum ada ringkasan."}</div>
           {detail.business&&<BusinessDocumentSummary details={detail.business} documentType={detail.letter.document_type}/>}
           <WorkflowSummary data={detail.v11} date={detail.letter.received_date} files={detail.attachments}/>
-          {detail.v11?.payment_documents && <PaymentDocumentsPanel key={detail.letter.id} id={detail.letter.id}
+          {detail.v11?.payment_documents && <PaymentDocumentsPanel key={`payment-${detail.letter.id}`} id={detail.letter.id}
             data={detail.v11.payment_documents} attachments={detail.attachments} onSaved={()=>refreshDetail(detail.letter.id)}/>}
-          {detail.sandboxSigning && <AttachmentSandbox key={detail.letter.id}
+          {detail.sandboxSigning && <AttachmentSandbox key={`attachment-sandbox-${detail.letter.id}`}
             files={signingFiles}/>}
           {!detail.sandboxSigning&&detail.v11&&detail.letter.status==="WAITING_SIGNATURE"&&canHandleSecretariat(user.role)&&
-            <V11SigningPanel key={detail.letter.id} id={detail.letter.id} files={signingFiles} onReady={setSigningReady}/>}
+            <V11SigningPanel key={`letter-signing-${detail.letter.id}`} id={detail.letter.id} files={signingFiles} onReady={setSigningReady}/>}
           <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:13}}>
             {canEditDetail()&&<button className="btn btn-secondary" onClick={openEdit}>Edit Metadata</button>}
             {direction==="OUTGOING"&&detail.business?.invoice&&!["CANCELLED","REJECTED"].includes(detail.letter.status)&&

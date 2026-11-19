@@ -793,6 +793,15 @@ try {
       page.on("pageerror", error => console.log("Browser error:", error.message.slice(0, 100)));
       return page;
     }
+    async function showSandboxPanel(page, detailPath) {
+      // Exercise the Sandbox layout while keeping the staging signing provider in mock mode.
+      await page.route(new URL(detailPath, base).href, async route => {
+        const response = await route.fetch();
+        const json = await response.json();
+        if (json.ok) json.data.sandboxSigning = true;
+        await route.fulfill({ response, json });
+      });
+    }
     try {
       const delegation = await pageFor("staff", true);
       await delegation.goto(new URL("/dispositions?disposition_id=" + state.historyChild, base).href);
@@ -964,6 +973,10 @@ try {
       const invoiceApi = "/api/letters/" + invoice.id;
       const existingFile = await post("staff", invoiceApi + "/attachments",
         file(new FormData(), "file", "SIMULASI-BPK-Pengajuan.pdf"), 201);
+      const verificationApi = "/api/dispositions/" + verification.id;
+      await post("staff", verificationApi + "/attachments",
+        file(new FormData(), "file", "SIMULASI-Bukti-Pendukung.pdf"), 201);
+      await showSandboxPanel(staff, verificationApi);
       const beforeUpload = await taskDetail("staff", verification.id);
       assert(beforeUpload.sourceAttachments.some(file => file.id === existingFile.id));
       assert(beforeUpload.paymentDocuments.missing.includes("BPK Pengajuan"));
@@ -996,6 +1009,50 @@ try {
         has: staff.getByRole("heading", { name: "Lampiran Surat Asal", exact: true }),
       });
       assert.equal(await invoiceSourceFiles.getByText("SIMULASI-BPK-Pengajuan.pdf", { exact: true }).count(), 0);
+      const sandboxPicker = invoiceDialog.getByRole("combobox", { name: "PDF untuk tanda tangan Sandbox" });
+      await sandboxPicker.waitFor();
+      const mode = invoiceDialog.getByLabel(/^Jenis pembayaran/);
+      await mode.selectOption("PERSEKOT");
+      await invoiceDialog.getByLabel(/^Alasan persekot/).fill("SIMULASI kebutuhan dana di muka.");
+      await invoiceDialog.getByRole("button", { name: "Simpan jenis pembayaran" }).click();
+      const spbOption = invoiceDialog.getByLabel(/^Jenis dokumen persyaratan/).locator('option[value="SPB"]');
+      await spbOption.waitFor({ state: "attached" });
+      await invoiceDialog.getByText("Persyaratan diperbarui.", { exact: true }).waitFor();
+      await mode.selectOption("REGULAR");
+      await invoiceDialog.getByRole("button", { name: "Simpan jenis pembayaran" }).click();
+      await spbOption.waitFor({ state: "detached" });
+      await invoiceDialog.getByText("Persyaratan diperbarui.", { exact: true }).waitFor();
+      const contract = "SIMULASI-Kontrak-ATK.pdf";
+      for (const [code, name] of [["KONTRAK", contract], ["MARGIN", "SIMULASI-Margin-ATK.pdf"]]) {
+        await invoiceDialog.getByLabel("Jenis dokumen persyaratan").selectOption(code);
+        await invoiceDialog.getByLabel("Berkas persyaratan").setInputFiles({ name, mimeType: "application/pdf", buffer: pdf });
+        await invoiceDialog.getByRole("button", { name: "Unggah dokumen" }).click();
+        await invoiceDialog.getByText(name, { exact: true }).waitFor();
+        assert.equal(await checklist.count(), 1, "Checklist ganda setelah unggah langsung dari detail disposisi.");
+        await invoiceDialog.getByText("Persyaratan diperbarui.", { exact: true }).waitFor();
+        assert.equal(await sandboxPicker.count(), 1);
+        assert.equal(await invoiceDialog.getByText(contract, { exact: true }).count(), 1);
+        assert.equal(await staff.getByRole("dialog").count(), 1);
+      }
+
+      const invoiceLetterPage = await pageFor("root", false);
+      await showSandboxPanel(invoiceLetterPage, invoiceApi);
+      await invoiceLetterPage.goto(new URL("/letters/incoming?letter_id=" + invoice.id, base).href);
+      const invoiceLetter = invoiceLetterPage.getByRole("dialog", { name: subject("invoice-form-ui"), exact: true });
+      await invoiceLetter.getByRole("combobox", { name: "PDF untuk tanda tangan Sandbox" }).waitFor();
+      await invoiceLetter.getByLabel("Jenis dokumen persyaratan").selectOption("PESANAN");
+      await invoiceLetter.getByLabel("Berkas persyaratan").setInputFiles({
+        name: "SIMULASI-Surat-Pesanan-ATK.pdf", mimeType: "application/pdf", buffer: pdf,
+      });
+      await invoiceLetter.getByRole("button", { name: "Unggah dokumen" }).click();
+      const invoiceLetterChecklist = invoiceLetter.locator("section").filter({
+        has: invoiceLetterPage.getByRole("heading", { name: "Persyaratan sebelum Finance", exact: true }),
+      });
+      await invoiceLetterChecklist.getByText("SIMULASI-Surat-Pesanan-ATK.pdf", { exact: true }).waitFor();
+      assert.equal(await invoiceLetter.getByText("Persyaratan sebelum Finance", { exact: true }).count(), 1,
+        "Checklist ganda setelah unggah langsung dari detail Surat Masuk.");
+      await invoiceLetterPage.context().close();
+
       await invoiceDialog.getByRole("button", { name: "Kirim Hasil", exact: true }).click();
       const invoiceNote = invoiceForm.getByLabel("Ringkasan pemeriksaan (wajib)", { exact: true });
       await invoiceNote.fill("SIMULASI pesanan ATK sesuai bukti.");
@@ -1436,10 +1493,75 @@ try {
     assert.match(stale.error, /revisi invoice lama/);
     return "Verifikasi invoice bisa dilanjutkan dari tugas lama pada revisi yang aktif. Tugas saingan dan revisi usang ditolak.";
   });
+  await test(62, async () => {
+    const invoice = await incoming("mode-pembayaran", { actor: "it", type: "INVOICE_MASUK",
+      business: { total: "45000000", due_date: due } });
+    const id = invoice.id;
+    const url = "/api/letters/" + id + "/payment-documents";
+    const checklist = async role => (await detail(role, id)).v11.payment_documents;
+    const selectMode = async (role, mode, reason, status = 200) => {
+      const { revision } = (await checklist(role)).invoice;
+      return post(role, url, multipart({ invoice_payment_action: "SAVE_MODE", invoice_payment_revision: revision,
+        invoice_payment_mode: mode, persekot_reason: reason }, []), status);
+    };
+    const review = (role, revision, status = 200) =>
+      post(role, url, multipart({ invoice_payment_action: "REVIEW_MODE", invoice_payment_revision: revision }, []), status);
+    assert.equal((await checklist("it")).invoice.mode, "REGULAR");
+    await selectMode("it", "PERSEKOT", "", 400);
+    await selectMode("it", "PERSEKOT", "SIMULASI kebutuhan dana sebelum pengiriman.");
+    assert((await checklist("it")).missing.includes("Surat Perintah Bayar (SPB)"));
+    await register(id);
+    await selectMode("ops", "REGULAR", "");
+    const task = await assign("ops", id, "staff", { purpose: "INVOICE_VERIFY" });
+    await start("staff", task.id);
+    await post("staffkeu", url, multipart({ invoice_payment_action: "SAVE_MODE", invoice_payment_revision: "2",
+      invoice_payment_mode: "PERSEKOT", persekot_reason: "SIMULASI akun di luar penugasan." }, []), 403);
+    await selectMode("staff", "PERSEKOT", "SIMULASI pemasok meminta uang muka.");
+    assert.equal((await taskDetail("ops", task.id)).paymentDocuments.invoice.mode, "PERSEKOT");
+    const spb = await payFile("staff", id, "SPB");
+    await fillPayDocs("staff", id, payDocuments);
+    await submit("staff", task.id, "SIMULASI hasil pemeriksaan invoice", ["files"]);
+    await taskAction("ops", task.id, "APPROVE_RESULT");
+    await letterAction("ops", id, "APPROVE_FINAL");
+    assert.equal((await checklist("staff")).invoice.reviewRequired, false);
+
+    await selectMode("staff", "REGULAR", "");
+    const regular = await checklist("staff");
+    assert.equal(regular.invoice.reviewRequired, true);
+    assert(!regular.documents.some(doc => doc.code === "SPB"));
+    assert((await call("staff", "/api/attachments/" + spb.id, { raw: true })).bytes.equals(pdf));
+    const blocked = await assign("ksu", id, "finance", { purpose: "INVOICE_PAYMENT" }, 400);
+    assert.match(blocked.error, /Persetujuan ulang jenis pembayaran/);
+    await review("staff", regular.invoice.revision, 403);
+    await selectMode("staff", "PERSEKOT", "SIMULASI uang muka dikonfirmasi vendor.");
+    await review("ops", regular.invoice.revision, 400);
+    const persekot = await checklist("ops");
+    assert.equal(persekot.documents.find(doc => doc.code === "SPB").attachment.id, spb.id);
+    await review("ops", persekot.invoice.revision);
+
+    const payment = await assign("ksu", id, "finance", { purpose: "INVOICE_PAYMENT" });
+    const financeView = (await taskDetail("finance", payment.id)).paymentDocuments;
+    assert.equal(financeView.invoice.mode, "PERSEKOT");
+    assert.equal(financeView.invoiceAccess.locked, true);
+    await selectMode("staff", "REGULAR", "", 400);
+    await payFile("ops", id, "SPB", 400);
+    await start("finance", payment.id);
+    await taskAction("finance", payment.id, "RETURN_TASK", { note: "SIMULASI minta konfirmasi jenis pembayaran." });
+    await selectMode("staff", "REGULAR", "");
+    const fields = { note: "SIMULASI instruksi setelah dikembalikan." };
+    await taskAction("ksu", payment.id, "REASSIGN_TASK", fields, [], 400);
+    await review("ops", (await checklist("ops")).invoice.revision);
+    await taskAction("ksu", payment.id, "REASSIGN_TASK", fields);
+    const ledger = await detail("ops", id);
+    assert(ledger.actions.some(action => action.action === "REVIEW_INVOICE_PAYMENT_MODE"));
+    assert.equal(ledger.v11.payment_documents.invoice.mode, "REGULAR");
+    assert.equal(ledger.v11.payment_documents.invoiceAccess.locked, true);
+    return "Staff pengaju, Staff verifikator, dan Manager mengubah jenis dari invoice yang sama. SPB, persetujuan ulang, dan penguncian Finance berjalan.";
+  });
 } finally {
   await sql.end();
   await writeFile(path.join(out, "uat.json"), JSON.stringify({ runId, db: profile.version, cases: result }, null, 2));
 }
 const totals = Object.fromEntries(["PASS","FAIL","SKIP"].map(status => [status,result.filter(row=>row.status===status).length]));
 console.log(JSON.stringify(totals));
-if (totals.FAIL || result.length !== 61) process.exitCode=1;
+if (totals.FAIL || result.length !== 62) process.exitCode=1;
