@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import test, { beforeEach } from "node:test";
 import {
   configuredSandboxSigning, mockSignedPdf, sandboxAttachmentsEnabled, predictSandboxAnnotations, sandboxPdf, sandboxStatus, sendSandboxSignature,
+  sandboxSendFailure,
 } from "../../lib/mekari-sign.ts";
 
 beforeEach(t => {
@@ -48,6 +49,99 @@ test("HTTP 400 menyebut tahap yang ditolak tanpa meneruskan respons mentah Mekar
     await assert.rejects(request, error => error.status === 400 && error.message.includes(stage) &&
       !error.message.includes("fixture-private"));
   }
+});
+
+test("Penolakan kuota, kolom validasi, dan kode Mekari memberi petunjuk tanpa nilai privat", async t => {
+  const privateValue = "fixture-private@example.invalid";
+  const fetchMock = t.mock.method(globalThis, "fetch", async () => Response.json({
+    data: { message: "Quota is insufficient", params: { signers: [privateValue] } },
+  }, { status: 400 }));
+  const send = () => sendSandboxSignature("SIMULASI.pdf", pdf, configuredSandboxSigning(firstSigner), null);
+  const safeFailure = error => {
+    const failure = sandboxSendFailure(error);
+    assert(!JSON.stringify(failure).includes(privateValue));
+    assert.equal(failure.status, "FAILED");
+    return failure;
+  };
+  await assert.rejects(send, error => {
+    const failure = safeFailure(error);
+    assert.equal(failure.httpStatus, 400);
+    assert.equal(failure.reason, "QUOTA");
+    assert.match(failure.message, /Kuota tanda tangan Sandbox tidak mencukupi/);
+    return true;
+  });
+
+  fetchMock.mock.mockImplementation(async () => Response.json({
+    data: { message: privateValue, params: {
+      "signers[0][email]": [privateValue],
+      "signers.0.annotations.0.page": ["Tidak valid"],
+      filename: ["Nilai ini tidak tersedia"],
+      [privateValue]: ["Abaikan kolom yang tidak dikenal"],
+    } }, status: "unprocessable_entity", error: true,
+  }, { status: 422 }));
+  await assert.rejects(send, error => {
+    const failure = safeFailure(error);
+    assert.equal(failure.reason, "VALIDATION");
+    assert.deepEqual(failure.invalidFields, ["email penandatangan", "halaman tanda tangan", "nama file"]);
+    assert.match(failure.message, /HTTP 422.*email penandatangan, halaman tanda tangan, nama file/);
+    return true;
+  });
+
+  fetchMock.mock.mockImplementation(async () => Response.json({
+    code: "MSN-433", message: privateValue,
+  }, { status: 401 }));
+  await assert.rejects(send, error => {
+    const failure = safeFailure(error);
+    assert.equal(failure.providerCode, "MSN-433");
+    assert.match(failure.message, /HMAC Sandbox.*Kode Mekari MSN-433/);
+    return true;
+  });
+});
+
+test("Respons HTML, terpotong, dan melebihi batas tetap mengikuti status HTTP", async t => {
+  const privateValue = "fixture-private@example.invalid";
+  const send = () => sendSandboxSignature("SIMULASI.pdf", pdf, configuredSandboxSigning(firstSigner), null);
+  const responses = [
+    new Response(`<html>${privateValue}</html>`, { status: 400 }),
+    new Response('{"message":"' + privateValue, { status: 422 }),
+    Response.json({ code: privateValue, message: privateValue }, { status: 400 }),
+    Response.json({ message: "Quota is insufficient", padding: "a".repeat(17 * 1024) }, { status: 400 }),
+    new Response(new ReadableStream({
+      start(controller) { controller.error(new Error(privateValue)); },
+    }), { status: 400 }),
+  ];
+  const fetchMock = t.mock.method(globalThis, "fetch", async () => new Response(null, { status: 400 }));
+  for (const response of responses) {
+    fetchMock.mock.mockImplementation(async () => response);
+    await assert.rejects(send, error => {
+      const failure = sandboxSendFailure(error);
+      assert.equal(failure.httpStatus, response.status);
+      assert.equal(failure.status, "FAILED");
+      assert.equal(failure.reason, null);
+      assert.equal(failure.providerCode, null);
+      assert.match(failure.message, /rincian yang dapat ditampilkan/);
+      assert(!JSON.stringify(failure).includes(privateValue));
+      return true;
+    });
+  }
+});
+
+test("Kegagalan jaringan atau respons sukses yang tidak terbaca perlu pengecekan sebelum kirim ulang", async t => {
+  const privateValue = "fixture-private@example.invalid";
+  const send = () => sendSandboxSignature("SIMULASI.pdf", pdf, configuredSandboxSigning(firstSigner), null);
+  const fetchMock = t.mock.method(globalThis, "fetch", async () => { throw new Error(privateValue); });
+  const needsReconciliation = error => {
+    const failure = sandboxSendFailure(error);
+    assert.equal(failure.status, "RECONCILE");
+    assert.match(failure.message, /Periksa daftar dokumen/);
+    assert(!JSON.stringify(failure).includes(privateValue));
+    return true;
+  };
+  await assert.rejects(send, needsReconciliation);
+  fetchMock.mock.mockImplementation(async () => new Response(privateValue, { status: 201 }));
+  await assert.rejects(send, needsReconciliation);
+  fetchMock.mock.mockImplementation(async () => Response.json({ message: privateValue }, { status: 500 }));
+  await assert.rejects(send, needsReconciliation);
 });
 
 test("Digest mencakup byte JSON yang dikirim dan header absen pada GET", async t => {

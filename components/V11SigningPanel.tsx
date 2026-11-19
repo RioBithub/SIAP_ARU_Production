@@ -2,11 +2,13 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { SandboxProgress, SignatureAnnotation } from "@/lib/mekari-sign";
+import type { MekariSendFailureNotice } from "@/lib/mekari-signing-audit";
 import SignaturePlacement from "@/components/SignaturePlacement";
 import AttachmentActions from "@/components/AttachmentActions";
 
 type Mode = "mock" | "sandbox";
-type Job = { id: string; status: string; mode: Mode; final_attachment_id: string | null; can_retry?: boolean };
+type Job = { id: string; status: string; mode: Mode; final_attachment_id: string | null; can_retry?: boolean;
+  send_failure?: MekariSendFailureNotice };
 export type SandboxSource = { id: string; original_name: string; attachment_kind: string };
 type Coordinate = keyof Omit<SignatureAnnotation, "type_of">;
 type DraftSigner = {
@@ -181,11 +183,16 @@ export default function V11SigningPanel({ id, files = [], onReady, source }: {
   const pdfPending = job?.status === "IN_PROGRESS" && progress?.status === "COMPLETED";
   const documentAwaitingConfirmation = job?.status === "IN_PROGRESS" && checkedSigners.length > 0 && signed === checkedSigners.length;
   const canRetry = job?.can_retry === true && job.mode === mode;
+  const failure = job?.send_failure;
   return <details className="card" style={{ marginTop: 12 }} open={source ? true : undefined}>
     <summary className="card-head"><b>{(job?.mode ?? mode) === "mock" ? "Simulasi Mekari Sign" : "Mekari Sign Sandbox"}</b></summary>
     <div className="card-body">
       {source && <p className="notice">Hasil tanda tangan disimpan sebagai bukti Sandbox. Status persetujuan dan penerbitan dicatat melalui alur SIAP ARU.</p>}
-      {message && <p className="notice" role="status">{message}</p>}
+      {message && message !== failure?.message && <p className="notice" role="status">{message}</p>}
+      {failure && <div className="notice" role="status">
+        <p>{failure.message}</p>
+        <p className="hint">Referensi Audit Log #{failure.audit_reference}</p>
+      </div>}
       {job && !(canRetry && retrying) ? <>
         <div role="status">
           <b>{pdfPending ? "PDF final sedang disiapkan" : documentAwaitingConfirmation
@@ -207,7 +214,7 @@ export default function V11SigningPanel({ id, files = [], onReady, source }: {
           setConfirmed(false);
           setRetrying(true);
         }}>Coba Kirim Lagi</button>}
-        {job.status === "RECONCILE" && <p className="hint">Periksa dokumen di akun Mekari Sandbox sebelum mengirim pengajuan lain.</p>}
+        {job.status === "RECONCILE" && !failure && <p className="hint">Periksa dokumen di akun Mekari Sandbox sebelum mengirim pengajuan lain.</p>}
         {job.final_attachment_id && <AttachmentActions id={job.final_attachment_id} name="Bukti tanda tangan.pdf"
           downloadLabel={source ? "Unduh PDF bukti Sandbox" : "Unduh PDF final"}/>}
       </> : <form className="workflow-form" onSubmit={event => void action("START", event)}>

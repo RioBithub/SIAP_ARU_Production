@@ -54,6 +54,20 @@ Buka situs utama dan verifikasi login, antrean Sekretariat, serta panel Sandbox 
 
 Jika status `RECONCILE`, periksa request pada akun Sandbox Mekari sebelum mengirim ulang melalui prosedur operator. Satu permintaan per PDF menghindari undangan ganda, termasuk ketika respons vendor terputus. Unggah PDF versi revisi sebagai lampiran baru jika perlu memulai pengajuan baru setelah status sebelumnya dipastikan. Untuk menghentikan pengiriman, set `SIAP_V11_MEKARI_ALLOW_SEND=0` dan muat ulang service. Untuk menutup seluruh panel, set `SIAP_V11_MEKARI_ATTACHMENT_SANDBOX=0` dan muat ulang service.
 
+## Menelusuri pengajuan yang gagal
+
+Jika Mekari menolak kiriman, panel menampilkan status HTTP, kolom yang ditandai, atau petunjuk kuota sesuai informasi yang bisa dikenali. Saat tersedia, kode Mekari seperti `MSN-433` ikut tampil.
+
+| Petunjuk di panel | Tindakan |
+| --- | --- |
+| Kuota tanda tangan Sandbox tidak mencukupi | Periksa kuota tanda tangan pada akun Sandbox yang dipakai SIAP ARU. Kirim ulang setelah kuota tersedia. |
+| PDF sumber atau nama file | Buka PDF sumber untuk memeriksa berkas. Jika nama ditandai, periksa apakah nama yang sama sudah ada di daftar dokumen Sandbox. |
+| Email atau posisi tanda tangan | Periksa nama dan email penguji. Untuk posisi, buka **Atur Posisi di PDF** dan cek halaman serta batas kotak. |
+| Kredensial atau akses Sandbox | Minta admin memeriksa konfigurasi HMAC di VPS dan akses akun Sandbox ke pengiriman tanda tangan. |
+| HTTP 400 tanpa rincian | Catat waktu pengajuan dan nomor referensi. Periksa kuota, PDF, dan data penandatangan sebelum mencoba lagi. |
+
+**Referensi Audit Log** tetap tampil saat dokumen dibuka lagi. Root Admin dapat mencari nomor itu, misalnya `#1234`, di **Administrasi → Audit Log**. Catatan memuat status HTTP dan kode atau kolom yang dikenali. Balasan mentah Mekari dan nilai kolom yang ditolak tidak disalin ke log. Percobaan yang gagal sebelum fitur ini dipasang baru memperoleh referensi pada percobaan berikutnya.
+
 ## Data demo
 
 Untuk staging yang berisi akun fiktif, [empat skenario Pak Nor](SKENARIO-PAK-NOR.md) dapat dimuat lewat runner `demo`. Di database production, masukkan contoh fiktif yang ingin ditampilkan dari antarmuka. Gunakan seri nomor SIMULASI dan siapkan dokumen terpisah untuk tiap demo. Simulasikan pencatatan pembayaran invoice pada staging yang memiliki ledger terpisah.

@@ -19,7 +19,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
     if (body.operation === "purge") {
       if (body.confirmation !== PURGE_CONFIRMATION) throw new Error("Ketik HAPUS PERMANEN untuk mengonfirmasi.");
       const result = await permanentlyDeleteLetter(user, params.id, reason, request);
-      if (result.status !== 200) {
+      if ("error" in result) {
         return NextResponse.json({ ok: false, error: result.error }, { status: result.status });
       }
       const pending = await retryPurgeFiles(params.id).catch(() => null);

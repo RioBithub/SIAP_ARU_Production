@@ -10,8 +10,9 @@ import { getAccessibleLetter } from "@/lib/letter-access";
 import { discardUncommittedFiles, insertLetterAttachment, type StoredLetterFile } from "@/lib/letter-uploads";
 import {
   callbackUrl, canRetrySandboxJob, configuredSandboxSigning, mekariMode, MekariError, mockSignedPdf, predictSandboxAnnotations,
-  sandboxCredentials, sandboxPdf, sandboxPollDelay, sandboxStatus, sendSandboxSignature,
+  sandboxCredentials, sandboxErrorStatus, sandboxPdf, sandboxPollDelay, sandboxSendFailure, sandboxStatus, sendSandboxSignature,
 } from "@/lib/mekari-sign";
+import { latestMekariSendFailure, type MekariSendFailureNotice } from "@/lib/mekari-signing-audit";
 import { readStoredFile } from "@/lib/upload";
 import { saveProof } from "@/lib/v11-data";
 
@@ -24,10 +25,11 @@ async function getJob(conn: Pick<PoolConnection, "query">, letterId: string, loc
   return rows[0] ?? null;
 }
 
-function publicJob(job: RowDataPacket | null) {
+function publicJob(job: RowDataPacket | null, failure?: MekariSendFailureNotice | null) {
   if (!job) return null;
   return { id: job.id, status: job.status, mode: job.mode, final_attachment_id: job.final_attachment_id,
-    can_retry: job.mode === "sandbox" && canRetrySandboxJob(job.status, job.provider_id, job.final_attachment_id) };
+    can_retry: job.mode === "sandbox" && canRetrySandboxJob(job.status, job.provider_id, job.final_attachment_id),
+    send_failure: failure ?? undefined };
 }
 
 async function lockSigningLetter(conn: PoolConnection, id: string) {
@@ -67,7 +69,9 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
   if (!await getAccessibleLetter(user, params.id) || !canHandleSecretariat(user.role)) {
     return NextResponse.json({ ok: false }, { status: 403 });
   }
-  return NextResponse.json({ ok: true, mode: mekariMode(), data: publicJob(await getJob(db, params.id)) });
+  const job = await getJob(db, params.id);
+  const failure = job?.mode === "sandbox" ? await latestMekariSendFailure("LETTER", params.id, job.status) : null;
+  return NextResponse.json({ ok: true, mode: mekariMode(), data: publicJob(job, failure) });
 }
 
 export async function POST(request: Request, { params }: { params: { id: string } }) {
@@ -135,11 +139,15 @@ export async function POST(request: Request, { params }: { params: { id: string 
         try {
           const providerId = await sendSandboxSignature(result.source.name, result.source.bytes, signing, result.callback ?? null);
           await db.execute("UPDATE siap_v11_signing SET provider_id=?,status='IN_PROGRESS' WHERE id=? AND status='REQUESTING'", [providerId, result.id]);
-        } catch (error) {
-          const state = error instanceof MekariError && [400,401,403,404,422].includes(error.status)
-            ? "FAILED" : "RECONCILE";
-          await db.execute("UPDATE siap_v11_signing SET status=? WHERE id=? AND status='REQUESTING'", [state, result.id]);
-          throw error;
+        } catch (cause) {
+          const failure = sandboxSendFailure(cause);
+          const auditId = await withTransaction(async conn => {
+            await conn.execute("UPDATE siap_v11_signing SET status=? WHERE id=? AND status='REQUESTING'", [failure.status, result.id]);
+            return auditLog({ user, action: "LETTER_MEKARI_SEND_FAILED", entityType: "LETTER", entityId: params.id,
+              metadata: { signingId: result.id, ...failure }, request }, conn);
+          });
+          return NextResponse.json({ ok: false, error: failure.message, audit_reference: String(auditId) },
+            { status: sandboxErrorStatus(cause) });
         }
       }
       return NextResponse.json({ ok: true, data: publicJob(await getJob(db, params.id)) }, { status: 201 });
@@ -199,7 +207,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
   } catch (error) {
     await discardUncommittedFiles(files);
     const safe = error instanceof MekariError || (error instanceof Error && !("code" in error));
-    const status = error instanceof MekariError && [401,403,404].includes(error.status) ? 424 : 400;
-    return NextResponse.json({ ok: false, error: safe ? error.message : "Integrasi tanda tangan tidak dapat diproses." }, { status });
+    return NextResponse.json({ ok: false, error: safe ? error.message : "Integrasi tanda tangan tidak dapat diproses." },
+      { status: sandboxErrorStatus(error) });
   }
 }
