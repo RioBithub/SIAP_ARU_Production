@@ -6,7 +6,8 @@ import { db } from "@/lib/db";
 import { listDispositionEvents, listDispositionHistoryFiles, listHistoryTasks, previousDispositionTasks } from "@/lib/disposition-history";
 import { dispositionAccess } from "@/lib/disposition-access";
 import { v11Letter } from "@/lib/v11-data";
-import { paymentDocuments } from "@/lib/v11-payment-documents";
+import { canEditPaymentDocuments, paymentDocuments } from "@/lib/v11-payment-documents";
+import { getAccessibleLetter } from "@/lib/letter-access";
 import { findLetterReferences } from "@/lib/business-document-data";
 import { listLetterActions } from "@/lib/correspondence-data";
 import { listLetterAttachments } from "@/lib/letter-uploads";
@@ -108,11 +109,20 @@ export async function GET(_:Request,{params}:{params:{id:string}}){
         status,approved_at,submitted_action_id FROM siap_v11_payments WHERE disposition_id=? ORDER BY created_at,id`,
       [params.id],
     ) : [[]];
-  const workflow = ["INVOICE_PAYMENT","REQUEST_PAYMENT"].includes(d.purpose) ? await v11Letter(d.letter_id) : null;
+  const verification = d.purpose === "INVOICE_VERIFY";
+  const paymentLetter = verification || ["INVOICE_PAYMENT","REQUEST_PAYMENT"].includes(d.purpose)
+    ? await getAccessibleLetter(user, d.letter_id) : null;
+  const workflow = paymentLetter ? await v11Letter(d.letter_id) : null;
   const requirements = workflow ? await paymentDocuments(db, d.letter_id, workflow, d.document_type) : null;
+  const editable = Boolean(verification && paymentLetter?.status === "MANAGER_REVIEW" &&
+    workflow?.invoice_revision === d.task_revision && (
+      user.id === d.from_user_id || (user.id === d.to_user_id && user.id === d.current_owner_user_id &&
+        ["UNSEEN","SEEN","IN_PROGRESS"].includes(d.status))
+    ) && await canEditPaymentDocuments(db, paymentLetter, user));
   return NextResponse.json({
     ok:true,
-    data:{disposition:d,actions:history,attachments,sourceActions,sourceAttachments,parent,children,previousTasks,payments,paymentDocuments:requirements,
+    data:{disposition:d,actions:history,attachments,sourceActions,sourceAttachments,parent,children,previousTasks,payments,
+      paymentDocuments:requirements && {...requirements, editable},
       sandboxSigning: sandboxAttachmentsEnabled() && (user.role === "ROOT_ADMIN" ||
         [d.from_user_id,d.to_user_id,d.current_owner_user_id].includes(user.id))}
   });

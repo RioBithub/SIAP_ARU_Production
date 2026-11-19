@@ -1,4 +1,4 @@
-import { paymentKind, requirePaymentDocuments } from "@/lib/v11-payment-documents";
+import { paymentKind } from "@/lib/v11-payment-documents";
 import crypto from "crypto";
 import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
@@ -11,17 +11,12 @@ import { letterAccess } from "@/lib/letter-access";
 import { dispositionAccess } from "@/lib/disposition-access";
 import { resultRequirement, reviewRole } from "@/lib/correspondence-workflow";
 import { INVOICE_INCOMING } from "@/lib/business-documents";
-import { checkedDate, officialManager, taskPurpose, v11Enabled, v11Letter } from "@/lib/v11-data";
-import { dispositionTargetRoles, staffCanVerify, staffUnit, unitManagerScope } from "@/lib/v11-workflow";
-import { delegatedUsers } from "@/lib/correspondence-settings";
+import { taskPurpose, v11Enabled, v11Letter } from "@/lib/v11-data";
+import { letterCanBeDisposed } from "@/lib/v11-workflow";
+import { assertInvoiceVerificationAssignment, assertPaymentRequestAssignment, dispositionDeadlineInput, dispositionTarget } from "@/lib/disposition-assignment";
 import { preparePaymentTask } from "@/lib/v11-finance";
 
 export const runtime="nodejs";
-
-function letterCanBeDisposed(direction:string,status:string){
-  if(direction==="OUTGOING") return status==="ISSUED";
-  return ["APPROVED","DISPOSED","IN_PROGRESS","COMPLETED"].includes(status);
-}
 
 export async function GET() {
   const user=await getCurrentUser();
@@ -78,11 +73,7 @@ export async function POST(request:Request) {
       ? String(b.priority).toUpperCase()
       : "NORMAL";
 
-    const due=b.due_date ? checkedDate(b.due_date,"Tanggal target selesai") : null;
-    const dueTime=b.due_time ? String(b.due_time) : null;
-    if (dueTime && (!due || !/^([01]\d|2[0-3]):[0-5]\d$/.test(dueTime))) {
-      throw new Error("Isi tanggal dan jam target selesai yang valid (WIB).");
-    }
+    const { date: due, time: dueTime } = dispositionDeadlineInput(b);
 
     const requestedParentId = str(b.parent_id, 36) || null;
     const purpose = taskPurpose(b.purpose);
@@ -144,47 +135,12 @@ export async function POST(request:Request) {
         }
       }
 
-      const [targets]=await conn.query<RowDataPacket[]>(
-        `SELECT id,name,role,unit_name
-         FROM siap_users
-         WHERE id=? AND is_active=1
-         LIMIT 1`,
-        [toUserId]
-      );
-
-      const target=targets[0];
-      if(!target) throw new Error("Penerima disposisi tidak ditemukan atau tidak aktif.");
-
-      if (!dispositionTargetRoles(user.role, strict).includes(target.role)) {
-        throw new Error("Penerima tidak sesuai jalur delegasi disposisi.");
-      }
-      if (strict && target.role === "MANAGER") await officialManager(conn, target.id);
-      if (user.role === "MANAGER") {
-        const manager = strict ? await officialManager(conn, user.id) : null;
-        const configured = purpose === "GENERAL" ? await delegatedUsers(user.id, conn) : null;
-        if (configured !== null) {
-          if (!configured.includes(target.id)) throw new Error("Penerima belum terdaftar sebagai PIC Manager ini.");
-        } else if (manager) {
-          const targetScope = target.role === "FINANCE" ? "KSU" : unitManagerScope(staffUnit(target.unit_name));
-          if (targetScope && targetScope !== manager.scope) throw new Error("Penerima berada di bawah Manager lain.");
-        }
-      }
+      const target = await dispositionTarget(conn, user, toUserId, strict, purpose);
       if (workflow && letter.document_type === INVOICE_INCOMING && target.role === "FINANCE" && purpose !== "INVOICE_PAYMENT") {
         throw new Error("Finance menerima invoice hanya untuk instruksi pembayaran setelah persetujuan.");
       }
       if (purpose === "INVOICE_VERIFY") {
-        if (user.role !== "MANAGER" || letterStatus !== "MANAGER_REVIEW" || letter.current_owner_user_id !== user.id ||
-            letter.routing_target_user_id !== user.id || target.role !== "STAFF" ||
-            !staffCanVerify(workflow!.requesting_unit, target.unit_name)) {
-          throw new Error("Manager reviewer harus menugaskan verifikasi kepada Staff unit pemohon.");
-        }
-        await officialManager(conn, user.id, workflow!.requesting_unit);
-        const [prior] = await conn.query<RowDataPacket[]>(
-          `SELECT 1 FROM siap_dispositions d JOIN siap_v11_dispositions v ON v.disposition_id=d.id
-           WHERE d.letter_id=? AND v.purpose='INVOICE_VERIFY' AND v.invoice_revision=?
-             AND d.status NOT IN ('RETURNED','CANCELLED') LIMIT 1`, [letterId, workflow!.invoice_revision],
-        );
-        if (prior.length) throw new Error("Revisi ini sudah memiliki tugas verifikasi.");
+        await assertInvoiceVerificationAssignment(conn, user, letter, workflow!, target);
       }
       if (purpose === "INVOICE_PAYMENT") {
         if (parentId || user.role !== "MANAGER" || target.role !== "FINANCE") {
@@ -196,18 +152,7 @@ export async function POST(request:Request) {
         throw new Error("Pilih instruksi pembayaran pengajuan untuk menugaskan Finance.");
       }
       if (purpose === "REQUEST_PAYMENT") {
-        if (parentId || user.role !== "MANAGER" || target.role !== "FINANCE" || letterStatus !== "APPROVED") {
-          throw new Error("Manager KSU menugaskan Nota Dinas yang telah disetujui langsung kepada Finance.");
-        }
-        const manager = await officialManager(conn, user.id);
-        if (manager.scope !== "KSU") throw new Error("Instruksi bayar hanya dapat dibuat Manager KSU.");
-        await requirePaymentDocuments(conn, letterId, workflow!, letter.document_type);
-        const [prior] = await conn.query<RowDataPacket[]>(
-          `SELECT 1 FROM siap_dispositions d JOIN siap_v11_dispositions v ON v.disposition_id=d.id
-           WHERE d.letter_id=? AND v.purpose='REQUEST_PAYMENT' AND d.status NOT IN ('RETURNED','CANCELLED') LIMIT 1`,
-          [letterId],
-        );
-        if (prior.length) throw new Error("Sudah ada instruksi pembayaran untuk pengajuan ini.");
+        await assertPaymentRequestAssignment(conn, user, letter, workflow!, target, parentId);
       }
       const taskVisibility = purpose !== "GENERAL" ? "PRIVATE"
         : (workflow || letter.confidentiality === "RAHASIA") && visibility === "PUBLIC" ? "ROUTE" : visibility;
