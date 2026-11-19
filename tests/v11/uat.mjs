@@ -92,6 +92,12 @@ async function register(id, manager = "ops", withProof = true, fields = {}, stat
   return letterAction("secretariat", id, "REGISTER_INCOMING",
     { routing_target_user_id: roles[manager].id, ...receipt, ...fields }, withProof ? ["receipt_file"] : [], status);
 }
+async function manuallySignNota(role, id) {
+  const { notaDocument } = await detail(role, id);
+  await post(role, `/api/letters/${id}/nota-document`, {
+    action: "DECLARE", source_id: notaDocument.source.id, reason: "SIMULASI pengirim mencatat tanda tangan manual.",
+  });
+}
 async function assign(role, letter, target, options = {}, status = 201) {
   return post(role, "/api/dispositions", { letter_id: letter, to_user_id: roles[target].id,
     instruction: subject("Instruksi"), ...options }, status);
@@ -410,6 +416,7 @@ try {
     const row = await post("staff", "/api/letters", {
       direction: "INTERNAL", document_type: "NOTA_DINAS", persekot: true, subject: subject("Persekot"),
       letter_date: old, routing_target_user_id: roles.ops.id, persekot_checklist: ["SPB", "BPK"],
+      nota_document_source: "GENERATED", summary: "SIMULASI permohonan persekot.",
     }, 201);
     state.persekot = row.id;
     await letterAction("staff", row.id, "SUBMIT", {}, [], 400);
@@ -418,6 +425,7 @@ try {
   await test(26, async () => {
     await call("staff", "/api/letters/" + state.persekot, { method: "PATCH",
       body: letterForm({ persekot_checklist: ["BPK", "SPK", "MARGIN"] }, ["spb_file"]) });
+    await manuallySignNota("staff", state.persekot);
     await letterAction("staff", state.persekot, "SUBMIT");
     const note = await detail("ops", state.persekot);
     assert(note.v11.spb_attachment_id);
@@ -447,7 +455,9 @@ try {
     const request = await post("staff", "/api/letters", {
       direction: "INTERNAL", document_type: "NOTA_DINAS", payment_request: true, subject: subject("Nonpersekot"),
       letter_date: old, routing_target_user_id: roles.ops.id,
+      nota_document_source: "GENERATED", summary: "SIMULASI permohonan pembayaran biasa.",
     }, 201);
+    await manuallySignNota("staff", request.id);
     await letterAction("staff", request.id, "SUBMIT");
     await letterAction("ops", request.id, "APPROVE_FINAL");
     await payRecipient("staff", request.id, "NON_VENDOR");
@@ -636,7 +646,9 @@ try {
     const nota = await post("ops", "/api/letters", {
       direction: "INTERNAL", document_type: "NOTA_DINAS", letter_date: old, subject: subject("Nota dari Manager"),
       routing_target_user_id: roles.dirut.id,
+      nota_document_source: "GENERATED", summary: "SIMULASI laporan dari Manager.",
     }, 201);
+    await manuallySignNota("ops", nota.id);
     assert.equal((await letterAction("ops", nota.id, "SUBMIT")).status,"PRESIDENT_DIRECTOR_REVIEW");
     await letterAction("dirut", nota.id, "APPROVE");
     const task = await assign("ops", nota.id, "staff");
@@ -1213,7 +1225,9 @@ try {
     const payRequest = await post("staff", "/api/letters", {
       direction: "INTERNAL", document_type: "NOTA_DINAS", payment_request: true, subject: subject("Finance-return"),
       letter_date: old, routing_target_user_id: roles.ops.id,
+      nota_document_source: "GENERATED", summary: "SIMULASI pengajuan untuk Finance.",
     }, 201);
+    await manuallySignNota("staff", payRequest.id);
     await letterAction("staff", payRequest.id, "SUBMIT");
     await letterAction("ops", payRequest.id, "APPROVE_FINAL");
     await payRecipient("staff", payRequest.id, "NON_VENDOR");
@@ -1558,10 +1572,174 @@ try {
     assert.equal(ledger.v11.payment_documents.invoiceAccess.locked, true);
     return "Staff pengaju, Staff verifikator, dan Manager mengubah jenis dari invoice yang sama. SPB, persetujuan ulang, dan penguncian Finance berjalan.";
   });
+  await test(63, async () => {
+    const fields = { direction: "INTERNAL", document_type: "NOTA_DINAS", letter_date: d,
+      subject: subject("Nota tanda tangan"), summary: "Mohon periksa PDF Nota Dinas simulasi.",
+      routing_target_user_id: roles.ops.id, nota_document_source: "GENERATED" };
+    const { id } = await post("staff", "/api/letters", fields, 201);
+    state.notaThread = id;
+    const url = "/api/letters/" + id;
+    const before = await detail("staff", id);
+    assert(before.notaDocument.source.id);
+    assert.equal(before.notaDocument.signed, null);
+    const pdfDownload = await call("staff", "/api/attachments/" + before.notaDocument.source.id, { raw: true });
+    assert.equal(pdfDownload.bytes.subarray(0, 5).toString(), "%PDF-");
+    await writeFile(path.join(out, "nota-dinas-demo.pdf"), pdfDownload.bytes);
+    const blocked = await letterAction("staff", id, "SUBMIT", {}, [], 400);
+    assert.match(blocked.error, /tanda tangan manual/);
+    await post("ops", url + "/nota-document", { action: "DECLARE", source_id: before.notaDocument.source.id, reason: "Bukan pengirim" }, 403);
+    await manuallySignNota("staff", id);
+    await post("staff", url + "/nota-document", { action: "RESET", source_id: before.notaDocument.source.id });
+    assert.equal((await detail("staff", id)).notaDocument.manualReason, null);
+    await call("staff", url, { method: "PATCH", body: { summary: "SIMULASI isi Nota Dinas direvisi." } });
+    assert.equal((await detail("staff", id)).notaDocument.source, null);
+    await post("staff", url + "/nota-document", { action: "DECLARE", source_id: before.notaDocument.source.id, reason: "PDF lama" }, 400);
+    const replacement = await post("staff", url + "/attachments", file(multipart({ kind: "ORIGINAL" }, []), "file", "Nota-tanda-tangan-manual.pdf"), 201);
+    await manuallySignNota("staff", id);
+    await letterAction("staff", id, "SUBMIT");
+    const review = await detail("ops", id);
+    assert.equal(review.notaDocument.source.id, replacement.id);
+    assert.match(review.notaDocument.manualReason, /tanda tangan manual/);
+    await letterAction("ops", id, "RESPONSE", { comment: "SIMULASI tanggapan Manager dengan lampiran." }, ["files"]);
+    const thread = await call("staff", url + "/responses");
+    assert.equal(thread.unread, 1);
+    assert.equal(thread.responses.length, 1);
+    assert.equal(thread.responses[0].files.length, 1);
+    assert((await call("staff", "/api/notifications")).items.some(item => item.href === `/letters/internal?letter_id=${id}&tanggapan=1` && !item.read_at));
+    await call("staff", url + "/responses", { method: "PATCH", body: { through: thread.lastNotificationId } });
+    assert.equal((await call("staff", url + "/responses")).unread, 0);
+    await call("staffkeu", url + "/responses", { status: 404 });
+    assert.equal((await detail("ops", id)).letter.status, "MANAGER_REVIEW");
+    const upload = await post("staff", "/api/letters", letterForm({ ...fields, subject: subject("Nota unggah PDF"),
+      nota_document_source: "UPLOAD" }), 201);
+    assert((await detail("staff", upload.id)).notaDocument.source);
+    return "Nota dapat menggunakan PDF SIAP atau unggahan. Status manual terlihat pada reviewer, PDF lama gugur saat revisi, dan tanggapan memberi notifikasi privat.";
+  });
+  await test(64, async () => {
+    const source = await incoming("xyz-langsung-ke-manager", { confidentiality: "RAHASIA" });
+    await register(source.id);
+    await letterAction("ops", source.id, "APPROVE");
+    await letterAction("dirops", source.id, "APPROVE");
+    const task = await assign("dirut", source.id, "ops", { instruction: "SIMULASI koordinasikan survei PT XYZ.", due_date: due });
+    state.dispositionPdf = task.id;
+    const url = "/api/dispositions/" + task.id;
+    await call("dirut", url + "/pdf", { status: 409 });
+    await start("ops", task.id);
+    assert.equal((await submit("ops", task.id, "Survei SIMULASI PT XYZ selesai.", ["files"])).status, "REVIEW_DIROPS");
+    await taskAction("dirut", task.id, "APPROVE_RESULT", {}, [], 400);
+    await taskAction("root", task.id, "APPROVE_RESULT", {}, [], 400);
+    assert.equal((await taskAction("dirops", task.id, "APPROVE_RESULT")).status, "REVIEW_DIRUT");
+    assert.equal((await taskAction("dirut", task.id, "APPROVE_RESULT")).status, "COMPLETED");
+    const report = await call("dirut", url + "/pdf", { raw: true });
+    assert.equal(report.response.headers.get("content-type"), "application/pdf");
+    assert.match(report.response.headers.get("content-disposition"), /Lembar-Disposisi-.*\.pdf/);
+    await writeFile(path.join(out, "lembar-disposisi-demo.pdf"), report.bytes);
+    await call("staffkeu", url + "/pdf", { status: 404 });
+    const oldTask = await assign("dirut", source.id, "ops");
+    await start("ops", oldTask.id);
+    await submit("ops", oldTask.id);
+    await sql.execute("UPDATE siap_dispositions SET status='REVIEW_DIRUT',current_owner_user_id=? WHERE id=?", [roles.dirut.id, oldTask.id]);
+    assert.equal((await taskDetail("dirut", oldTask.id)).disposition.needs_dirops_review, 1);
+    assert.equal((await taskAction("dirut", oldTask.id, "APPROVE_RESULT")).status, "REVIEW_DIROPS");
+    assert((await taskDetail("dirops", oldTask.id)).actions.some(action => action.action === "ROUTE_REVIEW_DIROPS"));
+    return "Hasil Manager langsung wajib melalui Dirops. Hasil lama dapat diarahkan ulang dan PDF selesai tetap mematuhi akses.";
+  });
+  await test(65, async () => {
+    const input = { submitted_on: d, mode: "PERSEKOT", payee: "Vendor Fiktif", expense_post: "Operasional",
+      details: { description: "SIMULASI pembelian dokumen PT XXI", dpp: "10000.50", ppn: "1100", pph: "200",
+        bank_name: "Bank Simulasi", account_number: "00192", account_name: "Vendor Fiktif" } };
+    const { id } = await post("staff", "/api/bpk", input);
+    state.bpk = id;
+    const url = "/api/bpk/" + id;
+    const patch = (role, path, body, status = 200) => call(role, path, { method: "PATCH", body, status });
+    assert.equal((await call("staff", url)).net, "10900.50");
+    await call("finance", url, { status: 404 });
+    await call("staffkeu", url + "/pdf", { status: 404 });
+    for (const [suffix, name] of [["", "bpk-demo.pdf"], ["?type=spb", "spb-demo.pdf"]]) {
+      const downloaded = await call("staff", url + "/pdf" + suffix, { raw: true });
+      assert.equal(downloaded.bytes.subarray(0, 5).toString(), "%PDF-");
+      await writeFile(path.join(out, name), downloaded.bytes);
+    }
+    await patch("staff", url, { ...input, action: "SUBMIT" });
+    await patch("finance", url, { action: "RETURN", reason: "SIMULASI lengkapi rekening penerima." });
+    assert.equal((await call("staff", url)).return_reason, "SIMULASI lengkapi rekening penerima.");
+    await patch("staff", url, { ...input, action: "SUBMIT" });
+    assert.equal((await call("staff", url)).return_reason, null);
+    await patch("staff", url, { action: "NUMBER", evidence_number: "SIM-" + runId }, 400);
+    await patch("finance", url, { action: "NUMBER", evidence_number: "SIM-" + runId, bpk_number: "BPK-" + runId });
+    await patch("finance", url, { action: "RECORD_PAYMENT", paid_on: d, paid_via: "Bank Simulasi" });
+    assert.equal((await call("staff", url)).status, "PAID");
+
+    const invoice = await incoming("bpk-dari-invoice", { type: "INVOICE_MASUK", business: { total: "900000", due_date: due } });
+    await register(invoice.id);
+    const prefill = await call("staff", "/api/bpk?invoice_id=" + invoice.id);
+    assert.equal(Number(prefill.invoiceTotal), 900000);
+    assert.match(prefill.prefill.details.description, /bpk-dari-invoice/);
+    const linkedInput = { ...prefill.prefill, invoice_id: invoice.id, details: { ...prefill.prefill.details, dpp: "900000" } };
+    const [draft, replay] = await Promise.all([1, 2].map(() => post("staff", "/api/bpk", linkedInput)));
+    assert.equal(draft.id, replay.id);
+    await patch("staff", "/api/bpk/" + draft.id, { ...linkedInput, action: "SUBMIT" });
+    const linked = await detail("ops", invoice.id);
+    const requirement = linked.v11.payment_documents.documents.find(item => item.code === "BPK");
+    assert.match(requirement.attachment.name, /BPK-Pengajuan/);
+    assert((await call("ops", "/api/attachments/" + requirement.attachment.id, { raw: true })).bytes.subarray(0, 5).toString() === "%PDF-");
+    await call("staff", "/api/bpk/" + draft.id + "/pdf?type=spb", { status: 409 });
+    await post("staff", "/api/letters/" + invoice.id + "/payment-documents", multipart({ invoice_payment_action: "SAVE_MODE",
+      invoice_payment_mode: "PERSEKOT", invoice_payment_revision: 0, persekot_reason: "SIMULASI uang muka." }, []));
+    assert.equal((await call("staff", "/api/bpk/" + draft.id)).mode, "PERSEKOT");
+    assert.equal((await call("staff", "/api/bpk/" + draft.id + "/pdf?type=spb", { raw: true })).response.headers.get("content-type"), "application/pdf");
+    await call("staffkeu", "/api/bpk?invoice_id=" + invoice.id, { status: 404 });
+    return "BPK mandiri, hitung neto, penomoran Accounting, unduh BPK/SPB dan tautan checklist dari invoice berhasil.";
+  });
+  await test(66, async () => {
+    await letterAction("ops", state.notaThread, "RESPONSE", { comment: "SIMULASI tanggapan baru untuk uji tampilan." });
+    const browser = await chromium.launch({ executablePath: env.SIAP_V11_CHROMIUM || undefined,
+      headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    try {
+      const mobile = await browser.newContext({ viewport: { width: 390, height: 844 } });
+      await mobile.addCookies([{ name: "siap_session", value: sessions.get("staff").slice("siap_session=".length), url: base.origin }]);
+      const page = await mobile.newPage();
+      const openPage = url => page.goto(new URL(url, base).href);
+      const detail = page.getByRole("dialog");
+      await openPage("/letters/internal?letter_id=" + state.notaThread);
+      const responses = detail.getByRole("button", { name: /^Tanggapan/ });
+      await responses.getByLabel("1 baru").waitFor({ timeout: 10000 });
+      await detail.getByRole("link", { name: "Unduh PDF Nota Dinas" }).waitFor();
+      await responses.click();
+      const thread = page.getByRole("dialog", { name: "Tanggapan Nota Dinas" });
+      await thread.getByText("SIMULASI tanggapan baru untuk uji tampilan.").waitFor();
+      await page.screenshot({ path: path.join(out, "05-tanggapan-nota-mobile.png") });
+      await thread.getByRole("button", { name: "Tutup dialog" }).click();
+      await responses.getByLabel("1 baru").waitFor({ state: "hidden" });
+      await openPage("/bpk");
+      await page.getByRole("button", { name: "+ Buat BPK", exact: true }).click();
+      await detail.getByLabel("Jenis Pengeluaran").selectOption("PERSEKOT");
+      await detail.getByLabel(/Dibayarkan Kepada/).fill("SIMULASI Vendor Tavama");
+      await detail.getByLabel(/Uraian \/ Keperluan/).fill("SIMULASI pengajuan BPK dari browser.");
+      await detail.getByLabel("Jumlah Rupiah (DPP)").fill("200000");
+      await detail.getByRole("button", { name: "Simpan Draf" }).click();
+      await detail.getByRole("link", { name: "Unduh SPB (PDF)" }).waitFor();
+      const download = page.waitForEvent("download");
+      await detail.getByRole("link", { name: "Unduh BPK (PDF)" }).click();
+      assert.match((await download).suggestedFilename(), /^BPK-.*\.pdf$/);
+      await page.screenshot({ path: path.join(out, "06-bpk-mobile.png") });
+      assert(await detail.evaluate(node => node.scrollWidth <= node.clientWidth + 2));
+      await mobile.close();
+      const desktop = await browser.newContext({ viewport: { width: 1440, height: 960 } });
+      await desktop.addCookies([{ name: "siap_session", value: sessions.get("dirut").slice("siap_session=".length), url: base.origin }]);
+      const directorPage = await desktop.newPage();
+      await directorPage.goto(new URL("/dispositions?disposition_id=" + state.dispositionPdf, base).href);
+      await directorPage.getByRole("link", { name: "Unduh Lembar Disposisi (PDF)" }).waitFor();
+      await directorPage.screenshot({ path: path.join(out, "07-disposisi-pdf-desktop.png") });
+    } finally {
+      await browser.close();
+    }
+    return "Chromium menampilkan badge tanggapan, PDF Nota Dinas, form dan unduhan BPK/SPB di ponsel, serta tautan PDF disposisi di desktop.";
+  });
 } finally {
   await sql.end();
   await writeFile(path.join(out, "uat.json"), JSON.stringify({ runId, db: profile.version, cases: result }, null, 2));
 }
 const totals = Object.fromEntries(["PASS","FAIL","SKIP"].map(status => [status,result.filter(row=>row.status===status).length]));
 console.log(JSON.stringify(totals));
-if (totals.FAIL || result.length !== 62) process.exitCode=1;
+if (totals.FAIL || result.length !== 66) process.exitCode=1;

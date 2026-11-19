@@ -9,6 +9,7 @@ import { auditLog } from "@/lib/audit";
 import { required, str } from "@/lib/http";
 import { letterAccess } from "@/lib/letter-access";
 import { dispositionAccess } from "@/lib/disposition-access";
+import { missingDiropsReview } from "@/lib/disposition-history";
 import { resultRequirement, reviewRole } from "@/lib/correspondence-workflow";
 import { INVOICE_INCOMING } from "@/lib/business-documents";
 import { taskPurpose, v11Enabled, v11Letter } from "@/lib/v11-data";
@@ -31,6 +32,7 @@ export async function GET() {
       fu.name AS from_name,fu.role AS from_role,
       tu.name AS to_name,tu.role AS to_role,
       cu.name AS current_owner_name,cu.role AS current_owner_role,
+      ${missingDiropsReview} AS needs_dirops_review,
       (SELECT COUNT(*) FROM siap_attachments a WHERE a.disposition_id=d.id) AS attachment_count
      FROM siap_dispositions d
      JOIN siap_letters l ON l.id=d.letter_id

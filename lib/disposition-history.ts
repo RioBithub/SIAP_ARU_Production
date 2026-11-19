@@ -7,6 +7,19 @@ import type { SessionUser } from "@/lib/types";
 type Queryable = Pick<PoolConnection, "query">;
 export type HistoryTask = RowDataPacket & { id: string; letter_id: string; parent_id: string | null };
 
+// Recognize pending results created before the Dirops review was required.
+export const missingDiropsReview = `(
+  d.status='REVIEW_DIRUT' AND fu.role='PRESIDENT_DIRECTOR' AND tu.role<>'DIRECTOR_OPS'
+  AND NOT EXISTS (
+    SELECT 1 FROM siap_disposition_actions review
+    WHERE review.disposition_id=d.id AND review.action='APPROVE_RESULT'
+      AND review.from_status='REVIEW_DIROPS' AND review.to_status='REVIEW_DIRUT'
+      AND review.created_at>=COALESCE(
+        (SELECT MAX(submitted.created_at) FROM siap_disposition_actions submitted
+         WHERE submitted.disposition_id=d.id AND submitted.action='SUBMIT_RESULT'),d.created_at)
+  )
+)`;
+
 export async function listHistoryTasks(conn: Queryable, user: SessionUser, letterIds: string[], outgoingReport = false) {
   if (!letterIds.length) return [];
   const access = dispositionAccess(user);

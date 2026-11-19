@@ -79,3 +79,18 @@ Tes API dan Chromium di database terisolasi dengan gateway Mekari simulasi mempr
 Build dan typecheck lulus pada Node 20.20.2. Regresi lokal mencatat 48 lulus, tanpa kegagalan. Dua skenario Sandbox eksternal dilewati oleh runner lokal.
 
 UAT-019 memblokir instruksi pembayaran Invoice Masuk dengan SPK tertaut ketika dokumen dasar belum lengkap. UAT-024 menunjukkan bahwa Invoice Masuk tanpa referensi wajib memiliki berkas SPK, tanpa SPB. UAT-026 menguji Persekot dengan SPB lama dan syarat rekening vendor, serta Nota Dinas pembayaran nonpersekot tanpa SPB. Finance hanya menerima disposisi setelah Manager KSU membuat instruksi yang memenuhi syarat. Migrasi dapat diterapkan dua kali. Backup dan restore lokal mencocokkan 39 tabel.
+
+## BPK, Nota Dinas dan lembar disposisi
+
+19 November 2026 · Run 43C0C1B menghasilkan **64 PASS, 0 FAIL, 2 SKIP dari 66 skenario** dalam staging lokal. `npm ci`, typecheck, dan build sukses. Migrasi tambahan diterapkan dua kali dengan data lama identik. Backup dipulihkan dan diverifikasi pada 43 tabel.
+
+| Kasus | Hasil |
+| --- | --- |
+| UAT-063 | Nota Dinas menerima PDF dari SIAP atau unggahan. Pengajuan tertahan sebelum ada tanda tangan. Revisi membatalkan keterkaitan PDF sebelumnya. Reviewer bisa melihat pernyataan tanda tangan manual dan mengirim tanggapan dengan lampiran. |
+| UAT-064 | Hasil Manager dari penugasan langsung Dirut wajib melalui Dirops. Tugas lama yang masih di Dirut bisa dirutekan ulang. Peserta berwenang bisa mengunduh PDF saat tugas selesai. |
+| UAT-065 | Pengajuan dan pengembalian BPK mandiri, neto dengan desimal, penomoran, bukti pembayaran, PDF BPK/SPB, dan tautan checklist invoice lulus. Setelah invoice beralih ke persekot, SPB bisa diunduh. |
+| UAT-066 | Chromium 390 px dan 1440 px memverifikasi badge tanggapan, PDF Nota Dinas, form dan unduhan BPK, serta tombol PDF disposisi. |
+
+Sepuluh tes adapter Mekari lulus. Uji tambahan memakai gateway simulasi untuk prediksi posisi, dua penandatangan berurutan, status tertunda, dan unduhan PDF final oleh reviewer setelah Nota Dinas diajukan. Akses hasil oleh akun lain ditolak. UAT-043 dan UAT-045 dilewati pada run lokal karena memerlukan koneksi vendor. Hasil smoke VPS sebelumnya tercatat di bagian Pemeriksaan Sandbox eksternal dari VPS.
+
+Keempat kasus Pak Nor juga lulus pada skema terpisah. PT XYZ memperlihatkan hasil yang naik dari Staff ke Manager, Dirops, lalu Dirut, dengan PDF tersedia setelah selesai.

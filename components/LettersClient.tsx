@@ -17,6 +17,8 @@ import SearchableSelect from "@/components/SearchableSelect";
 import { formatWorkflowTime } from "@/lib/workflow-time";
 import AttachmentSandbox from "@/components/AttachmentSandbox";
 import V11SigningPanel from "@/components/V11SigningPanel";
+import NotaDocumentPanel from "@/components/NotaDocumentPanel";
+import NotaResponses from "@/components/NotaResponses";
 import { PersekotFields, ReceiptFields, UnitField, WorkflowSummary } from "@/components/V11LetterFields";
 
 type TrashOperation = "trash" | "restore" | "purge";
@@ -136,6 +138,7 @@ export default function LettersClient({direction,user}:Props){
   const [message,setMessage]=useState("");
   const [error,setError]=useState("");
   const [createOpen,setCreateOpen]=useState(false);
+  const [notaSource,setNotaSource]=useState<"GENERATED"|"UPLOAD">("GENERATED");
   const [detail,setDetail]=useState<any>(null);
   const [detailOpen,setDetailOpen]=useState(false);
   const [editOpen,setEditOpen]=useState(false);
@@ -254,6 +257,7 @@ export default function LettersClient({direction,user}:Props){
 
   function openCreate(){
     setNotaKind("NOTA");
+    setNotaSource("GENERATED");
     setFormatId("");
     setLetterDate(today());
     setCustomBase("");
@@ -310,6 +314,7 @@ export default function LettersClient({direction,user}:Props){
       body.is_public = body.is_public === "on";
       delete body.original_file;
       delete body.additional_files;
+      if (direction==="INTERNAL" && v11Enabled) body.nota_document_source=notaSource;
       if (direction==="INTERNAL" && notaKind==="PAYMENT_REQUEST") body.payment_request=true;
       if (direction==="INTERNAL" && persekot) {
         body.persekot=true;
@@ -361,6 +366,8 @@ export default function LettersClient({direction,user}:Props){
       if (failedFiles.length) {
         await openDetail(result.data.id);
         setError("Dokumen tersimpan. Unggah ulang file berikut dari detail dokumen: " + failedFiles.join(", "));
+      } else if (direction==="INTERNAL" && v11Enabled) {
+        await openDetail(result.data.id);
       }
     } catch {
       setError("Gagal memuat hasil penyimpanan. Cek daftar dokumen sebelum mencoba kembali.");
@@ -575,16 +582,6 @@ export default function LettersClient({direction,user}:Props){
         if(detail.v11) buttons.push(["REJECT","Tolak Final","btn-danger",true]);
       }
     }
-    const participated=
-      user.role==="ROOT_ADMIN" ||
-      detail.letter.created_by===user.id ||
-      detail.letter.current_owner_user_id===user.id ||
-      Boolean(detail.actions?.some((a:any)=>a.actor_user_id===user.id));
-
-    if(d==="INTERNAL" && participated && s!=="CANCELLED"){
-      buttons.push(["RESPONSE","Beri Tanggapan","btn-secondary",true,false]);
-    }
-
     if(d==="OUTGOING"&&s==="READY_TO_ISSUE"&&handlesSecretariat)
       buttons.push(["PREPARE_ISSUE","Finalisasi Nomor","btn-primary"]);
     if(d==="OUTGOING"&&(secretariat?s==="WAITING_SIGNATURE"&&handlesSecretariat
@@ -604,15 +601,18 @@ export default function LettersClient({direction,user}:Props){
       (["ROOT_ADMIN","DIRECTOR_OPS","PRESIDENT_DIRECTOR"].includes(user.role)||letter.routing_target_user_id===user.id))
       buttons.push(["COMPLETE","Tandai Selesai","btn-success"]);
     if(detail.approvalId) buttons.push(["UNDO_APPROVAL","Batalkan Persetujuan","btn-secondary",true]);
-    return buttons.map(b=><button key={b[0]} className={`btn ${b[2]}`} onClick={()=>startAction(b[0],b[1],Boolean(b[3]),Boolean(b[4]))}>{b[1]}</button>);
+    return buttons.map(b=><button key={b[0]} className={`btn ${b[2]}`}
+      disabled={b[0]==="SUBMIT"&&Boolean(detail.notaDocument&&!detail.notaDocument.signed&&!detail.notaDocument.manualReason)}
+      onClick={()=>startAction(b[0],b[1],Boolean(b[3]),Boolean(b[4]))}>{b[1]}</button>);
   }
 
   const generalAttachments=useMemo(()=>detail?.attachments?.filter((a:any)=>
-    !a.letter_action_id&&a.source_kind!=="PAYMENT_DOCUMENT")||[],[detail]);
+    !a.letter_action_id&&a.source_kind!=="PAYMENT_DOCUMENT"&&
+    a.id!==detail.notaDocument?.source?.id&&a.id!==detail.notaDocument?.signed?.id)||[],[detail]);
   const receiptFile=detail?.attachments?.find((file:any)=>file.id===detail.v11?.receipt_attachment_id);
   const signingFiles=(detail?.attachments??[]).filter((file:any)=>!file.letter_action_id&&(
     ["ADDITIONAL","PAYMENT_DOCUMENT"].includes(file.attachment_kind)||
-    (file.attachment_kind==="ORIGINAL"&&file.id===detail?.originalId)));
+    (file.attachment_kind==="ORIGINAL"&&file.id===detail?.originalId&&!detail.notaDocument)));
 
   const pageDescription=direction==="INCOMING"
     ?"Registrasi surat eksternal yang diterima perusahaan, review, return, attachment, dan histori."
@@ -691,7 +691,8 @@ export default function LettersClient({direction,user}:Props){
       {hasSecretariat?"Surat dengan alur Sekretariat masuk antrian penerbitan setelah ACC. Cek administrasi sebelum ACC mengikuti jenis surat."
         :"Pilih Manager reviewer saat membuat draf. Setelah ACC Dirut, penyusun dapat menerbitkan surat dari detail."}
     </div>}
-    {direction==="INTERNAL"&&<div className="notice" style={{marginBottom:13}}><b>Nota Dinas dapat dibuat oleh seluruh role SIAP.</b><br/>Pembuat memilih Manager tujuan, mengisi perihal/ringkasan, dan dapat melampirkan dokumen pendukung. Manager dapat memberi tanggapan, menyelesaikan di levelnya, meneruskan ke Dirops, atau mengembalikan ke pembuat untuk revisi. Setiap tahap dapat membawa catatan dan lampiran tambahan. <b>Semua dokumen yang tersimpan dapat diunduh kembali dari Detail Nota Dinas.</b> Disposisi tetap digunakan untuk instruksi/tindak lanjut pimpinan kepada PIC, bukan sebagai pengganti Nota Dinas.</div>}
+    {direction==="INTERNAL"&&<div className="notice" style={{marginBottom:13}}><b>Nota Dinas dapat dibuat oleh seluruh role SIAP.</b><br/>
+      Pilih tujuan, isi nota, lalu buat atau unggah PDF. Tanda tangani sebelum mengajukan. Gunakan tombol Tanggapan untuk mengikuti pembahasan.</div>}
 
     {message&&<div className="success" style={{marginBottom:12}}>{message}</div>}{error&&<div className="error" style={{marginBottom:12}}>{error}</div>}
     <div className="toolbar letter-filter-bar">
@@ -849,7 +850,18 @@ export default function LettersClient({direction,user}:Props){
           </div>)}
         {businessForm&&<BusinessDocumentFields key={createType} documentType={createType} outgoing={direction==="OUTGOING"}
           requireDueDate={v11Enabled&&createType===INVOICE_INCOMING}/>}
-        <div className="field full"><label>{incomingFileRequired?"Dokumen Asli (wajib)":direction==="OUTGOING"?"File Draft / Dokumen Utama (opsional)":direction==="INTERNAL"?"Dokumen Utama / Pengantar (opsional)":"Surat Asli (opsional)"}</label><input aria-label="Dokumen asli" className="input" type="file" name="original_file" required={incomingFileRequired} accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg"/><span className="hint">Maksimal 10 MB. Dokumen original disimpan tanpa kompresi. Lampiran proses/tambahan dikompresi bila efektif.</span></div>
+        {direction==="INTERNAL"&&v11Enabled&&<label className="field full"><span>Sumber PDF Nota Dinas</span>
+          <select className="select" value={notaSource} onChange={e=>setNotaSource(e.target.value as typeof notaSource)} required>
+            <option value="GENERATED">Buat PDF dari Isi Nota</option><option value="UPLOAD">Unggah PDF sendiri</option>
+          </select>
+          {notaSource==="GENERATED"&&<small className="hint">Isi Ringkasan / Isi Ringkas untuk mencetak isi nota, lalu tandatangani PDF setelah draf tersimpan.</small>}
+        </label>}
+        {!(direction==="INTERNAL"&&v11Enabled&&notaSource==="GENERATED")&&<div className="field full">
+          <label>{incomingFileRequired?"Dokumen Asli (wajib)":direction==="OUTGOING"?"File Draft / Dokumen Utama (opsional)":direction==="INTERNAL"?"PDF Nota Dinas":"Surat Asli (opsional)"}</label>
+          <input aria-label={direction==="INTERNAL"?"PDF Nota Dinas":"Dokumen asli"} className="input" type="file" name="original_file"
+            required={incomingFileRequired||direction==="INTERNAL"&&v11Enabled}
+            accept={direction==="INTERNAL"&&v11Enabled?".pdf,application/pdf":".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg"}/>
+          <span className="hint">Maksimal 10 MB.</span></div>}
         <div className="field full"><label>Lampiran Tambahan <span className="muted">(opsional, maksimal 5 file)</span></label><input className="input" type="file" name="additional_files" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.txt,.csv"/><span className="hint">Lampiran tambahan maksimal 10 MB per file dan dikompresi otomatis bila hasilnya lebih kecil. Cocok untuk data pendukung, hasil telaah, atau bukti proses.</span></div>
         <div className="field full" style={{display:"flex",justifyContent:"flex-end",gap:8,flexDirection:"row"}}><button type="button" className="btn btn-secondary" disabled={createBusy} onClick={()=>setCreateOpen(false)}>Batal</button><button className="btn btn-primary" disabled={createBusy||sourceLoading}>{createBusy?"Menyimpan...":direction==="INCOMING"?(incomingToSecretariat?"Kirim ke Sekretariat":"Registrasi & Teruskan"):"Simpan Draft"}</button></div>
       </form>
@@ -888,9 +900,11 @@ export default function LettersClient({direction,user}:Props){
           <div style={{marginTop:13}} className="notice">{detail.letter.summary||"Belum ada ringkasan."}</div>
           {detail.business&&<BusinessDocumentSummary details={detail.business} documentType={detail.letter.document_type}/>}
           <WorkflowSummary data={detail.v11} date={detail.letter.received_date} files={detail.attachments}/>
+          {detail.notaDocument&&<NotaDocumentPanel key={`nota-${detail.letter.id}`} id={detail.letter.id}
+            data={detail.notaDocument} refresh={()=>refreshDetail(detail.letter.id)}/>}
           {detail.v11?.payment_documents && <PaymentDocumentsPanel key={`payment-${detail.letter.id}`} id={detail.letter.id}
             data={detail.v11.payment_documents} attachments={detail.attachments} onSaved={()=>refreshDetail(detail.letter.id)}/>}
-          {detail.sandboxSigning && <AttachmentSandbox key={`attachment-sandbox-${detail.letter.id}`}
+          {detail.sandboxSigning && (!detail.notaDocument || signingFiles.length>0) && <AttachmentSandbox key={`attachment-sandbox-${detail.letter.id}`}
             files={signingFiles}/>}
           {!detail.sandboxSigning&&detail.v11&&detail.letter.status==="WAITING_SIGNATURE"&&canHandleSecretariat(user.role)&&
             <V11SigningPanel key={`letter-signing-${detail.letter.id}`} id={detail.letter.id} files={signingFiles} onReady={setSigningReady}/>}
@@ -906,11 +920,14 @@ export default function LettersClient({direction,user}:Props){
               <a className="btn btn-primary" href={`/dispositions?letter_id=${detail.letter.id}&purpose=INVOICE_VERIFY`}>Tugaskan Verifikasi Invoice</a>}
             {detail.v11?.payment && detail.letter.status==="APPROVED" && financeManager && detail.v11.payment.status!=="PAID" && !detail.v11.payment_documents?.missing.length &&
               <a className="btn btn-primary" href={`/dispositions?letter_id=${detail.letter.id}&purpose=INVOICE_PAYMENT`}>Instruksi Bayar & Catat</a>}
+            {detail.v11?.payment && <a className="btn btn-secondary" href={`/bpk?invoice_id=${detail.letter.id}`}>BPK untuk Invoice</a>}
             {["PERSEKOT","PAYMENT_REQUEST"].includes(detail.v11?.kind) && detail.letter.status==="APPROVED" &&
               financeManager && !detail.v11.payment_documents?.missing.length &&
               <a className="btn btn-primary" href={`/dispositions?letter_id=${detail.letter.id}&purpose=REQUEST_PAYMENT`}>Instruksi Bayar Pengajuan</a>}
             {direction!=="OUTGOING"&&canDraftOutgoing&&!["CANCELLED","REJECTED"].includes(detail.letter.status)&&
               <a className="btn btn-secondary" href={"/letters/outgoing?source_letter_id="+encodeURIComponent(detail.letter.id)}>Buat Draf Surat Keluar</a>}
+            {direction==="INTERNAL"&&<NotaResponses key={`responses-${detail.letter.id}`} id={detail.letter.id}
+              refreshHistory={()=>refreshDetail(detail.letter.id)}/>}
             {actionButtons()}
           </div>
 
@@ -921,7 +938,7 @@ export default function LettersClient({direction,user}:Props){
               {!generalAttachments.length&&<div className="empty">Belum ada lampiran umum.</div>}
               {error&&!editOpen&&!pendingAction&&<div className="error" role="alert">{error}</div>}
               <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:10}}>
-                {(!detail.letter.uses_secretariat||direction!=="OUTGOING"||["DRAFT","RETURNED_STAFF"].includes(detail.letter.status))
+                {!detail.notaDocument&&(!detail.letter.uses_secretariat||direction!=="OUTGOING"||["DRAFT","RETURNED_STAFF"].includes(detail.letter.status))
                   &&(detail.letter.created_by===user.id||user.role==="ROOT_ADMIN"||
                   (detail.letter.status==="SECRETARIAT_INTAKE"&&canHandleSecretariat(user.role)))&&
                   <label className="btn btn-secondary">{detail.originalId?"Ganti Dokumen Utama":"+ Dokumen Utama"}<input hidden type="file" aria-label="Unggah dokumen utama" accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg" onChange={async e=>{

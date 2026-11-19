@@ -38,7 +38,7 @@ flowchart TD
   D -->|Return dengan alasan| A
 ```
 
-Hubungan tugas asal mengikuti `parent_id`. Dirut dapat menugaskan Dirops atau Manager. Dirops meneruskan ke Manager. Manager menugaskan Staff/PIC atau Finance sesuai kewenangan. Hasil kembali ke pemberi tiap tugas. Tugas induk dapat diajukan setelah seluruh tugas anak selesai, dikembalikan sebagai tugas utuh, atau dibatalkan secara sah. Surat hasil harus terbit dan berasal dari tugas yang sama atau dari hasil akhir anak yang benar-benar telah di-ACC. Penerbitan dan ACC hasil tetap tindakan terpisah.
+Hubungan tugas asal mengikuti `parent_id`. Dirut dapat menugaskan Dirops atau Manager. Dirops meneruskan ke Manager. Manager menugaskan Staff/PIC atau Finance sesuai kewenangan. Ketika Dirut menugaskan Manager langsung, hasil Manager masuk ke **Review Dirops** sebelum **Review Dirut**. Hasil lama yang masih menunggu Dirut dan melewati Dirops dapat dikirim melalui **Teruskan Hasil ke Dirops**. Tugas induk dapat diajukan setelah seluruh tugas anak selesai, dikembalikan sebagai tugas utuh, atau dibatalkan secara sah. Surat hasil harus terbit dan berasal dari tugas yang sama atau dari hasil akhir anak yang telah di-ACC. Penerbitan dan ACC hasil mengikuti tahap masing-masing. Setelah status selesai, peserta yang berwenang dapat mengunduh **Lembar Disposisi (PDF)** dan **Riwayat (.xlsx)** dari detail.
 
 ## Hak akses
 
@@ -60,7 +60,7 @@ Hubungan tugas asal mengikuti `parent_id`. Dirut dapat menugaskan Dirops atau Ma
 | Bukti terima | Jam, metode, pengantar, penerima, tanggal, dokumen asli dan file bukti tervalidasi sebelum registrasi. |
 | Invoice Masuk | Dokumen `APPROVED` terpisah dari buku utang `OPEN → PARTIAL → PAID`. `COMPLETE` mensyaratkan verifikasi terbaru, lunas dan semua tugas terminal. |
 | Disposisi | `UNSEEN → SEEN/IN_PROGRESS → REVIEW_* → COMPLETED`. Return hasil kembali ke `IN_PROGRESS`. `RETURNED` dan `CANCELLED` menutup tugas dengan alasan. |
-| Nota Dinas | `DRAFT → MANAGER_REVIEW`. Pengusul Manager dapat memilih Dirops atau Dirut. Pengajuan Persekot perlu SPB PDF pada submit. Dokumen checklist lain mengikuti SOP kasus. |
+| Nota Dinas | `DRAFT → MANAGER_REVIEW`. Pengusul Manager dapat memilih Dirops atau Dirut. Sebelum mengajukan Nota Dinas V11, pembuat membuat atau mengunggah PDF lalu menandatangani melalui Sandbox atau mencatat tanda tangan manual. Pengajuan Persekot juga perlu SPB PDF. |
 | Surat Keluar | `DRAFT → MANAGER_REVIEW → DIRECTOR_OPS_REVIEW → PRESIDENT_DIRECTOR_REVIEW → READY_TO_ISSUE → WAITING_SIGNATURE → ISSUED`. Tanggal, penerima, kanal dan bukti kirim dicatat setelah terbit. Nomor historis tetap di ledger. |
 
 Unit Operasional diarahkan ke Manager Operasional. Keuangan, SDM dan Umum diarahkan ke Manager KSU. Unit IT, Pengadaan, Legal dan PIC memerlukan pilihan Manager secara eksplisit. Staff untuk verifikasi harus punya unit yang sesuai. Manager Gedung tetap tersedia untuk riwayat dan sesi lama yang berhak.
@@ -72,6 +72,8 @@ Invoice yang sudah mempunyai nomor di buku utang tidak dibuat ulang otomatis. No
 Notifikasi di aplikasi mengikuti penerima review surat, disposisi baru, pengembalian hasil dan hasil yang disetujui. Persetujuan invoice memberi tahu Manager KSU untuk menyiapkan instruksi Finance. Event notifikasi disimpan bersama audit dalam transaksi perubahan workflow. Daftar dan penanda baca tersedia untuk penerima dengan pemeriksaan akses dokumen pada setiap permintaan.
 
 Header aplikasi memperbarui jumlah notifikasi setiap 15 detik saat halaman aktif. Klik notifikasi membuka dokumen atau tugas dan mencatat waktu baca. Histori surat dan disposisi menyimpan rincian transisi.
+
+Pada Nota Dinas, tombol **Tanggapan** membuka pembahasan termasuk waktu dan lampiran. Badge menampilkan pesan baru untuk penerima. Notifikasi membawa penerima langsung ke pembahasan. Tanggapan tercatat di riwayat surat. Jika perihal, penerima atau isi nota berubah saat revisi, siapkan kembali PDF utama dan catat tanda tangan pada versi terbaru.
 
 Bagian verifikasi invoice menampilkan **Menunggu Verifikasi**, **Disetujui**, atau **Ditolak**. Persetujuan hasil unit berlaku untuk revisi aktif. Penolakan final pada dokumen menampilkan Ditolak. Pembayaran dapat diproses setelah persetujuan dokumen dan instruksi Manager KSU kepada Finance.
 
@@ -99,3 +101,9 @@ Manager KSU membuat disposisi pembayaran setelah pengajuan disetujui dan semua p
 Untuk Invoice Masuk V11, Staff pengaju, Staff verifikator revisi aktif, atau Manager penanggung jawab dapat memilih **Pembayaran Biasa** atau **Persekot** di checklist invoice atau disposisi. Simpan alasan persekot, lalu unggah SPB di checklist yang sama. Perubahan setelah verifikasi atau persetujuan wajib disetujui ulang oleh Manager sebelum instruksi Finance dibuat. Selama instruksi berlaku, jenis pembayaran dan SPB terkunci. Pengembalian atau pembatalan instruksi membuka edit selama invoice belum memiliki instruksi bayar lain yang masih berlaku atau selesai.
 
 Terapkan `database/migrations/2026-11-18-v11-payment-documents.sql` dan `database/migrations/2026-11-19-v11-invoice-payment-mode.sql` setelah migrasi V11. Invoice yang sudah ada memakai jenis Pembayaran Biasa sebagai nilai awal. Pengajuan V11 yang masih berjalan perlu mengisi persyaratan yang kurang sebelum masuk atau meneruskan proses Finance.
+
+## Bukti Pengeluaran Keuangan
+
+Semua akun internal dapat membuat BPK mandiri lewat **Keuangan → Bukti Pengeluaran (BPK)**. Pada invoice V11, Staff atau PIC yang berwenang dapat membuka **BPK untuk Invoice**, memeriksa data awal, dan mengisi DPP, PPN, potongan PPh, serta rincian penerima. Saat diajukan, PDF ditautkan ke **BPK Pengajuan** pada checklist yang sama.
+
+Finance atau Root Admin mencatat nomor bukti Accounting. Untuk BPK mandiri, Finance mencatat tanggal pembayaran, bank atau kas, dan referensi. Untuk invoice, bagian pembayaran membaca transaksi yang sudah disetujui di alur Finance. PDF SPB tersedia untuk persekot dan dapat diproses sesuai checklist.

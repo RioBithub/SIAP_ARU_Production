@@ -8,7 +8,17 @@ export async function notifyWorkflow(conn: Connection, event: {
   if (process.env.SIAP_V11_ENABLED !== "1" || !event.entityId) return;
   const recipients = new Set<string>();
   let title: string;
-  if (event.entityType === "LETTER" &&
+  if (event.entityType === "LETTER" && event.action === "LETTER_RESPONSE") {
+    const [people] = await conn.query<RowDataPacket[]>(
+      `SELECT created_by AS user_id FROM siap_letters WHERE id=? AND direction='INTERNAL' AND deleted_at IS NULL
+       UNION SELECT current_owner_user_id FROM siap_letters WHERE id=? AND direction='INTERNAL' AND deleted_at IS NULL
+       UNION SELECT actor_user_id FROM siap_letter_actions
+       WHERE letter_id=? AND action IN ('RESPONSE','APPROVE','APPROVE_FINAL','RETURN','RETURN_PREVIOUS','REJECT')`,
+      [event.entityId, event.entityId, event.entityId],
+    );
+    for (const person of people) if (person.user_id) recipients.add(String(person.user_id));
+    title = "Tanggapan baru pada Nota Dinas";
+  } else if (event.entityType === "LETTER" &&
       /^LETTER_(CREATE|REGISTER_INCOMING|SUBMIT|APPROVE|APPROVE_FINAL|RETURN|RETURN_PREVIOUS|REJECT|ISSUE|MARK_SENT|UNDO_APPROVAL|COMPLETE|PREPARE_ISSUE)$/.test(event.action)) {
     const [rows] = await conn.query<RowDataPacket[]>(
       "SELECT l.*,v.kind AS workflow_kind FROM siap_letters l JOIN siap_v11_letters v ON v.letter_id=l.id WHERE l.id=? AND l.deleted_at IS NULL", [event.entityId],
@@ -42,7 +52,7 @@ export async function notifyWorkflow(conn: Connection, event: {
     } as Record<string, string>)[event.action] || (letter.status === "APPROVED"
       ? "Dokumen disetujui untuk ditindaklanjuti" : "Surat menunggu persetujuan berikutnya");
   } else if (event.entityType === "DISPOSITION" &&
-      /^DISPOSITION_(CREATE|SUBMIT_RESULT|RETURN_RESULT|RETURN_TASK|REASSIGN_TASK|APPROVE_RESULT|CANCEL_TASK)$/.test(event.action)) {
+      /^DISPOSITION_(CREATE|SUBMIT_RESULT|RETURN_RESULT|RETURN_TASK|REASSIGN_TASK|APPROVE_RESULT|ROUTE_REVIEW_DIROPS|CANCEL_TASK)$/.test(event.action)) {
     const [rows] = await conn.query<RowDataPacket[]>(
       `SELECT d.* FROM siap_dispositions d JOIN siap_v11_dispositions v ON v.disposition_id=d.id WHERE d.id=?`,
       [event.entityId],
@@ -57,7 +67,9 @@ export async function notifyWorkflow(conn: Connection, event: {
       DISPOSITION_RETURN_RESULT: "Hasil disposisi perlu diperbaiki",
       DISPOSITION_RETURN_TASK: "Disposisi dikembalikan",
       DISPOSITION_REASSIGN_TASK: "Disposisi ditugaskan ulang untuk Anda",
-      DISPOSITION_APPROVE_RESULT: "Hasil disposisi disetujui",
+      DISPOSITION_APPROVE_RESULT: task.status === "REVIEW_DIRUT"
+        ? "Hasil disposisi siap diperiksa Dirut" : "Hasil disposisi disetujui",
+      DISPOSITION_ROUTE_REVIEW_DIROPS: "Hasil disposisi menunggu pemeriksaan Dirops",
       DISPOSITION_CANCEL_TASK: "Disposisi dibatalkan",
     } as Record<string, string>)[event.action];
   } else {

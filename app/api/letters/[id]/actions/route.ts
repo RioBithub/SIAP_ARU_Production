@@ -1,5 +1,7 @@
 import crypto from "crypto";
 import { NextResponse } from "next/server";
+import { notaDocument } from "@/lib/nota-document";
+import { canRespondToNota } from "@/lib/nota-responses";
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { getCurrentUser } from "@/lib/auth";
 import { withTransaction } from "@/lib/db";
@@ -193,6 +195,13 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
           if (workflow.kind === "PERSEKOT" && !workflow.spb_attachment_id) {
             throw new Error("Unggah SPB PDF pada pengajuan persekot sebelum diajukan.");
           }
+          if (direction === "INTERNAL") {
+            const document = await notaDocument(conn, params.id);
+            if (!document?.source) throw new Error("Buat atau unggah PDF Nota Dinas sebelum mengajukan.");
+            if (!document.signed && !document.manualReason) {
+              throw new Error("Tandatangani PDF dengan Mekari Sandbox atau catat tanda tangan manual sebelum mengajukan.");
+            }
+          }
           if (direction === "INTERNAL" && letter.current_role === "MANAGER" && status === "DRAFT"
               && user.role !== "ROOT_ADMIN" && user.role === "MANAGER") {
             target = await activeReviewer(conn, letter.routing_target_user_id, ["DIRECTOR_OPS", "PRESIDENT_DIRECTOR"]);
@@ -345,21 +354,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         if(!comment)
           throw new Error("Isi tanggapan wajib diisi.");
 
-        const [prior]=await conn.query<RowDataPacket[]>(
-          `SELECT 1
-           FROM siap_letter_actions
-           WHERE letter_id=? AND actor_user_id=?
-           LIMIT 1`,
-          [params.id,user.id]
-        );
-
-        const canRespond =
-          user.role==="ROOT_ADMIN" ||
-          String(letter.created_by)===String(user.id) ||
-          String(letter.current_owner_user_id||"")===String(user.id) ||
-          Boolean(prior[0]);
-
-        if(!canRespond)
+        if(!await canRespondToNota(conn, user, letter))
           throw new Error("Anda bukan pihak dalam Nota Dinas ini.");
 
         // RESPONSE tidak mengubah status / owner.

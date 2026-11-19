@@ -14,6 +14,7 @@ import { assertInvoiceVerificationAssignment, assertPaymentRequestAssignment, di
 import { saveProof, v11Letter } from "@/lib/v11-data";
 import { decidePayment, preparePaymentTask, recordPayment } from "@/lib/v11-finance";
 import { letterCanBeDisposed } from "@/lib/v11-workflow";
+import { missingDiropsReview } from "@/lib/disposition-history";
 
 export const runtime="nodejs";
 
@@ -80,7 +81,8 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
       const [rows]=await conn.query<RowDataPacket[]>(
         `SELECT d.*,
           fu.role AS originator_role,
-          tu.role AS assignee_role,v.purpose,v.invoice_revision AS task_revision
+          tu.role AS assignee_role,v.purpose,v.invoice_revision AS task_revision,
+          ${missingDiropsReview} AS needs_dirops_review
          FROM siap_dispositions d
          JOIN siap_users fu ON fu.id=d.from_user_id
          JOIN siap_users tu ON tu.id=d.to_user_id
@@ -129,6 +131,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
 
       const before=String(d.status);
       let after=before;
+      let recordedAction=action;
       let nextOwner=currentOwner;
       let resultNote=d.result_note ? String(d.result_note) : null;
       let submittedAt:any=d.submitted_at||null;
@@ -191,7 +194,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         const assigneeRole=String(d.assignee_role);
 
         if(originatorRole==="PRESIDENT_DIRECTOR"){
-          if(strict || assigneeRole==="DIRECTOR_OPS"){
+          if(assigneeRole==="DIRECTOR_OPS"){
             after="REVIEW_DIRUT";
             nextOwner=String(d.from_user_id);
           }else{
@@ -218,7 +221,15 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         if(!["REVIEW_MANAGER","REVIEW_DIROPS","REVIEW_DIRUT","REVIEW_ROOT"].includes(before))
           throw new Error("Disposisi tidak sedang menunggu review hasil.");
 
-        if(!strict && before==="REVIEW_DIROPS" && String(d.originator_role)==="PRESIDENT_DIRECTOR"){
+        if(before==="REVIEW_DIRUT" && d.needs_dirops_review){
+          const dirops=await getActiveRoleUser(conn, "DIRECTOR_OPS");
+          if(!dirops) throw new Error("Akun Direktur Operasional aktif tidak ditemukan.");
+          after="REVIEW_DIROPS";
+          nextOwner=String(dirops.id);
+          recordedAction="ROUTE_REVIEW_DIROPS";
+        }else if(before==="REVIEW_DIROPS" && String(d.originator_role)==="PRESIDENT_DIRECTOR"){
+          if(user.role!=="DIRECTOR_OPS" || user.id!==currentOwner)
+            throw new Error("Direktur Operasional yang menerima hasil wajib memeriksanya sebelum hasil naik ke Dirut.");
           after="REVIEW_DIRUT";
           nextOwner=String(d.from_user_id);
         }else{
@@ -356,7 +367,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         `INSERT INTO siap_disposition_actions
          (id,disposition_id,actor_user_id,action,from_status,to_status,note,result_letter_id)
          VALUES (?,?,?,?,?,?,?,?)`,
-        [actionId,params.id,user.id,action,before,after,note||null,resultLetterId||null]
+        [actionId,params.id,user.id,recordedAction,before,after,note||null,resultLetterId||null]
       );
 
       let attachmentCount=0;
@@ -434,7 +445,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
 
       await auditLog({
         user,
-        action:`DISPOSITION_${action}`,
+        action:`DISPOSITION_${recordedAction}`,
         entityType:"DISPOSITION",
         entityId:params.id,
         metadata:{from:before,to:after,note,nextOwner,attachments:attachmentCount,resultLetterId:resultLetterId||null,purpose:d.purpose,evidenceId},
