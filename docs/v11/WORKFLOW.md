@@ -79,10 +79,10 @@ Bagian verifikasi invoice menampilkan **Menunggu Verifikasi**, **Disetujui**, at
 
 Dari detail Invoice Masuk V11, Pengajuan Persekot, atau Pengajuan Pembayaran Nonpersekot, buka **Persyaratan sebelum Finance**. Penyusun, pihak yang berwenang di jalur review, atau Staff yang sedang mengerjakan disposisi bisa memilih kategori dan mengunggah berkas PDF, JPG, atau PNG. Sistem memeriksa tipe berkas dan mencatat pengunggah di audit. Dokumen lama yang hanya dicentang perlu dilengkapi lewat panel ini.
 
-| Persyaratan | Persekot | Nonpersekot dan Invoice Masuk |
+| Persyaratan | Persekot | Pembayaran Biasa / Nonpersekot |
 | --- | --- | --- |
 | BPK Pengajuan | Wajib | Wajib |
-| SPB dalam PDF | Wajib sejak pengajuan | Dikecualikan |
+| SPB dalam PDF | Wajib saat mengajukan Nota Dinas Persekot atau sebelum instruksi Finance untuk invoice | Dikecualikan |
 | Nota Dinas ke Keuangan/Direksi | Wajib | Wajib |
 | Kontrak Perjanjian | Wajib | Wajib |
 | SPK | Wajib | Wajib, rujukan SPK invoice yang masih berlaku dan memiliki berkas dapat dihitung |
@@ -96,4 +96,6 @@ Manager KSU membuat disposisi pembayaran setelah pengajuan disetujui dan semua p
 
 ### Penerapan
 
-Terapkan `database/migrations/2026-11-18-v11-payment-documents.sql` setelah migrasi V11 yang sudah terpasang dan sebelum memulai build baru di produksi. Migrasi menambah dua tabel, mempertahankan SPB lama, dan tidak mengubah data historis. Pengajuan V11 yang masih berjalan perlu mengisi persyaratan yang kurang sebelum masuk atau meneruskan proses Finance. Alur dokumen historis di luar V11 mengikuti aturan awalnya.
+Untuk Invoice Masuk V11, Staff pengaju, Staff verifikator revisi aktif, atau Manager penanggung jawab dapat memilih **Pembayaran Biasa** atau **Persekot** di checklist invoice atau disposisi. Simpan alasan persekot, lalu unggah SPB di checklist yang sama. Perubahan setelah verifikasi atau persetujuan wajib disetujui ulang oleh Manager sebelum instruksi Finance dibuat. Selama instruksi berlaku, jenis pembayaran dan SPB terkunci. Pengembalian atau pembatalan instruksi membuka edit selama invoice belum memiliki instruksi bayar lain yang masih berlaku atau selesai.
+
+Terapkan `database/migrations/2026-11-18-v11-payment-documents.sql` dan `database/migrations/2026-11-19-v11-invoice-payment-mode.sql` setelah migrasi V11. Invoice yang sudah ada memakai jenis Pembayaran Biasa sebagai nilai awal. Pengajuan V11 yang masih berjalan perlu mengisi persyaratan yang kurang sebelum masuk atau meneruskan proses Finance.

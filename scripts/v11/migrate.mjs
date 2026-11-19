@@ -18,6 +18,7 @@ try {
   await connection.query(await readFile("database/migrations/2026-11-18-v11-notifications.sql", "utf8"));
   await connection.query(await readFile("database/migrations/2026-11-18-v11-mekari-attachments.sql", "utf8"));
   await connection.query(await readFile("database/migrations/2026-11-18-v11-payment-documents.sql", "utf8"));
+  await connection.query(await readFile("database/migrations/2026-11-19-v11-invoice-payment-mode.sql", "utf8"));
   await connection.query(await readFile("database/migrations/2026-11-18-root-admin-account-switch.sql", "utf8"));
   await connection.query(await readFile("database/migrations/2026-11-18-persuratan-production.sql", "utf8"));
   await connection.query(await readFile("database/migrations/2026-11-18-letter-purge.sql", "utf8"));

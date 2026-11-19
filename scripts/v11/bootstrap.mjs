@@ -110,6 +110,9 @@ try {
   const paymentDocuments = await readFile("database/migrations/2026-11-18-v11-payment-documents.sql", "utf8");
   await cn.query(paymentDocuments);
   await cn.query(paymentDocuments);
+  const invoicePaymentMode = await readFile("database/migrations/2026-11-19-v11-invoice-payment-mode.sql", "utf8");
+  await cn.query(invoicePaymentMode);
+  await cn.query(invoicePaymentMode);
   const accountSwitch = await readFile("database/migrations/2026-11-18-root-admin-account-switch.sql", "utf8");
   await cn.query(accountSwitch);
   await cn.query(accountSwitch);
