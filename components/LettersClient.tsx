@@ -382,10 +382,25 @@ export default function LettersClient({direction,user}:Props){
     await load();await loadFormats();
   }
 
+  async function readDetail(id:string){
+    const response=await fetch(`/api/letters/${id}`,{cache:"no-store"});
+    const result=await response.json().catch(()=>null);
+    if(!response.ok||!result?.data?.letter) throw new Error(result?.error||"Gagal membuka detail surat.");
+    if(result.data.letter.direction!==direction) throw new Error("Arah dokumen tidak sesuai dengan halaman ini.");
+    return result.data;
+  }
+
   async function openDetail(id:string){
-    const r=await fetch(`/api/letters/${id}`);const j=await r.json();if(!r.ok){setError(j.error);return}
-    if(j.data.letter.direction!==direction){setError("Arah dokumen tidak sesuai dengan halaman ini.");return;}
-    setDetail(j.data);setDetailOpen(true);
+    try{
+      setDetail(await readDetail(id));setDetailOpen(true);
+    }catch(e){
+      setError(e instanceof Error?e.message:"Gagal membuka detail surat.");
+    }
+  }
+
+  async function refreshDetail(id:string){
+    const next=await readDetail(id);
+    setDetail((current:typeof detail)=>current?.letter.id===id?next:current);
   }
 
   function startAction(action:string,label:string,requiredComment=false,issue=false){
@@ -592,10 +607,12 @@ export default function LettersClient({direction,user}:Props){
     return buttons.map(b=><button key={b[0]} className={`btn ${b[2]}`} onClick={()=>startAction(b[0],b[1],Boolean(b[3]),Boolean(b[4]))}>{b[1]}</button>);
   }
 
-  const generalAttachments=useMemo(()=>detail?.attachments?.filter((a:any)=>!a.letter_action_id)||[],[detail]);
+  const generalAttachments=useMemo(()=>detail?.attachments?.filter((a:any)=>
+    !a.letter_action_id&&a.source_kind!=="PAYMENT_DOCUMENT")||[],[detail]);
   const receiptFile=detail?.attachments?.find((file:any)=>file.id===detail.v11?.receipt_attachment_id);
-  const signingFiles=generalAttachments.filter((file:any)=>file.attachment_kind==="ADDITIONAL"||
-    (file.attachment_kind==="ORIGINAL"&&file.id===detail?.originalId));
+  const signingFiles=(detail?.attachments??[]).filter((file:any)=>!file.letter_action_id&&(
+    ["ADDITIONAL","PAYMENT_DOCUMENT"].includes(file.attachment_kind)||
+    (file.attachment_kind==="ORIGINAL"&&file.id===detail?.originalId)));
 
   const pageDescription=direction==="INCOMING"
     ?"Registrasi surat eksternal yang diterima perusahaan, review, return, attachment, dan histori."
@@ -872,7 +889,7 @@ export default function LettersClient({direction,user}:Props){
           {detail.business&&<BusinessDocumentSummary details={detail.business} documentType={detail.letter.document_type}/>}
           <WorkflowSummary data={detail.v11} date={detail.letter.received_date} files={detail.attachments}/>
           {detail.v11?.payment_documents && <PaymentDocumentsPanel key={detail.letter.id} id={detail.letter.id}
-            data={detail.v11.payment_documents} onSaved={() => openDetail(detail.letter.id)}/>}
+            data={detail.v11.payment_documents} attachments={detail.attachments} onSaved={()=>refreshDetail(detail.letter.id)}/>}
           {detail.sandboxSigning && <AttachmentSandbox key={detail.letter.id}
             files={signingFiles}/>}
           {!detail.sandboxSigning&&detail.v11&&detail.letter.status==="WAITING_SIGNATURE"&&canHandleSecretariat(user.role)&&

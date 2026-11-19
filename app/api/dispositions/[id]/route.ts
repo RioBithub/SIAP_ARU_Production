@@ -9,6 +9,7 @@ import { v11Letter } from "@/lib/v11-data";
 import { canEditPaymentDocuments, paymentDocuments } from "@/lib/v11-payment-documents";
 import { getAccessibleLetter } from "@/lib/letter-access";
 import { findLetterReferences } from "@/lib/business-document-data";
+import { INVOICE_INCOMING } from "@/lib/business-documents";
 import { listLetterActions } from "@/lib/correspondence-data";
 import { listLetterAttachments } from "@/lib/letter-uploads";
 
@@ -24,6 +25,7 @@ export async function GET(_:Request,{params}:{params:{id:string}}){
   const [rows]=await db.query<RowDataPacket[]>(
     `SELECT d.*,
       l.subject,l.letter_number,l.external_number,l.direction,l.document_type,l.confidentiality,
+      lv.kind AS source_workflow_kind,
       v.purpose,v.invoice_revision AS task_revision,
       fu.name AS from_name,fu.role AS from_role,
       tu.name AS to_name,tu.role AS to_role,
@@ -31,6 +33,7 @@ export async function GET(_:Request,{params}:{params:{id:string}}){
      FROM siap_dispositions d
      JOIN siap_letters l ON l.id=d.letter_id
      LEFT JOIN siap_v11_dispositions v ON v.disposition_id=d.id
+     LEFT JOIN siap_v11_letters lv ON lv.letter_id=l.id
      JOIN siap_users fu ON fu.id=d.from_user_id
      JOIN siap_users tu ON tu.id=d.to_user_id
      LEFT JOIN siap_users cu ON cu.id=d.current_owner_user_id
@@ -62,7 +65,7 @@ export async function GET(_:Request,{params}:{params:{id:string}}){
      ORDER BY a.created_at ASC`,
     [params.id]
   );
-  const [sourceActions, sourceAttachments] = await Promise.all([
+  const [sourceActions, sourceFiles] = await Promise.all([
     listLetterActions(db, user, d.letter_id),
     listLetterAttachments(db, user, d.letter_id),
   ]);
@@ -110,7 +113,9 @@ export async function GET(_:Request,{params}:{params:{id:string}}){
       [params.id],
     ) : [[]];
   const verification = d.purpose === "INVOICE_VERIFY";
-  const paymentLetter = verification || ["INVOICE_PAYMENT","REQUEST_PAYMENT"].includes(d.purpose)
+  const hasPaymentRequirements = d.document_type === INVOICE_INCOMING ||
+    ["PERSEKOT", "PAYMENT_REQUEST"].includes(d.source_workflow_kind);
+  const paymentLetter = hasPaymentRequirements
     ? await getAccessibleLetter(user, d.letter_id) : null;
   const workflow = paymentLetter ? await v11Letter(d.letter_id) : null;
   const requirements = workflow ? await paymentDocuments(db, d.letter_id, workflow, d.document_type) : null;
@@ -121,7 +126,9 @@ export async function GET(_:Request,{params}:{params:{id:string}}){
     ) && await canEditPaymentDocuments(db, paymentLetter, user));
   return NextResponse.json({
     ok:true,
-    data:{disposition:d,actions:history,attachments,sourceActions,sourceAttachments,parent,children,previousTasks,payments,
+    data:{disposition:d,actions:history,attachments,sourceActions,
+      sourceAttachments:sourceFiles.filter(file => file.source_kind !== "PAYMENT_DOCUMENT"),
+      parent,children,previousTasks,payments,
       paymentDocuments:requirements && {...requirements, editable},
       sandboxSigning: sandboxAttachmentsEnabled() && (user.role === "ROOT_ADMIN" ||
         [d.from_user_id,d.to_user_id,d.current_owner_user_id].includes(user.id))}

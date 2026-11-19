@@ -319,12 +319,29 @@ try {
     await payFile("sdm", state.invoice, "BPK", 403);
     const spk = (await detail("ksu", state.invoice)).v11.payment_documents.documents.find(doc => doc.code === "SPK");
     assert.equal(spk.linked, true);
+    const oldBpk = await payFile("staff", state.invoice, "BPK");
+    await sql.execute("UPDATE siap_attachments SET attachment_kind='ADDITIONAL' WHERE id=?", [oldBpk.id]);
     await fillPayDocs("staff", state.invoice, payDocuments.filter(code => code !== "SPK"));
-    assert.deepEqual((await detail("ksu", state.invoice)).v11.payment_documents.missing, []);
+    const updated = await detail("ksu", state.invoice);
+    assert.deepEqual(updated.v11.payment_documents.missing, []);
+    assert.equal(updated.attachments.find(file => file.id === oldBpk.id).source_kind, "PAYMENT_DOCUMENT");
     state.paymentTask = (await assign("ksu", state.invoice, "finance", { purpose: "INVOICE_PAYMENT" })).id;
     const task = await taskDetail("finance", state.paymentTask);
     assert.equal(task.disposition.purpose, "INVOICE_PAYMENT");
     assert.equal(task.disposition.visibility, "PRIVATE");
+    assert.equal(task.paymentDocuments.editable, false);
+    const bpk = task.paymentDocuments.documents.find(doc => doc.code === "BPK").attachment;
+    assert.notEqual(bpk.id, oldBpk.id);
+    assert(!task.sourceAttachments.some(file => file.id === bpk.id || file.id === oldBpk.id));
+    assert((await call("finance", "/api/attachments/" + bpk.id + "?preview=1", { raw: true })).bytes.equals(pdf));
+    await call("sdm", "/api/attachments/" + bpk.id, { status: 403 });
+    const archive = await call("finance", "/api/archive?q=" + encodeURIComponent(updated.letter.subject));
+    assert.equal(archive.find(file => file.id === bpk.id).attachment_kind, "PAYMENT_DOCUMENT");
+    assert.equal(archive.find(file => file.id === oldBpk.id).attachment_kind, "PAYMENT_DOCUMENT");
+    const report = await call("finance", "/api/dispositions/" + state.paymentTask + "/export", { raw: true });
+    const workbook = XLSX.read(report.bytes, { type: "buffer" });
+    const attachmentRows = XLSX.utils.sheet_to_json(workbook.Sheets.Lampiran, { header: 1 });
+    assert(attachmentRows.some(row => row[0] === "Persyaratan Finance" && row[2] === bpk.name));
     const payableId = (await detail("ksu", state.invoice)).v11.payment.payable_id;
     await taskAction("finance", state.paymentTask, "RETURN_TASK", { note: "SIMULASI perjelas detail pembayaran." });
     await taskAction("ksu", state.paymentTask, "REASSIGN_TASK", { note: "SIMULASI detail pembayaran sudah dilengkapi." });
@@ -404,6 +421,7 @@ try {
     await letterAction("staff", state.persekot, "SUBMIT");
     const note = await detail("ops", state.persekot);
     assert(note.v11.spb_attachment_id);
+    assert.equal(note.attachments.find(file => file.id === note.v11.spb_attachment_id).source_kind, "PAYMENT_DOCUMENT");
     assert.deepEqual(note.v11.persekot_checklist, ["BPK", "SPK", "MARGIN"]);
     assert.equal(note.letter.status, "MANAGER_REVIEW");
     await letterAction("ops", state.persekot, "APPROVE_FINAL");
@@ -414,8 +432,13 @@ try {
     const missingAccount = await assign("ksu", state.persekot, "finance", { purpose: "REQUEST_PAYMENT" }, 400);
     assert.match(missingAccount.error, /Rekening Penerima/);
     await payFile("staff", state.persekot, "REKENING");
+    await sql.execute("UPDATE siap_attachments SET attachment_kind='ADDITIONAL' WHERE id=?", [note.v11.spb_attachment_id]);
+    const newSpb = await payFile("staff", state.persekot, "SPB");
     await assign("ksu", state.persekot, "finance", {}, 400);
     const task = await assign("ksu", state.persekot, "finance", { purpose: "REQUEST_PAYMENT" });
+    const financeTask = await taskDetail("finance", task.id);
+    assert.equal(financeTask.paymentDocuments.documents.find(doc => doc.code === "SPB").attachment.id, newSpb.id);
+    assert(!financeTask.sourceAttachments.some(file => [newSpb.id, note.v11.spb_attachment_id].includes(file.id)));
     await start("finance", task.id);
     await submit("finance", task.id, "Bayar simulasi", [], {}, 400);
     await submit("finance", task.id, "Bayar simulasi", ["files"]);
@@ -938,26 +961,65 @@ try {
       await register(invoice.id);
       const verification = await assign("ops", invoice.id, "staff", { purpose: "INVOICE_VERIFY" });
       await start("staff", verification.id);
+      const invoiceApi = "/api/letters/" + invoice.id;
+      const existingFile = await post("staff", invoiceApi + "/attachments",
+        file(new FormData(), "file", "SIMULASI-BPK-Pengajuan.pdf"), 201);
+      const beforeUpload = await taskDetail("staff", verification.id);
+      assert(beforeUpload.sourceAttachments.some(file => file.id === existingFile.id));
+      assert(beforeUpload.paymentDocuments.missing.includes("BPK Pengajuan"));
+      for (const restricted of beforeUpload.sourceAttachments.filter(file => ["ORIGINAL", "RECEIPT"].includes(file.source_kind))) {
+        await post("staff", invoiceApi + "/payment-documents",
+          multipart({ document_code: "BPK", attachment_id: restricted.id }, []), 400);
+      }
       await staff.goto(new URL("/dispositions", base).href);
-      await staff.getByRole("row").filter({ hasText: subject("invoice-form-ui") })
-        .getByRole("button", { name: "Kirim Hasil", exact: true }).click();
+      const invoiceRow = staff.getByRole("row").filter({ hasText: subject("invoice-form-ui") });
+      await invoiceRow.getByRole("button", { name: "Kirim Hasil", exact: true }).click();
       const invoiceForm = staff.getByRole("dialog", { name: "Kirim Hasil", exact: true });
+      const checklist = staff.getByText("Persyaratan sebelum Finance", { exact: true });
       await invoiceForm.getByLabel("Jenis dokumen persyaratan").selectOption("BPK");
+      assert.equal(await checklist.count(), 1);
+      assert.equal(await staff.getByRole("dialog").count(), 1);
+      await invoiceForm.getByRole("checkbox", { name: "Gunakan lampiran surat yang sudah ada" }).check();
+      await invoiceForm.getByLabel(/^Lampiran surat/).selectOption(existingFile.id);
+      await invoiceForm.getByRole("button", { name: "Simpan lampiran sebagai persyaratan" }).click();
+      await invoiceForm.getByText("SIMULASI-BPK-Pengajuan.pdf", { exact: true }).waitFor();
+      assert.equal(await checklist.count(), 1);
+      assert.equal(await staff.getByRole("dialog").count(), 1);
+      await invoiceForm.getByRole("button", { name: "Batal", exact: true }).click();
+      await invoiceForm.waitFor({ state: "hidden" });
+      assert.equal(await staff.getByRole("dialog").count(), 0);
+
+      await invoiceRow.getByRole("button", { name: "Detail", exact: true }).click();
+      const invoiceDialog = staff.getByRole("dialog", { name: subject("invoice-form-ui"), exact: true });
+      await invoiceDialog.getByText("SIMULASI-BPK-Pengajuan.pdf", { exact: true }).waitFor();
+      const invoiceSourceFiles = invoiceDialog.locator("section").filter({
+        has: staff.getByRole("heading", { name: "Lampiran Surat Asal", exact: true }),
+      });
+      assert.equal(await invoiceSourceFiles.getByText("SIMULASI-BPK-Pengajuan.pdf", { exact: true }).count(), 0);
+      await invoiceDialog.getByRole("button", { name: "Kirim Hasil", exact: true }).click();
+      const invoiceNote = invoiceForm.getByLabel("Ringkasan pemeriksaan (wajib)", { exact: true });
+      await invoiceNote.fill("SIMULASI pesanan ATK sesuai bukti.");
+      const evidence = invoiceForm.getByLabel(/^Bukti verifikasi/);
+      await evidence.setInputFiles({ name: "SIMULASI-Bukti-Verifikasi.pdf", mimeType: "application/pdf", buffer: pdf });
+      await invoiceForm.getByLabel("Jenis dokumen persyaratan").selectOption("NOTA");
       await invoiceForm.getByLabel("Berkas persyaratan").setInputFiles({
-        name: "SIMULASI-BPK-Pengajuan.pdf", mimeType: "application/pdf", buffer: pdf,
+        name: "SIMULASI-Nota-Pembayaran.pdf", mimeType: "application/pdf", buffer: pdf,
       });
       await invoiceForm.getByRole("button", { name: "Unggah dokumen" }).click();
       await invoiceForm.getByText("Persyaratan diperbarui.", { exact: true }).waitFor();
-      const invoiceNote = invoiceForm.getByLabel("Ringkasan pemeriksaan (wajib)", { exact: true });
-      await invoiceNote.fill("SIMULASI pesanan ATK sesuai bukti.");
-      await invoiceForm.getByLabel(/^Bukti verifikasi/).setInputFiles({
-        name: "SIMULASI-Bukti-Verifikasi.pdf", mimeType: "application/pdf", buffer: pdf,
-      });
+      await invoiceForm.getByText("SIMULASI-Nota-Pembayaran.pdf", { exact: true }).waitFor();
+      assert.equal(await checklist.count(), 1);
+      assert.equal(await staff.getByRole("dialog").count(), 1);
+      assert.equal(await invoiceNote.inputValue(), "SIMULASI pesanan ATK sesuai bukti.");
+      assert.equal(await evidence.evaluate(input => input.files[0]?.name), "SIMULASI-Bukti-Verifikasi.pdf");
       await invoiceForm.getByRole("button", { name: "Kirim Hasil", exact: true }).click();
       await invoiceForm.waitFor({ state: "hidden" });
       const saved = await taskDetail("ops", verification.id);
       assert.equal(saved.disposition.status, "REVIEW_MANAGER");
-      assert.equal(saved.paymentDocuments.documents.find(doc => doc.code === "BPK").attachment.name, "SIMULASI-BPK-Pengajuan.pdf");
+      assert.equal(saved.paymentDocuments.documents.find(doc => doc.code === "BPK").attachment.id, existingFile.id);
+      assert.equal(saved.paymentDocuments.documents.find(doc => doc.code === "NOTA").attachment.name, "SIMULASI-Nota-Pembayaran.pdf");
+      assert(!saved.sourceAttachments.some(attachment => attachment.id === existingFile.id ||
+        attachment.original_name === "SIMULASI-Nota-Pembayaran.pdf"));
       assert(saved.attachments.some(attachment => attachment.original_name === "SIMULASI-Bukti-Verifikasi.pdf"));
       const fin = await pageFor("ksu", false);
       await fin.goto(new URL("/letters/incoming?letter_id=" + state.invoice, base).href);

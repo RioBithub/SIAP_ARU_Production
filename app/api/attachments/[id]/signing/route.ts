@@ -31,7 +31,7 @@ async function sourceFor(user: SessionUser, id: string, conn: Pick<PoolConnectio
      LEFT JOIN siap_dispositions d ON d.id=a.disposition_id
      LEFT JOIN siap_disposition_actions da ON da.id=a.disposition_action_id AND da.disposition_id=d.id
      WHERE a.id=? AND a.letter_id IS NOT NULL AND a.original_size BETWEEN 8 AND 10485760
-       AND (a.attachment_kind IN ('ORIGINAL','ADDITIONAL') OR da.action='SUBMIT_RESULT')
+       AND (a.attachment_kind IN ('ORIGINAL','ADDITIONAL','PAYMENT_DOCUMENT') OR da.action='SUBMIT_RESULT')
        AND (a.attachment_kind<>'ORIGINAL' OR a.disposition_id IS NOT NULL OR l.direction<>'OUTGOING'
             OR a.id=COALESCE(l.active_original_attachment_id,
               (SELECT a2.id FROM siap_attachments a2 WHERE a2.letter_id=l.id AND a2.disposition_id IS NULL
