@@ -5,14 +5,15 @@ import type { SessionUser } from "@/lib/types";
 import ConfidentialityBadge from "@/components/ConfidentialityBadge";
 import DispositionLetterPicker, { type DispositionLetterOption } from "@/components/DispositionLetterPicker";
 import AttachmentActions from "@/components/AttachmentActions";
+import DispositionHistory, { type PreviousDisposition } from "@/components/DispositionHistory";
 import LetterHistory from "@/components/LetterHistory";
 import PaymentDocumentsPanel from "@/components/PaymentDocumentsPanel";
 import SearchableSelect from "@/components/SearchableSelect";
-import { dispositionDeadline, formatWorkflowTime } from "@/lib/workflow-time";
+import { dispositionDeadline } from "@/lib/workflow-time";
 import AttachmentSandbox from "@/components/AttachmentSandbox";
 import Modal from "@/components/Modal";
 import StatusBadge from "@/components/StatusBadge";
-import { dispositionActionLabel, letterDirectionLabel, RESULT_REQUIREMENTS, type ResultRequirement } from "@/lib/correspondence-workflow";
+import { letterDirectionLabel, RESULT_REQUIREMENTS, type ResultRequirement } from "@/lib/correspondence-workflow";
 import { INVOICE_INCOMING, formatInvoiceAmount, type DocumentReference } from "@/lib/business-documents";
 import { dispositionTargetRoles, jakartaDate, staffCanVerify, staffUnit, TASK_PURPOSES, TERMINAL_TASK_STATES,
   unitManagerScope, type RequestingUnit, type TaskPurpose } from "@/lib/v11-workflow";
@@ -540,8 +541,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
   const sourceAttachments=detail?.sourceAttachments??[];
   const childTasks=detail?.children??[];
 
-  const processAttachments=(id:string)=>
-    detail?.attachments?.filter((a:any)=>a.disposition_action_id===id)||[];
+
 
   return <main className="page">
     <div className="page-head">
@@ -957,45 +957,16 @@ export default function DispositionsClient({user}:{user:SessionUser}){
               </a>
             </div>
 
-            <div className="timeline">
-              {detail.actions?.map((a:any,i:number)=>{
-                const af=processAttachments(a.id);
-
-                return <div className="timeline-row" key={a.id}>
-                  <div className="timeline-dot">{i+1}</div>
-
-                  <div style={{width:"100%"}}>
-                    <b>{dispositionActionLabel(a.action)} • {a.actor_name}</b><p className="muted">{formatWorkflowTime(a.created_at)}</p>
-                    <p>
-                      {a.from_status?`${a.from_status} → ${a.to_status}`:a.to_status}
-                      {a.note?` • ${a.note}`:""}
-                    </p>
-
-                    {a.result_letter&&
-                      <a className="btn btn-secondary" href={"/letters/outgoing?letter_id="+encodeURIComponent(a.result_letter.id)}>
-                        Surat hasil · {a.result_letter.number||a.result_letter.subject}
-                      </a>}
-                    {af.length>0&&
-                      <div className="disposition-files">
-                        {af.map((f:any)=>
-                          <div className="disposition-file" key={f.id}>
-                            <div>
-                              <b>{f.original_name}</b>
-                              <span style={{display:"block"}}>
-                                {size(Number(f.original_size))}
-                                {f.is_compressed?" • compressed":""}
-                              </span>
-                            </div>
-
-                            <AttachmentActions id={f.id} name={f.original_name}/>
-                          </div>
-                        )}
-                      </div>
-                    }
-                  </div>
-                </div>
-              })}
-            </div>
+            <DispositionHistory actions={detail.actions??[]} attachments={detail.attachments??[]}/>
+            {detail.previousTasks?.length > 0 && <details className="disposition-source-history" key={"tasks-" + detail.disposition.id}>
+              <summary>Riwayat Delegasi Sebelumnya</summary>
+              <div className="disposition-source-history-content">
+                {detail.previousTasks.map((task:PreviousDisposition) => <section className="disposition-previous-task" key={task.id}>
+                  <h4>{task.from_name} → {task.to_name}</h4>
+                  <DispositionHistory actions={task.actions} attachments={task.attachments}/>
+                </section>)}
+              </div>
+            </details>}
             <details className="disposition-source-history" key={detail.disposition.id}>
               <summary>Riwayat {letterDirectionLabel(detail.disposition.direction)} Asal</summary>
               <div className="disposition-source-history-content">

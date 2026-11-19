@@ -9,7 +9,7 @@ import { required } from "@/lib/http";
 import { getAccessibleLetter } from "@/lib/letter-access";
 import { discardUncommittedFiles, insertLetterAttachment, type StoredLetterFile } from "@/lib/letter-uploads";
 import {
-  callbackUrl, configuredSandboxSigning, mekariMode, MekariError, mockSignedPdf, predictSandboxAnnotations,
+  callbackUrl, canRetrySandboxJob, configuredSandboxSigning, mekariMode, MekariError, mockSignedPdf, predictSandboxAnnotations,
   sandboxCredentials, sandboxPdf, sandboxPollDelay, sandboxStatus, sendSandboxSignature,
 } from "@/lib/mekari-sign";
 import { readStoredFile } from "@/lib/upload";
@@ -26,7 +26,8 @@ async function getJob(conn: Pick<PoolConnection, "query">, letterId: string, loc
 
 function publicJob(job: RowDataPacket | null) {
   if (!job) return null;
-  return { id: job.id, status: job.status, mode: job.mode, final_attachment_id: job.final_attachment_id };
+  return { id: job.id, status: job.status, mode: job.mode, final_attachment_id: job.final_attachment_id,
+    can_retry: job.mode === "sandbox" && canRetrySandboxJob(job.status, job.provider_id, job.final_attachment_id) };
 }
 
 async function lockSigningLetter(conn: PoolConnection, id: string) {
@@ -87,7 +88,10 @@ export async function POST(request: Request, { params }: { params: { id: string 
       if (mode !== "sandbox") throw new Error("Prediksi posisi tersedia dalam mode Mekari Sandbox.");
       const source = await withTransaction(async conn => {
         await lockSigningLetter(conn, params.id);
-        if (await getJob(conn, params.id)) throw new Error("Surat ini sudah memiliki permintaan tanda tangan.");
+        const job = await getJob(conn, params.id);
+        if (job && (job.mode !== mode || !canRetrySandboxJob(job.status, job.provider_id, job.final_attachment_id))) {
+          throw new Error("Surat ini sudah memiliki permintaan tanda tangan.");
+        }
         return signingPdf(conn, params.id, body.attachment_id);
       });
       const suggestions = await predictSandboxAnnotations(source.name, source.bytes, body);
@@ -96,35 +100,45 @@ export async function POST(request: Request, { params }: { params: { id: string 
       return NextResponse.json({ ok: true, data: suggestions });
     }
     if (body.action === "START") {
-      const id = randomUUID();
       const signing = mode === "sandbox" ? configuredSandboxSigning(body) : null;
-      const callback = mode === "sandbox" ? callbackUrl(id) : null;
       const result = await withTransaction(async conn => {
         await lockSigningLetter(conn, params.id);
         const existing = await getJob(conn, params.id, true);
-        if (existing) return { existing, source: null };
+        if (existing && (mode !== "sandbox" || existing.mode !== mode || body.retry_failed !== true ||
+            !canRetrySandboxJob(existing.status, existing.provider_id, existing.final_attachment_id))) {
+          return { existing };
+        }
+        const id = existing?.id ?? randomUUID();
+        const callback = mode === "sandbox" ? callbackUrl(id) : null;
         if (mode === "sandbox") sandboxCredentials();
         const source = await signingPdf(conn, params.id, body.attachment_id);
         const status = mode === "mock" ? "IN_PROGRESS" : "REQUESTING";
-        await conn.execute(
-          "INSERT INTO siap_v11_signing (id,letter_id,mode,provider_id,status,requested_by,source_attachment_id) VALUES (?,?,?,?,?,?,?)",
-          [id, params.id, mode, mode === "mock" ? "mock-" + id : null, status, user.id, source.id],
-        );
+        if (existing) {
+          await conn.execute(
+            "UPDATE siap_v11_signing SET requested_by=?,source_attachment_id=?,status=?,next_poll_at=NULL WHERE id=?",
+            [user.id, source.id, status, id],
+          );
+        } else {
+          await conn.execute(
+            "INSERT INTO siap_v11_signing (id,letter_id,mode,provider_id,status,requested_by,source_attachment_id) VALUES (?,?,?,?,?,?,?)",
+            [id, params.id, mode, mode === "mock" ? "mock-" + id : null, status, user.id, source.id],
+          );
+        }
         await auditLog({ user, action: "LETTER_MEKARI_REQUEST", entityType: "LETTER", entityId: params.id,
-          metadata: { signingId: id, mode, status, ...(signing ? {
+          metadata: { signingId: id, mode, status, retry: Boolean(existing), ...(signing ? {
             signerCount: signing.signers.length, signingOrder: signing.signing_order,
           } : {}) }, request }, conn);
-        return { existing: null, source };
+        return { existing: null, source, id, callback };
       });
       if (result.existing) return NextResponse.json({ ok: true, data: publicJob(result.existing) });
-      if (mode === "sandbox" && signing && result.source) {
+      if (mode === "sandbox" && signing && result.source && result.id) {
         try {
-          const providerId = await sendSandboxSignature(result.source.name, result.source.bytes, signing, callback);
-          await db.execute("UPDATE siap_v11_signing SET provider_id=?,status='IN_PROGRESS' WHERE id=? AND status='REQUESTING'", [providerId, id]);
+          const providerId = await sendSandboxSignature(result.source.name, result.source.bytes, signing, result.callback ?? null);
+          await db.execute("UPDATE siap_v11_signing SET provider_id=?,status='IN_PROGRESS' WHERE id=? AND status='REQUESTING'", [providerId, result.id]);
         } catch (error) {
           const state = error instanceof MekariError && [400,401,403,404,422].includes(error.status)
             ? "FAILED" : "RECONCILE";
-          await db.execute("UPDATE siap_v11_signing SET status=? WHERE id=?", [state, id]);
+          await db.execute("UPDATE siap_v11_signing SET status=? WHERE id=? AND status='REQUESTING'", [state, result.id]);
           throw error;
         }
       }

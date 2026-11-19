@@ -8,7 +8,7 @@ import { db, withTransaction } from "@/lib/db";
 import { getAccessibleLetter } from "@/lib/letter-access";
 import { discardUncommittedFiles, type StoredLetterFile } from "@/lib/letter-uploads";
 import {
-  configuredSandboxSigning, MekariError, predictSandboxAnnotations, sandboxAttachmentsEnabled,
+  canRetrySandboxJob, configuredSandboxSigning, MekariError, predictSandboxAnnotations, sandboxAttachmentsEnabled,
   sandboxCredentials, sandboxPdf, sandboxPollDelay, sandboxStatus, sendSandboxSignature, type SandboxProgress,
 } from "@/lib/mekari-sign";
 import type { SessionUser } from "@/lib/types";
@@ -52,7 +52,8 @@ async function findJob(conn: Pick<PoolConnection, "query">, id: string, lock = f
 }
 
 function response(job: RowDataPacket | null, status = 200, retryAfter?: number, progress?: SandboxProgress) {
-  const data = job && { id: job.source_attachment_id, status: job.status, mode: "sandbox", final_attachment_id: job.final_attachment_id };
+  const data = job && { id: job.source_attachment_id, status: job.status, mode: "sandbox", final_attachment_id: job.final_attachment_id,
+    can_retry: canRetrySandboxJob(job.status, job.provider_id, job.final_attachment_id) };
   return NextResponse.json({ ok: true, mode: "sandbox", data, retry_after: retryAfter, progress }, { status });
 }
 
@@ -90,7 +91,10 @@ export async function POST(request: Request, { params }: { params: { id: string 
       return error(400, "Konfirmasi bahwa PDF boleh dikirim ke Mekari Sandbox.");
     }
     if (body.action === "PREDICT") {
-      if (await findJob(db, id)) return error(409, "Permintaan untuk PDF ini sudah tercatat.");
+      const job = await findJob(db, id);
+      if (job && !canRetrySandboxJob(job.status, job.provider_id, job.final_attachment_id)) {
+        return error(409, "Permintaan untuk PDF ini sudah tercatat.");
+      }
       const suggestions = await predictSandboxAnnotations(source.original_name, await readSourcePdf(source), body, "attachment");
       await audit("ATTACHMENT_MEKARI_PREDICT", { suggestionCount: suggestions.length });
       return NextResponse.json({ ok: true, data: suggestions });
@@ -105,12 +109,19 @@ export async function POST(request: Request, { params }: { params: { id: string 
         );
         if (!letter || !await sourceFor(user, id, conn)) throw new Error("PDF sumber tidak lagi tersedia untuk tanda tangan.");
         const job = await findJob(conn, id, true);
-        if (job) return job;
-        await conn.execute(
-          "INSERT INTO siap_v11_attachment_signing (source_attachment_id,requested_by,status) VALUES (?,?,'REQUESTING')",
-          [id, user.id],
-        );
-        await audit("ATTACHMENT_MEKARI_REQUEST", { signerCount: signing.signers.length, ordered: signing.signing_order }, conn);
+        if (job && (body.retry_failed !== true || !canRetrySandboxJob(job.status, job.provider_id, job.final_attachment_id))) return job;
+        if (job) {
+          await conn.execute(
+            "UPDATE siap_v11_attachment_signing SET requested_by=?,status='REQUESTING',next_poll_at=NULL WHERE source_attachment_id=?",
+            [user.id, id],
+          );
+        } else {
+          await conn.execute(
+            "INSERT INTO siap_v11_attachment_signing (source_attachment_id,requested_by,status) VALUES (?,?,'REQUESTING')",
+            [id, user.id],
+          );
+        }
+        await audit("ATTACHMENT_MEKARI_REQUEST", { signerCount: signing.signers.length, ordered: signing.signing_order, retry: Boolean(job) }, conn);
         return null;
       });
       if (existing) return response(existing);

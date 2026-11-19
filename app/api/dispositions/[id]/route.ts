@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { listDispositionEvents, listDispositionHistoryFiles, listHistoryTasks, previousDispositionTasks } from "@/lib/disposition-history";
 import { dispositionAccess } from "@/lib/disposition-access";
 import { v11Letter } from "@/lib/v11-data";
 import { paymentDocuments } from "@/lib/v11-payment-documents";
@@ -74,6 +75,24 @@ export async function GET(_:Request,{params}:{params:{id:string}}){
   );
   const parent = related.find(task => task.id === d.parent_id) ?? null;
   const children = related.filter(task => task.parent_id === d.id);
+  const earlierTasks = d.parent_id
+    ? previousDispositionTasks(await listHistoryTasks(db, user, [d.letter_id]), {
+      id: d.id, letter_id: d.letter_id, parent_id: d.parent_id,
+    })
+    : [];
+  const earlierIds = earlierTasks.map(task => task.id);
+  const [earlierEvents, earlierFiles] = await Promise.all([
+    listDispositionEvents(db, user, earlierIds),
+    listDispositionHistoryFiles(db, earlierIds),
+  ]);
+  const previousTasks = earlierTasks.map(({ id, from_name, to_name }) => ({
+    id, from_name, to_name,
+    actions: earlierEvents.filter(event => event.disposition_id === id).map(event => ({
+      ...event, result_letter: event.result_id ? { id: event.result_id, number: event.result_number } : undefined,
+    })),
+    attachments: earlierFiles.filter(file => file.disposition_id === id),
+  }));
+
 
   const resultIds = [...new Set(actions.flatMap(action => action.result_letter_id ? [String(action.result_letter_id)] : []))];
   const results = resultIds.length ? await findLetterReferences(user, {
@@ -93,7 +112,7 @@ export async function GET(_:Request,{params}:{params:{id:string}}){
   const requirements = workflow ? await paymentDocuments(db, d.letter_id, workflow, d.document_type) : null;
   return NextResponse.json({
     ok:true,
-    data:{disposition:d,actions:history,attachments,sourceActions,sourceAttachments,parent,children,payments,paymentDocuments:requirements,
+    data:{disposition:d,actions:history,attachments,sourceActions,sourceAttachments,parent,children,previousTasks,payments,paymentDocuments:requirements,
       sandboxSigning: sandboxAttachmentsEnabled() && (user.role === "ROOT_ADMIN" ||
         [d.from_user_id,d.to_user_id,d.current_owner_user_id].includes(user.id))}
   });

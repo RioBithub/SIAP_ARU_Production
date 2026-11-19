@@ -459,3 +459,5 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit;
 .letter-history-note { white-space: pre-wrap; }
 .letter-history-files { display: grid; gap: 6px; margin-top: 7px; }
 .letter-history-file { display: grid; gap: 6px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 9px; }
+.disposition-previous-task + .disposition-previous-task { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.disposition-previous-task h4 { margin: 0 0 8px; font-size: 12px; overflow-wrap: anywhere; }

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test, { beforeEach } from "node:test";
 import {
-  configuredSandboxSigning, mockSignedPdf, sandboxAttachmentsEnabled, predictSandboxAnnotations, sandboxStatus, sendSandboxSignature,
+  configuredSandboxSigning, mockSignedPdf, sandboxAttachmentsEnabled, predictSandboxAnnotations, sandboxPdf, sandboxStatus, sendSandboxSignature,
 } from "../../lib/mekari-sign.ts";
 
 beforeEach(t => {
@@ -34,6 +34,21 @@ const secondSigner = {
   ...signaturePlacement, position_x: 300, signer_name: "Pemeriksa Simulasi", signer_email: "reviewer@example.invalid",
 };
 const pdf = mockSignedPdf();
+
+test("HTTP 400 menyebut tahap yang ditolak tanpa meneruskan respons mentah Mekari", async t => {
+  t.mock.method(globalThis, "fetch", async () =>
+    Response.json({ message: "fixture-private@example.invalid" }, { status: 400 }));
+  const cases = [
+    [() => predictSandboxAnnotations("SIMULASI.pdf", pdf, firstSigner), "prediksi posisi"],
+    [() => sendSandboxSignature("SIMULASI.pdf", pdf, configuredSandboxSigning(firstSigner), null), "pengajuan tanda tangan"],
+    [() => sandboxStatus("fixture-document"), "pengecekan status"],
+    [() => sandboxPdf("fixture-document"), "pengambilan PDF final"],
+  ];
+  for (const [request, stage] of cases) {
+    await assert.rejects(request, error => error.status === 400 && error.message.includes(stage) &&
+      !error.message.includes("fixture-private"));
+  }
+});
 
 test("Digest mencakup byte JSON yang dikirim dan header absen pada GET", async t => {
   const fetchMock = t.mock.method(globalThis, "fetch", async () =>
