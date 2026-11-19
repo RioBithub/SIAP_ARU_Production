@@ -451,6 +451,16 @@ try {
     assert.equal(c.parent_id, b.id);
     const linked = await taskDetail("staff", c.id);
     assert.equal(linked.parent.id, b.id);
+    assert.deepEqual(linked.previousTasks.map(task => task.id), [a.id, b.id]);
+    assert(linked.previousTasks.every(task => task.actions.some(action => action.action === "START")));
+    state.historyChild = c.id;
+    const { bytes: delegationBytes } = await call("staff", "/api/dispositions/" + c.id + "/export", { raw: true });
+    const delegation = XLSX.read(delegationBytes, { type: "buffer" });
+    const taskRows = XLSX.utils.sheet_to_json(delegation.Sheets.Tugas, { header: 1 });
+    assert.deepEqual(taskRows.slice(1).map(row => row[0]), ["1", "1.1", "1.1.1"]);
+    await sql.execute("UPDATE siap_dispositions SET visibility='PRIVATE' WHERE id=?", [a.id]);
+    assert.deepEqual((await taskDetail("staff", c.id)).previousTasks.map(task => task.id), [b.id]);
+    await sql.execute("UPDATE siap_dispositions SET visibility='ROUTE' WHERE id=?", [a.id]);
     const parent = await taskDetail("dirops", b.id);
     assert.equal(parent.children[0].id, c.id);
     assert.deepEqual(linked.sourceAttachments, parent.sourceAttachments);
@@ -563,6 +573,9 @@ try {
     await start("staff", state.reviewTask);
     await submit("staff", state.reviewTask, "Surat salah", [], { result_letter_id: state.manual }, 400);
     const row = await outgoing("surat-hasil", { source_disposition_id: state.reviewTask });
+    state.resultOutgoing = row.id;
+    const exportPath = "/api/letters/" + row.id + "/export";
+    await call("secretariat", exportPath, { status: 404 });
     await approveOut(row.id);
     await letterAction("secretariat", row.id, "ISSUE", { issued_date: d, signature_method: "DIGITAL" }, ["signed_file"]);
     await submit("staff", state.reviewTask, "Surat hasil", [], { result_letter_id: row.id });
@@ -572,7 +585,25 @@ try {
     const { sourceActions } = await taskDetail("staff", followUp.id);
     assert(sourceActions.some(action => action.action === "CREATE_OUTGOING"));
     assert(sourceActions.some(action => action.action === "ISSUE" && action.to_status === "ISSUED"));
-    return "Surat hasil yang terkait diterima. Riwayat draf dan penerbitan ikut tampil pada disposisi Surat Keluar.";
+    await call("staff", exportPath, { status: 403 });
+    await call("secretariat", "/api/letters/" + state.general + "/export", { status: 404 });
+    const readExport = async role => {
+      const response = await call(role, exportPath, { raw: true });
+      assert.match(response.response.headers.get("content-disposition"), /riwayat-surat-keluar/);
+      const book = XLSX.read(response.bytes, { type: "buffer" });
+      return name => XLSX.utils.sheet_to_json(book.Sheets[name], { header: 1 });
+    };
+    const report = await readExport("secretariat");
+    assert(report("Riwayat Surat Keluar").some(row => row[2] === "Diterbitkan"));
+    assert(report("Riwayat Dokumen Asal").some(row => row[2] === "Surat Diregistrasi"));
+    assert.equal(report("Tugas").length, 3);
+    assert(report("Log Proses").some(row => row[3] === "Hasil dikirim" && row[8] === "Surat hasil"));
+    assert(report("Lampiran").some(row => row[0] === "Surat keluar"));
+    await sql.execute("UPDATE siap_dispositions SET visibility='PRIVATE' WHERE id=?", [state.reviewTask]);
+    assert.equal((await readExport("secretariat"))("Tugas").length, 2);
+    assert.equal((await readExport("root"))("Tugas").length, 3);
+    await sql.execute("UPDATE siap_dispositions SET visibility='ROUTE' WHERE id=?", [state.reviewTask]);
+    return "Ekspor Sekretariat menyambungkan surat keluar, surat asal, dan tugas terkait sesuai akses.";
   });
   await test(40, async () => {
     const nota = await post("ops", "/api/letters", {
@@ -736,6 +767,18 @@ try {
       return page;
     }
     try {
+      const delegation = await pageFor("staff", true);
+      await delegation.goto(new URL("/dispositions?disposition_id=" + state.historyChild, base).href);
+      const historyPanel = delegation.locator("details").filter({ hasText: "Riwayat Delegasi Sebelumnya" });
+      await historyPanel.locator("summary").click();
+      assert.equal(await historyPanel.getByRole("heading").count(), 2);
+      assert.equal(await historyPanel.getByText(/^Disposisi dibuat/).count(), 2);
+
+      const exportPage = await pageFor("secretariat", false);
+      await exportPage.goto(new URL("/letters/outgoing?letter_id=" + state.resultOutgoing, base).href);
+      const allHistory = exportPage.getByRole("link", { name: "Unduh Semua Riwayat (.xlsx)", exact: true });
+      assert.equal(await allHistory.getAttribute("href"), "/api/letters/" + state.resultOutgoing + "/export");
+
       const row = await incoming("demo-ui-mobile", { receiptFile: true });
       const mobile = await pageFor("secretariat", true);
       await mobile.goto(new URL("/letters/incoming?letter_id=" + row.id, base).href);

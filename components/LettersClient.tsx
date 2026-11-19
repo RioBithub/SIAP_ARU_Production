@@ -924,7 +924,13 @@ export default function LettersClient({direction,user}:Props){
         </div>
 
         <div>
-          <h3 style={{fontSize:13}}>Riwayat Proses & Lampiran</h3>
+          <div className="disposition-history-heading">
+            <h3 style={{fontSize:13}}>Riwayat Proses & Lampiran</h3>
+            {direction==="OUTGOING"&&canHandleSecretariat(user.role)&&
+              <a className="btn btn-secondary" href={"/api/letters/"+encodeURIComponent(detail.letter.id)+"/export"} download>
+                Unduh Semua Riwayat (.xlsx)
+              </a>}
+          </div>
           <p className="muted" style={{fontSize:11}}>Setiap submit, approval, return, penerbitan, atau pembatalan dapat membawa catatan dan maksimal 5 lampiran proses.</p>
           <LetterHistory actions={detail.actions??[]} attachments={detail.attachments??[]}/>
         </div>

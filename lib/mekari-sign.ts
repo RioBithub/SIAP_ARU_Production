@@ -26,12 +26,27 @@ export function sandboxCredentials() {
 export class MekariError extends Error {
   readonly status: number;
   readonly retryAfter: number | null;
-  constructor(status: number, retryAfter: number | null = null) {
-    super(status === 424 ? "PDF final sedang disiapkan di sandbox." : status === 0
-      ? "Sandbox belum memberi respons yang dapat dikonfirmasi." : "Sandbox Mekari merespons HTTP " + status + ".");
+  constructor(status: number, retryAfter: number | null = null, message?: string) {
+    super(message ?? (status === 424 ? "PDF final sedang disiapkan di sandbox." : status === 0
+      ? "Sandbox belum memberi respons yang dapat dikonfirmasi." : "Sandbox Mekari merespons HTTP " + status + "."));
     this.status = status;
     this.retryAfter = retryAfter;
   }
+}
+
+function badRequestMessage(route: string) {
+  if (route === "/v1/documents/predict_annotations") {
+    return "Mekari menolak prediksi posisi (HTTP 400). Gunakan Atur Posisi di PDF untuk menempatkan kotak tanda tangan.";
+  }
+  if (route === "/v1/documents/request_global_sign") {
+    return "Mekari menolak pengajuan tanda tangan (HTTP 400). Periksa kuota, PDF, dan data penandatangan di Sandbox.";
+  }
+  if (route.endsWith("/download")) return "Mekari menolak pengambilan PDF final (HTTP 400).";
+  return "Mekari menolak pengecekan status dokumen (HTTP 400).";
+}
+
+export function canRetrySandboxJob(status: unknown, providerId: unknown, finalAttachmentId: unknown) {
+  return status === "FAILED" && providerId == null && finalAttachmentId == null;
 }
 
 async function request(method: "GET" | "POST", route: string, options: { body?: unknown; timeoutMs?: number; scope?: "attachment" } = {}) {
@@ -57,7 +72,8 @@ async function request(method: "GET" | "POST", route: string, options: { body?: 
     const hint = response.headers.get("Retry-After");
     const seconds = hint && /^\d+$/.test(hint) ? Number(hint) : hint ? Math.ceil((Date.parse(hint) - Date.now()) / 1000) : 0;
     await response.body?.cancel().catch(() => {});
-    throw new MekariError(response.status, seconds > 0 ? Math.min(seconds, 600) : null);
+    const message = response.status === 400 ? badRequestMessage(route) : undefined;
+    throw new MekariError(response.status, seconds > 0 ? Math.min(seconds, 600) : null, message);
   }
   return response;
 }

@@ -6,7 +6,7 @@ import SignaturePlacement from "@/components/SignaturePlacement";
 import AttachmentActions from "@/components/AttachmentActions";
 
 type Mode = "mock" | "sandbox";
-type Job = { id: string; status: string; mode: Mode; final_attachment_id: string | null };
+type Job = { id: string; status: string; mode: Mode; final_attachment_id: string | null; can_retry?: boolean };
 export type SandboxSource = { id: string; original_name: string; attachment_kind: string };
 type Coordinate = keyof Omit<SignatureAnnotation, "type_of">;
 type DraftSigner = {
@@ -52,6 +52,7 @@ export default function V11SigningPanel({ id, files = [], onReady, source }: {
 }) {
   const [mode, setMode] = useState<Mode | null>(null);
   const [job, setJob] = useState<Job | null>(null);
+  const [retrying, setRetrying] = useState(false);
   const [progress, setProgress] = useState<SandboxProgress | null>(null);
   const [retryAfter, setRetryAfter] = useState(0);
   const [busy, setBusy] = useState<"START" | "REFRESH" | "PREDICT" | null>(null);
@@ -72,6 +73,7 @@ export default function V11SigningPanel({ id, files = [], onReady, source }: {
     onReady?.(false);
     setMode(null);
     setJob(null);
+    setRetrying(false);
     setProgress(null);
     setRetryAfter(0);
     setMessage("");
@@ -147,14 +149,26 @@ export default function V11SigningPanel({ id, files = [], onReady, source }: {
       signers: signers.map((signer, index) => ({ ...recipients[index], ...signer.coordinates })),
     } : {};
     try {
-      const fields = kind === "START" ? { attachment_id: selectedPdf, confirm_sandbox: confirmed, ...sandboxFields } : {};
+      const fields = kind === "START"
+        ? { attachment_id: selectedPdf, confirm_sandbox: confirmed, retry_failed: retrying, ...sandboxFields }
+        : {};
       const json = await postAction(kind, fields);
       setJob(json.data);
+      setRetrying(false);
       if (json.progress) setProgress(json.progress);
       setRetryAfter(Number(json.retry_after) || 0);
       onReady?.(json.data?.status === "COMPLETED");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Proses Mekari gagal.");
+      if (kind === "START") {
+        const latest = await fetch(path, { cache: "no-store" })
+          .then(response => response.ok ? response.json() : null).catch(() => null);
+        if (latest?.ok) {
+          setJob(latest.data);
+          setRetrying(false);
+          onReady?.(latest.data?.status === "COMPLETED");
+        }
+      }
     } finally {
       setBusy(null);
     }
@@ -166,12 +180,13 @@ export default function V11SigningPanel({ id, files = [], onReady, source }: {
   const signed = checkedSigners.filter(signer => signer.status === "completed").length;
   const pdfPending = job?.status === "IN_PROGRESS" && progress?.status === "COMPLETED";
   const documentAwaitingConfirmation = job?.status === "IN_PROGRESS" && checkedSigners.length > 0 && signed === checkedSigners.length;
+  const canRetry = job?.can_retry === true && job.mode === mode;
   return <details className="card" style={{ marginTop: 12 }} open={source ? true : undefined}>
     <summary className="card-head"><b>{(job?.mode ?? mode) === "mock" ? "Simulasi Mekari Sign" : "Mekari Sign Sandbox"}</b></summary>
     <div className="card-body">
       {source && <p className="notice">Hasil tanda tangan disimpan sebagai bukti Sandbox. Status persetujuan dan penerbitan dicatat melalui alur SIAP ARU.</p>}
       {message && <p className="notice" role="status">{message}</p>}
-      {job ? <>
+      {job && !(canRetry && retrying) ? <>
         <div role="status">
           <b>{pdfPending ? "PDF final sedang disiapkan" : documentAwaitingConfirmation
             ? "Menunggu konfirmasi akhir dari Mekari" : jobLabels[job.status] ?? job.status}</b>
@@ -188,6 +203,11 @@ export default function V11SigningPanel({ id, files = [], onReady, source }: {
           </button>
           {retryAfter > 0 && <p className="hint">Bisa dicek lagi dalam {retryAfter} detik.</p>}
         </>}
+        {canRetry && <button className="btn btn-primary" type="button" disabled={!!busy} onClick={() => {
+          setConfirmed(false);
+          setRetrying(true);
+        }}>Coba Kirim Lagi</button>}
+        {job.status === "RECONCILE" && <p className="hint">Periksa dokumen di akun Mekari Sandbox sebelum mengirim pengajuan lain.</p>}
         {job.final_attachment_id && <AttachmentActions id={job.final_attachment_id} name="Bukti tanda tangan.pdf"
           downloadLabel={source ? "Unduh PDF bukti Sandbox" : "Unduh PDF final"}/>}
       </> : <form className="workflow-form" onSubmit={event => void action("START", event)}>
@@ -286,8 +306,9 @@ export default function V11SigningPanel({ id, files = [], onReady, source }: {
             </div>}
           </>}
           <div className="signing-controls">
+            {retrying && <button className="btn btn-secondary" type="button" onClick={() => setRetrying(false)}>Batal</button>}
             <button className="btn btn-primary" type="submit" disabled={!selectedPdf || (mode === "sandbox" && !confirmed)}>
-              {mode === "mock" ? "Mulai Simulasi" : "Ajukan Tanda Tangan Sandbox"}
+              {mode === "mock" ? "Mulai Simulasi" : retrying ? "Kirim Ulang ke Sandbox" : "Ajukan Tanda Tangan Sandbox"}
             </button>
           </div>
         </fieldset>
