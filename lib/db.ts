@@ -27,7 +27,10 @@ function makePool() {
     connectionLimit: Number(process.env.DB_CONNECTION_LIMIT || 10),
     queueLimit: 0,
     charset: "utf8mb4",
-    timezone: "Z",
+    // Interpret MySQL DATETIME values in the timezone used by the database session.
+    // "Z" (UTC) is the backwards-compatible default; use "+07:00" if DATETIME is stored as WIB.
+    // Display formatting remains centralized in formatWorkflowTime (Asia/Jakarta).
+    timezone: process.env.DB_TIMEZONE || "Z",
     ssl,
     decimalNumbers: true,
   });
