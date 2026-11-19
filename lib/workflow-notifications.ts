@@ -42,7 +42,7 @@ export async function notifyWorkflow(conn: Connection, event: {
     } as Record<string, string>)[event.action] || (letter.status === "APPROVED"
       ? "Dokumen disetujui untuk ditindaklanjuti" : "Surat menunggu persetujuan berikutnya");
   } else if (event.entityType === "DISPOSITION" &&
-      /^DISPOSITION_(CREATE|SUBMIT_RESULT|RETURN_RESULT|RETURN_TASK|APPROVE_RESULT|CANCEL_TASK)$/.test(event.action)) {
+      /^DISPOSITION_(CREATE|SUBMIT_RESULT|RETURN_RESULT|RETURN_TASK|REASSIGN_TASK|APPROVE_RESULT|CANCEL_TASK)$/.test(event.action)) {
     const [rows] = await conn.query<RowDataPacket[]>(
       `SELECT d.* FROM siap_dispositions d JOIN siap_v11_dispositions v ON v.disposition_id=d.id WHERE d.id=?`,
       [event.entityId],
@@ -56,6 +56,7 @@ export async function notifyWorkflow(conn: Connection, event: {
       DISPOSITION_SUBMIT_RESULT: "Hasil disposisi menunggu persetujuan",
       DISPOSITION_RETURN_RESULT: "Hasil disposisi perlu diperbaiki",
       DISPOSITION_RETURN_TASK: "Disposisi dikembalikan",
+      DISPOSITION_REASSIGN_TASK: "Disposisi ditugaskan ulang untuk Anda",
       DISPOSITION_APPROVE_RESULT: "Hasil disposisi disetujui",
       DISPOSITION_CANCEL_TASK: "Disposisi dibatalkan",
     } as Record<string, string>)[event.action];

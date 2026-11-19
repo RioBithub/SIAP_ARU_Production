@@ -9,8 +9,11 @@ import { str } from "@/lib/http";
 import { saveUpload } from "@/lib/upload";
 import { discardUncommittedFiles, type StoredLetterFile } from "@/lib/letter-uploads";
 import { findDispositionResultLetters } from "@/lib/correspondence-data";
+import { reviewRole } from "@/lib/correspondence-workflow";
+import { assertInvoiceVerificationAssignment, assertPaymentRequestAssignment, dispositionDeadlineInput, dispositionTarget } from "@/lib/disposition-assignment";
 import { saveProof, v11Letter } from "@/lib/v11-data";
-import { decidePayment, recordPayment } from "@/lib/v11-finance";
+import { decidePayment, preparePaymentTask, recordPayment } from "@/lib/v11-finance";
+import { letterCanBeDisposed } from "@/lib/v11-workflow";
 
 export const runtime="nodejs";
 
@@ -69,19 +72,20 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
     if (!references[0]) throw new Error("Disposisi tidak ditemukan.");
     const data = await withTransaction(async conn => {
       // New tasks, results and letter transitions acquire the letter lock first.
-      await conn.query("SELECT id FROM siap_letters WHERE id=? FOR UPDATE", [references[0].letter_id]);
+      const [letters] = await conn.query<RowDataPacket[]>(
+        "SELECT * FROM siap_letters WHERE id=? AND deleted_at IS NULL FOR UPDATE", [references[0].letter_id],
+      );
+      const letter = letters[0];
+      if (!letter) throw new Error("Disposisi tidak ditemukan.");
       const [rows]=await conn.query<RowDataPacket[]>(
         `SELECT d.*,
-          l.direction AS letter_direction,
-          l.status AS letter_status,l.document_type AS letter_document_type,
           fu.role AS originator_role,
           tu.role AS assignee_role,v.purpose,v.invoice_revision AS task_revision
          FROM siap_dispositions d
-         JOIN siap_letters l ON l.id=d.letter_id
          JOIN siap_users fu ON fu.id=d.from_user_id
          JOIN siap_users tu ON tu.id=d.to_user_id
          LEFT JOIN siap_v11_dispositions v ON v.disposition_id=d.id
-         WHERE d.id=? AND l.deleted_at IS NULL
+         WHERE d.id=?
          LIMIT 1 FOR UPDATE`,
         [params.id]
       );
@@ -97,6 +101,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
       const payment = d.purpose === "INVOICE_PAYMENT";
       const requestPayment = d.purpose === "REQUEST_PAYMENT";
       const cancel = action === "CANCEL_TASK";
+      const reassign = action === "REASSIGN_TASK";
 
       if (cancel ? !isRoot && d.from_user_id !== user.id : !isRoot && currentOwner !== user.id) {
         throw new Error("Disposisi ini sedang berada pada pihak lain.");
@@ -108,18 +113,18 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
           throw new Error("Tugas verifikasi atau pembayaran harus dikerjakan dan diperiksa oleh peserta yang ditetapkan.");
         }
         if (verification && ["SUBMIT_RESULT","APPROVE_RESULT"].includes(action) &&
-            (!workflow || workflow.invoice_revision !== d.task_revision || d.letter_status !== "MANAGER_REVIEW")) {
+            (!workflow || workflow.invoice_revision !== d.task_revision || letter.status !== "MANAGER_REVIEW")) {
           throw new Error("Tugas verifikasi berlaku untuk revisi dan tahap review invoice yang aktif.");
         }
-        if (payment && action !== "RETURN_TASK" && (!workflow?.payable_id || d.letter_status !== "APPROVED")) {
+        if (payment && action !== "RETURN_TASK" && (!workflow?.payable_id || letter.status !== "APPROVED")) {
           throw new Error("Invoice tidak berada pada tahap pembayaran.");
         }
       }
 
       if (workflow && d.assignee_role === "FINANCE" && ["START","SUBMIT_RESULT","APPROVE_RESULT"].includes(action)
-          && paymentKind(workflow, d.letter_document_type)) {
-        if (d.letter_status !== "APPROVED") throw new Error("Pengajuan belum berada pada tahap pembayaran.");
-        await requirePaymentDocuments(conn, d.letter_id, workflow, d.letter_document_type);
+          && paymentKind(workflow, letter.document_type)) {
+        if (letter.status !== "APPROVED") throw new Error("Pengajuan belum berada pada tahap pembayaran.");
+        await requirePaymentDocuments(conn, d.letter_id, workflow, letter.document_type);
       }
 
       const before=String(d.status);
@@ -129,7 +134,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
       let submittedAt:any=d.submitted_at||null;
       let reviewedAt:any=d.reviewed_at||null;
       let returnNote:any=d.return_note||null;
-      if (["SUBMIT_RESULT","RETURN_TASK","APPROVE_RESULT","CANCEL_TASK"].includes(action)) {
+      if (["SUBMIT_RESULT","RETURN_TASK","APPROVE_RESULT","CANCEL_TASK","REASSIGN_TASK"].includes(action)) {
         const [activeChildren] = await conn.query<RowDataPacket[]>(
           "SELECT id FROM siap_dispositions WHERE parent_id=? AND status NOT IN ('COMPLETED','RETURNED','CANCELLED') LIMIT 1",
           [params.id],
@@ -180,6 +185,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
 
         resultNote=note;
         submittedAt=new Date();
+        returnNote=null;
 
         const originatorRole=String(d.originator_role);
         const assigneeRole=String(d.assignee_role);
@@ -246,8 +252,47 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         nextOwner=String(d.from_user_id);
         returnNote=note;
 
+      } else if (reassign) {
+        if (before !== "RETURNED" || d.from_user_id !== user.id || currentOwner !== user.id) {
+          throw new Error("Hanya pemberi tugas yang dapat menugaskan ulang disposisi yang dikembalikan.");
+        }
+        if (!note) throw new Error("Instruksi tindak lanjut wajib diisi.");
+        const review = workflow && letter.direction === "INCOMING" ? reviewRole(letter.status) : null;
+        if (review ? !d.parent_id && (review !== user.role || letter.current_owner_user_id !== user.id)
+          : !letterCanBeDisposed(letter.direction, letter.status) || (workflow && letter.status === "COMPLETED")) {
+          throw new Error("Dokumen asal sudah berpindah tahap. Buka dokumen asal untuk melanjutkan.");
+        }
+        if (d.parent_id) {
+          const [parents] = await conn.query<RowDataPacket[]>(
+            "SELECT status,to_user_id FROM siap_dispositions WHERE id=? AND letter_id=? FOR UPDATE",
+            [d.parent_id, d.letter_id],
+          );
+          const parent = parents[0];
+          if (!parent || parent.status !== "IN_PROGRESS" ||
+              (parent.to_user_id !== user.id && (strict || !isRoot))) {
+            throw new Error("Tugas asal harus masih dikerjakan untuk menugaskan ulang delegasi ini.");
+          }
+        }
+        const target = await dispositionTarget(conn, user, d.to_user_id, strict, d.purpose || "GENERAL");
+        if (verification) {
+          if (!workflow || workflow.invoice_revision !== d.task_revision) {
+            throw new Error("Tugas ini berasal dari revisi invoice lama. Tugaskan verifikasi dari revisi yang aktif.");
+          }
+          await assertInvoiceVerificationAssignment(conn, user, letter, workflow, target);
+        } else if (payment) {
+          if (!workflow?.payable_id || target.role !== "FINANCE") throw new Error("Instruksi bayar tidak lagi aktif.");
+          await preparePaymentTask(conn, letter, workflow, user.id);
+        } else if (requestPayment) {
+          if (!workflow) throw new Error("Pengajuan pembayaran tidak lagi aktif.");
+          await assertPaymentRequestAssignment(conn, user, letter, workflow, target, d.parent_id);
+        }
+        after = "UNSEEN";
+        nextOwner = d.to_user_id;
+
       } else if (action === "CANCEL_TASK") {
-        if (!strict || ["COMPLETED", "RETURNED", "CANCELLED"].includes(before)) throw new Error("Tugas tidak dapat dibatalkan.");
+        if (before !== "RETURNED" && (!strict || ["COMPLETED", "CANCELLED"].includes(before))) {
+          throw new Error("Tugas tidak dapat dibatalkan.");
+        }
         if (!note) throw new Error("Alasan pembatalan wajib diisi.");
         after = "CANCELLED";
         nextOwner = String(d.from_user_id);
@@ -259,7 +304,17 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
 
       const actionId=crypto.randomUUID();
 
-      if(action==="SEEN"){
+      if(reassign){
+        const updateDeadline = "due_date" in parsed.fields || "due_time" in parsed.fields;
+        const deadline = updateDeadline ? dispositionDeadlineInput(parsed.fields) : null;
+        await conn.execute(
+          `UPDATE siap_dispositions SET status=?,current_owner_user_id=?,instruction=?,
+           due_date=IF(?,?,due_date),due_time=IF(?,?,due_time),
+           seen_at=NULL,started_at=NULL,submitted_at=NULL,reviewed_at=NULL,completed_at=NULL,returned_at=NULL,
+           result_note=NULL,return_note=NULL WHERE id=?`,
+          [after,nextOwner,note,updateDeadline,deadline?.date ?? null,updateDeadline,deadline?.time ?? null,params.id],
+        );
+      }else if(action==="SEEN"){
         await conn.execute(
           `UPDATE siap_dispositions
            SET status=?,current_owner_user_id=?,
@@ -330,7 +385,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         attachmentCount++;
       }
 
-      if (strict && (action === "SUBMIT_RESULT" || action === "RETURN_RESULT" || cancel)) {
+      if (strict && (action === "SUBMIT_RESULT" || action === "RETURN_RESULT" || cancel || reassign)) {
         await conn.execute("UPDATE siap_v11_dispositions SET result_letter_id=? WHERE disposition_id=?",
           [action === "SUBMIT_RESULT" ? resultLetterId || null : null, params.id]);
       }
@@ -343,8 +398,11 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         }
       }
 
-      if(!workflow && action==="START" && String(d.letter_direction)!=="OUTGOING"){
-        if(["APPROVED","DISPOSED","IN_PROGRESS"].includes(String(d.letter_status))){
+      if (!workflow && reassign && letter.direction !== "OUTGOING" && letter.status === "COMPLETED") {
+        await conn.execute("UPDATE siap_letters SET status='DISPOSED',updated_by=? WHERE id=?", [user.id,d.letter_id]);
+      }
+      if(!workflow && action==="START" && String(letter.direction)!=="OUTGOING"){
+        if(["APPROVED","DISPOSED","IN_PROGRESS"].includes(String(letter.status))){
           await conn.execute(
             `UPDATE siap_letters
              SET status='IN_PROGRESS',updated_by=?
@@ -354,8 +412,8 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         }
       }
 
-      if(!workflow && after==="COMPLETED" && String(d.letter_direction)!=="OUTGOING" &&
-          ["APPROVED","DISPOSED","IN_PROGRESS"].includes(String(d.letter_status))){
+      if(!workflow && after==="COMPLETED" && String(letter.direction)!=="OUTGOING" &&
+          ["APPROVED","DISPOSED","IN_PROGRESS"].includes(String(letter.status))){
         const [pending]=await conn.query<RowDataPacket[]>(
           `SELECT COUNT(*) AS c
            FROM siap_dispositions

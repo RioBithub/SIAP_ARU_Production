@@ -325,6 +325,10 @@ try {
     const task = await taskDetail("finance", state.paymentTask);
     assert.equal(task.disposition.purpose, "INVOICE_PAYMENT");
     assert.equal(task.disposition.visibility, "PRIVATE");
+    const payableId = (await detail("ksu", state.invoice)).v11.payment.payable_id;
+    await taskAction("finance", state.paymentTask, "RETURN_TASK", { note: "SIMULASI perjelas detail pembayaran." });
+    await taskAction("ksu", state.paymentTask, "REASSIGN_TASK", { note: "SIMULASI detail pembayaran sudah dilengkapi." });
+    assert.equal((await detail("ksu", state.invoice)).v11.payment.payable_id, payableId);
     await start("finance", state.paymentTask);
     return "Invoice dengan SPK tertaut diblokir bila berkas lain kurang. Finance mendapat instruksi privat begitu lengkap.";
   });
@@ -896,6 +900,65 @@ try {
       assert(await staff.locator('textarea[name="note"]').isVisible());
       assert(await staff.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
       await staff.screenshot({ path: path.join(out, "03-hasil-tugas-mobile.png") });
+      await staff.getByRole("dialog", { name: "Kirim Hasil", exact: true }).getByRole("button", { name: "Batal", exact: true }).click();
+      await taskDialog.getByRole("button", { name: "Kembalikan Disposisi", exact: true }).click();
+      const returnDialog = staff.getByRole("dialog", { name: "Kembalikan Disposisi", exact: true });
+      await returnDialog.locator('textarea[name="note"]').fill("SIMULASI unit penerima belum disebut.");
+      await returnDialog.getByRole("button", { name: "Kembalikan Disposisi", exact: true }).click();
+      await returnDialog.waitFor({ state: "hidden" });
+      await taskDialog.getByText("Alasan pengembalian disposisi", { exact: true }).waitFor();
+      assert.equal(await taskDialog.getByRole("button", { name: "Perbaiki & Tugaskan Ulang", exact: true }).count(), 0);
+
+      await desktop.goto(new URL("/dispositions?disposition_id=" + task.id, base).href);
+      const dispositionDialog = desktop.getByRole("dialog", { name: subject("demo-ui-mobile"), exact: true });
+      await dispositionDialog.getByText("SIMULASI unit penerima belum disebut.", { exact: false }).first().waitFor();
+      const reassignLabel = "Perbaiki & Tugaskan Ulang";
+      await dispositionDialog.getByRole("button", { name: reassignLabel, exact: true }).click();
+      const reassignDialog = desktop.getByRole("dialog", { name: reassignLabel, exact: true });
+      const instruction = reassignDialog.getByLabel("Instruksi tindak lanjut (wajib)", { exact: true });
+      assert.equal(await instruction.inputValue(), "SIMULASI tindak lanjut dari UI");
+      await instruction.fill("SIMULASI cek dengan unit Operasional.");
+      await reassignDialog.getByLabel("Tanggal target selesai (opsional)").fill(due);
+      await reassignDialog.getByLabel("Jam target selesai WIB (opsional)").fill("16:30");
+      await reassignDialog.getByRole("button", { name: reassignLabel, exact: true }).click();
+      await reassignDialog.waitFor({ state: "hidden" });
+      await dispositionDialog.getByText(/^Disposisi ditugaskan ulang/).waitFor();
+
+      await staff.reload();
+      await taskDialog.getByText("SIMULASI cek dengan unit Operasional.", { exact: false }).first().waitFor();
+      await taskDialog.getByRole("button", { name: "Mulai", exact: true }).click();
+      await taskDialog.getByRole("button", { name: "Kirim Hasil", exact: true }).waitFor();
+      await submit("staff", task.id);
+      await taskAction("ops", task.id, "RETURN_RESULT", { note: "SIMULASI tambahkan ringkasan ATK." });
+      await staff.reload();
+      await taskDialog.getByText("Catatan revisi hasil", { exact: true }).waitFor();
+      await taskDialog.getByRole("button", { name: "Kirim Ulang Hasil", exact: true }).waitFor();
+      const invoice = await incoming("invoice-form-ui", { actor: "it", type: "INVOICE_MASUK",
+        business: { total: "45000000", due_date: due } });
+      await register(invoice.id);
+      const verification = await assign("ops", invoice.id, "staff", { purpose: "INVOICE_VERIFY" });
+      await start("staff", verification.id);
+      await staff.goto(new URL("/dispositions", base).href);
+      await staff.getByRole("row").filter({ hasText: subject("invoice-form-ui") })
+        .getByRole("button", { name: "Kirim Hasil", exact: true }).click();
+      const invoiceForm = staff.getByRole("dialog", { name: "Kirim Hasil", exact: true });
+      await invoiceForm.getByLabel("Jenis dokumen persyaratan").selectOption("BPK");
+      await invoiceForm.getByLabel("Berkas persyaratan").setInputFiles({
+        name: "SIMULASI-BPK-Pengajuan.pdf", mimeType: "application/pdf", buffer: pdf,
+      });
+      await invoiceForm.getByRole("button", { name: "Unggah dokumen" }).click();
+      await invoiceForm.getByText("Persyaratan diperbarui.", { exact: true }).waitFor();
+      const invoiceNote = invoiceForm.getByLabel("Ringkasan pemeriksaan (wajib)", { exact: true });
+      await invoiceNote.fill("SIMULASI pesanan ATK sesuai bukti.");
+      await invoiceForm.getByLabel(/^Bukti verifikasi/).setInputFiles({
+        name: "SIMULASI-Bukti-Verifikasi.pdf", mimeType: "application/pdf", buffer: pdf,
+      });
+      await invoiceForm.getByRole("button", { name: "Kirim Hasil", exact: true }).click();
+      await invoiceForm.waitFor({ state: "hidden" });
+      const saved = await taskDetail("ops", verification.id);
+      assert.equal(saved.disposition.status, "REVIEW_MANAGER");
+      assert.equal(saved.paymentDocuments.documents.find(doc => doc.code === "BPK").attachment.name, "SIMULASI-BPK-Pengajuan.pdf");
+      assert(saved.attachments.some(attachment => attachment.original_name === "SIMULASI-Bukti-Verifikasi.pdf"));
       const fin = await pageFor("ksu", false);
       await fin.goto(new URL("/letters/incoming?letter_id=" + state.invoice, base).href);
       const paid = fin.getByText("Bayar di-ACC", { exact: true });
@@ -939,7 +1002,7 @@ try {
       await dialog.waitFor({ state: "hidden" });
       await rowFor().waitFor({ state: "hidden" });
       await call("root", "/api/letters/" + cleanup.id, { status: 404 });
-      return "Chromium 390/1440 px: riwayat disposisi tampil utama, riwayat surat dapat dibuka dan lampiran proses dapat dipratinjau.";
+      return "Chromium 390/1440 px: pratinjau, riwayat, penugasan ulang, revisi hasil, dan pengisian berkas pembayaran di form verifikasi invoice.";
     } finally {
       await browser.close();
     }
@@ -1042,7 +1105,9 @@ try {
     await taskAction("finance", request.id, "RETURN_TASK", { note: "SIMULASI bukti perlu diperbarui" });
     assert.equal((await taskDetail("ksu", request.id)).disposition.status, "RETURNED");
     assert.equal((await detail("ksu", payRequest.id)).letter.status, "APPROVED");
-    await assign("ksu", payRequest.id, "finance", { purpose: "REQUEST_PAYMENT" });
+    await taskAction("ksu", request.id, "REASSIGN_TASK", { note: "SIMULASI bukti pengajuan sudah jelas." });
+    await assign("ksu", payRequest.id, "finance", { purpose: "REQUEST_PAYMENT" }, 400);
+    await start("finance", request.id);
     return "PIC khusus, pencarian server, tenggat WIB, dan pengembalian Finance ke KSU dengan alasan lulus.";
   });
   await test(55, async () => {
@@ -1228,10 +1293,91 @@ try {
     await assert.rejects(readFile(file.storage_path), { code: "ENOENT" });
     return "Dokumen terhubung Finance terlindungi. Jika penyimpanan gagal, pembersihan berkas dapat diulang setelah purge sudah tercatat.";
   });
+  await test(60, async () => {
+    const letter = await incoming("perbaiki-jalur");
+    await register(letter.id);
+    for (const role of ["ops", "dirops", "dirut"]) await letterAction(role, letter.id, "APPROVE");
+    const top = await assign("dirut", letter.id, "dirops", { due_date: due, due_time: "13:00" });
+    const instruction = "SIMULASI cek surat dan lampiran.";
+    const reassign = (role, task, fields = {}, files = [], status = 200) =>
+      taskAction(role, task.id, "REASSIGN_TASK", { note: instruction, ...fields }, files, status);
+    await taskAction("dirops", top.id, "RETURN_TASK", { note: "SIMULASI tujuan belum jelas." }, ["files"]);
+    for (const actor of ["dirops", "ksu", "root"]) await reassign(actor, top, {}, [], 400);
+    await reassign("dirut", top, { due_date: "", due_time: "14:00" }, [], 400);
+    const parallel = await Promise.all([1, 2].map(() => reassign("dirut", top, {}, ["files"], [200,400])));
+    assert.equal(parallel.filter(result => result.status === "UNSEEN").length, 1);
+    const resumed = await taskDetail("dirops", top.id);
+    assert.equal(resumed.disposition.current_owner_user_id, roles.dirops.id);
+    assert.equal(resumed.disposition.instruction, instruction);
+    assert.equal(resumed.disposition.due_time, "13:00:00");
+    assert.equal(resumed.attachments.length, 2);
+    assert(resumed.actions.some(action => action.action === "RETURN_TASK" && action.note.includes("tujuan")));
+    assert.equal(resumed.actions.filter(action => action.action === "REASSIGN_TASK").length, 1);
+    const alert = (await call("dirops", "/api/notifications")).items.find(item =>
+      item.href.endsWith(top.id) && item.title === "Disposisi ditugaskan ulang untuk Anda");
+    assert.equal(alert.event_status, "UNSEEN");
+
+    await start("dirops", top.id);
+    const middle = await assign("dirops", letter.id, "ops", { parent_id: top.id });
+    await taskAction("ops", middle.id, "RETURN_TASK", { note: "SIMULASI butuh arahan." });
+    await reassign("dirops", middle);
+    await start("ops", middle.id);
+    const leaf = await assign("ops", letter.id, "staff", { parent_id: middle.id });
+    await taskAction("staff", leaf.id, "RETURN_TASK", { note: "SIMULASI perlu klarifikasi." });
+    await reassign("ops", leaf);
+    await start("staff", leaf.id);
+    await submit("staff", leaf.id);
+    await taskAction("ops", leaf.id, "APPROVE_RESULT");
+    const other = await assign("ops", letter.id, "staff", { parent_id: middle.id });
+    await taskAction("staff", other.id, "RETURN_TASK", { note: "SIMULASI tidak bisa ditindaklanjuti." });
+    await submit("ops", middle.id);
+    await reassign("ops", other, {}, [], 400);
+    await taskAction("ops", other.id, "CANCEL_TASK", { note: "SIMULASI ditutup, hasil disiapkan Manager." });
+    assert.equal((await taskDetail("staff", other.id)).disposition.status, "CANCELLED");
+    await taskAction("dirops", middle.id, "APPROVE_RESULT");
+    await submit("dirops", top.id);
+    await taskAction("dirut", top.id, "RETURN_RESULT", { note: "SIMULASI lengkapi hasil akhir." });
+    assert.equal((await taskDetail("dirops", top.id)).disposition.return_note, "SIMULASI lengkapi hasil akhir.");
+    await submit("dirops", top.id, "SIMULASI perbaikan hasil akhir.");
+    await taskAction("dirut", top.id, "APPROVE_RESULT");
+    assert.equal((await taskDetail("dirut", top.id)).disposition.status, "COMPLETED");
+    return "Dirut, Dirops, dan Manager menugaskan ulang ke PIC yang sama. Lampiran, delegasi, notifikasi, hak akses, dan hasil revisi terjaga.";
+  });
+  await test(61, async () => {
+    const invoice = await incoming("verifikasi-dikembalikan", { type: "INVOICE_MASUK", business: { total: "45000000", due_date: due } });
+    await register(invoice.id);
+    const options = { purpose: "INVOICE_VERIFY" };
+    const original = await assign("ops", invoice.id, "staff", options);
+    assert.equal((await taskDetail("staff", original.id)).paymentDocuments.editable, true);
+    await call("staffkeu", "/api/dispositions/" + original.id, { status: 404 });
+    await start("staff", original.id);
+    await taskAction("staff", original.id, "RETURN_TASK", { note: "SIMULASI perlu daftar barang yang diterima." });
+    const competing = await assign("ops", invoice.id, "staff", options);
+    const fields = { note: "SIMULASI cocokkan invoice dengan daftar barang." };
+    await taskAction("ops", original.id, "REASSIGN_TASK", fields, [], 400);
+    await taskAction("ops", competing.id, "CANCEL_TASK", { note: "SIMULASI gunakan tugas pertama." });
+    await taskAction("ops", original.id, "REASSIGN_TASK", fields);
+    await start("staff", original.id);
+    await submit("staff", original.id, "SIMULASI jumlah barang sesuai.", ["files"]);
+    await taskAction("ops", original.id, "APPROVE_RESULT");
+    assert.equal((await detail("ops", invoice.id)).v11.verified, true);
+    const oldRevision = (await incoming("verifikasi-revisi-lama", { type: "INVOICE_MASUK", business: { total: "50000", due_date: due } })).id;
+    await register(oldRevision);
+    const older = await assign("ops", oldRevision, "staff", options);
+    await taskAction("staff", older.id, "RETURN_TASK", { note: "SIMULASI nominal perlu direvisi." });
+    await letterAction("ops", oldRevision, "RETURN", { comment: "SIMULASI nominal perlu direvisi." });
+    await call("staff", "/api/letters/" + oldRevision, { method: "PATCH", body: {
+      business: { total: "51000", due_date: due },
+    } });
+    await register(oldRevision, "ops", false);
+    const stale = await taskAction("ops", older.id, "REASSIGN_TASK", fields, [], 400);
+    assert.match(stale.error, /revisi invoice lama/);
+    return "Verifikasi invoice bisa dilanjutkan dari tugas lama pada revisi yang aktif. Tugas saingan dan revisi usang ditolak.";
+  });
 } finally {
   await sql.end();
   await writeFile(path.join(out, "uat.json"), JSON.stringify({ runId, db: profile.version, cases: result }, null, 2));
 }
 const totals = Object.fromEntries(["PASS","FAIL","SKIP"].map(status => [status,result.filter(row=>row.status===status).length]));
 console.log(JSON.stringify(totals));
-if (totals.FAIL || result.length !== 59) process.exitCode=1;
+if (totals.FAIL || result.length !== 61) process.exitCode=1;

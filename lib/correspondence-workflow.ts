@@ -92,6 +92,7 @@ const dispositionActions: Record<string, string> = {
   APPROVE_RESULT: "Hasil disetujui",
   RETURN_RESULT: "Hasil dikembalikan",
   RETURN_TASK: "Disposisi dikembalikan",
+  REASSIGN_TASK: "Disposisi ditugaskan ulang",
   CANCEL_TASK: "Disposisi dibatalkan",
 };
 

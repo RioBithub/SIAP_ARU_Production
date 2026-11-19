@@ -41,6 +41,7 @@ type ProcessAction={
   resultRequirement?:ResultRequirement;
   purpose?:TaskPurpose;
   tone?:"primary"|"success"|"danger";
+  reassignment?: { instruction: string; pic: string; dueDate: string; dueTime: string };
 };
 
 type DispositionLetter = {
@@ -361,24 +362,34 @@ export default function DispositionsClient({user}:{user:SessionUser}){
       const j=await r.json();
       if(!r.ok){
         setError(j.error||"Gagal membuka detail.");
-        return;
+        return false;
       }
       setDetail(j.data);
       setDetailOpen(true);
+      return true;
     }catch(e){
       setError(e instanceof Error?e.message:"Gagal membuka detail disposisi.");
+      return false;
     }
   }
 
-  function startProcess(
+  async function startProcess(
     d:any,
     action:string,
     label:string,
     requiredNote=false,
     tone:"primary"|"success"|"danger"="primary"
   ){
+    setError("");
+    if(action==="SUBMIT_RESULT"&&d.purpose==="INVOICE_VERIFY"&&
+      (!detailOpen||detail?.disposition.id!==d.id)&&!await openDetail(d.id)) return;
     setProcessFiles([]);
-    setProcess({id:d.id,action,label,requiredNote,tone,resultRequirement:d.result_requirement,purpose:d.purpose});
+    setProcess({
+      id:d.id,action,label,requiredNote,tone,resultRequirement:d.result_requirement,purpose:d.purpose,
+      reassignment:action==="REASSIGN_TASK"?{
+        instruction:d.instruction,pic:d.to_name,dueDate:d.due_date?.slice(0,10)||"",dueTime:d.due_time?.slice(0,5)||"",
+      }:undefined,
+    });
   }
 
   async function submitProcess(e:FormEvent<HTMLFormElement>){
@@ -401,6 +412,10 @@ export default function DispositionsClient({user}:{user:SessionUser}){
       fd.set("action",process.action);
       fd.set("note",note);
       if(process.action==="SUBMIT_RESULT") fd.set("result_letter_id",String(form.get("result_letter_id")||""));
+      if(process.reassignment){
+        fd.set("due_date",String(form.get("due_date")||""));
+        fd.set("due_time",String(form.get("due_time")||""));
+      }
 
       if(process.action==="SUBMIT_RESULT"&&process.purpose==="INVOICE_PAYMENT") {
         for(const key of ["payment_amount","payment_date","payment_payee","payment_account","payment_reference","bookkeeping_note"])
@@ -486,8 +501,13 @@ export default function DispositionsClient({user}:{user:SessionUser}){
       user.role==="ROOT_ADMIN" ||
       String(d.current_owner_user_id||d.to_user_id)===String(user.id);
 
-    const canCancel=Boolean(d.purpose)&&!TERMINAL_TASK_STATES.includes(d.status)&&(user.role==="ROOT_ADMIN"||d.from_user_id===user.id);
+    const returned=d.status==="RETURNED";
+    const canCancel=(returned||Boolean(d.purpose)&&!TERMINAL_TASK_STATES.includes(d.status))&&
+      (user.role==="ROOT_ADMIN"||d.from_user_id===user.id);
     const out:any[]=[];
+    if(returned&&d.from_user_id===user.id&&d.current_owner_user_id===user.id) out.push(
+      <button key="reassign" className="btn btn-primary"
+        onClick={()=>startProcess(d,"REASSIGN_TASK","Perbaiki & Tugaskan Ulang",true)}>Perbaiki & Tugaskan Ulang</button>);
     if(canCancel) out.push(<button key="cancel" className="btn btn-danger"
       onClick={()=>startProcess(d,"CANCEL_TASK","Batalkan Tugas",true,"danger")}>Batalkan Tugas</button>);
     if(!owns) return out;
@@ -506,9 +526,10 @@ export default function DispositionsClient({user}:{user:SessionUser}){
     }
 
     if(d.status==="IN_PROGRESS"){
+      const label=d.return_note?"Kirim Ulang Hasil":"Kirim Hasil";
       out.push(
-        <button key="result" className="btn btn-success" onClick={()=>startProcess(d,"SUBMIT_RESULT","Kirim Hasil",true,"success")}>
-          Kirim Hasil
+        <button key="result" className="btn btn-success" onClick={()=>startProcess(d,"SUBMIT_RESULT",label,true,"success")}>
+          {label}
         </button>
       );
     }
@@ -540,6 +561,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
     detail?.attachments?.filter((a:any)=>!a.disposition_action_id)||[];
   const sourceAttachments=detail?.sourceAttachments??[];
   const childTasks=detail?.children??[];
+  const submittingVerification=process?.action==="SUBMIT_RESULT"&&process.purpose==="INVOICE_VERIFY";
 
 
 
@@ -838,9 +860,18 @@ export default function DispositionsClient({user}:{user:SessionUser}){
               {detail.disposition.instruction}
             </div>
 
+            {detail.disposition.return_note&&["RETURNED","IN_PROGRESS"].includes(detail.disposition.status)&&
+              <div className="notice" style={{marginTop:12}}>
+                <b>{detail.disposition.status==="RETURNED"?"Alasan pengembalian disposisi":"Catatan revisi hasil"}</b><br/>
+                {detail.disposition.return_note}
+                {detail.disposition.status==="RETURNED"&&
+                  <p>PIC dapat melanjutkan setelah pemberi tugas menugaskan ulang disposisi ini.</p>}
+              </div>
+            }
+
             {detail.disposition.result_note&&
               <div className="success" style={{marginTop:12}}>
-                <b>Hasil tindak lanjut</b><br/>
+                <b>{detail.disposition.status==="IN_PROGRESS"?"Hasil sebelumnya":"Hasil tindak lanjut"}</b><br/>
                 {detail.disposition.result_note}
               </div>
             }
@@ -848,7 +879,8 @@ export default function DispositionsClient({user}:{user:SessionUser}){
             <div style={{display:"flex",gap:7,flexWrap:"wrap",marginTop:12}}>
               {actionButtons(detail.disposition)}
               {detail.disposition.status==="IN_PROGRESS"&&(detail.disposition.to_user_id===user.id||user.role==="ROOT_ADMIN")&&<>
-                {["STAFF","FINANCE","ROOT_ADMIN"].includes(user.role)&&
+                {(!detail.disposition.purpose||detail.disposition.purpose==="GENERAL")&&
+                  ["STAFF","FINANCE","ROOT_ADMIN"].includes(user.role)&&
                   <a className="btn btn-secondary" href={"/letters/outgoing?source_disposition_id="+encodeURIComponent(detail.disposition.id)}>Buat Draf Surat Hasil</a>}
                 {canCreate&&(detail.disposition.to_user_id===user.id||!detail.disposition.purpose)&&<button className="btn btn-secondary" onClick={()=>{
                   searchLetters("");
@@ -891,8 +923,8 @@ export default function DispositionsClient({user}:{user:SessionUser}){
               </div>
             </section>
 
-            {detail.paymentDocuments&&<PaymentDocumentsPanel id={detail.disposition.letter_id}
-              data={{...detail.paymentDocuments,editable:false}}/>}
+            {detail.paymentDocuments&&<PaymentDocumentsPanel key={detail.disposition.id} id={detail.disposition.letter_id}
+              data={detail.paymentDocuments} onSaved={async()=>{await openDetail(detail.disposition.id);}}/>}
 
             {detail.sandboxSigning && <AttachmentSandbox key={detail.disposition.id}
               files={detail.attachments.filter((file:any) =>
@@ -984,19 +1016,35 @@ export default function DispositionsClient({user}:{user:SessionUser}){
         subtitle="Catatan dan lampiran proses akan masuk ke riwayat dan Audit Log."
         onClose={()=>!processBusy&&setProcess(null)}
       >
+        {submittingVerification&&detail?.disposition.id===process.id&&<>
+          <p className="notice">
+            Unggah berkas pembayaran sesuai jenisnya di bawah. Setelah itu isi ringkasan pemeriksaan dan unggah bukti verifikasi
+            seperti berita acara atau bukti barang diterima. Hasil dikirim ke Manager untuk diperiksa.
+          </p>
+          {detail.paymentDocuments&&<PaymentDocumentsPanel id={detail.disposition.letter_id}
+            data={detail.paymentDocuments} onSaved={async()=>{await openDetail(process.id);}}/>}
+        </>}
         <form className="form-grid workflow-form" onSubmit={submitProcess}>
           {error&&<div className="field full error" role="alert">{error}</div>}
+          {process.reassignment&&<div className="field full notice">
+            Tugas akan dikirim kembali ke <b>{process.reassignment.pic}</b>. Masukkan instruksi yang sudah diperjelas.
+          </div>}
           <div className="field full">
-            <label>
-              {process.requiredNote?"Catatan / Hasil (wajib)":"Catatan Proses (opsional)"}
+            <label htmlFor="disposition-process-note">
+              {process.reassignment?"Instruksi tindak lanjut (wajib)":submittingVerification?"Ringkasan pemeriksaan (wajib)":
+                process.requiredNote?"Catatan / Hasil (wajib)":"Catatan Proses (opsional)"}
             </label>
 
             <textarea
               className="textarea"
+              id="disposition-process-note"
               name="note"
+              defaultValue={process.reassignment?.instruction}
+              maxLength={5000}
               required={process.requiredNote}
               placeholder={
-                process.action==="SUBMIT_RESULT"
+                submittingVerification?"Contoh: Jumlah ATK dan penerimaan sesuai invoice."
+                :process.action==="SUBMIT_RESULT"
                   ?"Tuliskan ringkasan hasil tindak lanjut..."
                   :process.action==="RETURN_RESULT"
                     ?"Jelaskan bagian hasil yang perlu diperbaiki..."
@@ -1006,6 +1054,15 @@ export default function DispositionsClient({user}:{user:SessionUser}){
               }
             />
           </div>
+
+          {process.reassignment&&<>
+            <label className="field"><span>Tanggal target selesai (opsional)</span>
+              <input className="input" type="date" name="due_date" defaultValue={process.reassignment.dueDate}/>
+            </label>
+            <label className="field"><span>Jam target selesai WIB (opsional)</span>
+              <input className="input" type="time" name="due_time" defaultValue={process.reassignment.dueTime}/>
+            </label>
+          </>}
 
           {process.action==="SUBMIT_RESULT"&&process.purpose==="INVOICE_PAYMENT"&&<>
             <label className="field"><span>Nominal Bayar (Rp)</span><input className="input" name="payment_amount" inputMode="decimal" required/></label>
@@ -1019,11 +1076,13 @@ export default function DispositionsClient({user}:{user:SessionUser}){
           {process.action==="SUBMIT_RESULT"&&(!process.purpose||process.purpose==="GENERAL")&&
             <ResultLetterField dispositionId={process.id} required={process.resultRequirement==="OUTGOING_LETTER"}/>}
           <div className="field full">
-            <label>Lampiran Proses <span className="muted">
+            <label htmlFor="disposition-process-files">
+              {submittingVerification?"Bukti verifikasi":"Lampiran Proses"} <span className="muted">
               ({process.action==="SUBMIT_RESULT"&&process.resultRequirement==="ATTACHMENT"?"wajib":"opsional"}, maksimal 5 file)
             </span></label>
             <input
               className="input"
+              id="disposition-process-files"
               type="file"
               multiple
               required={process.action==="SUBMIT_RESULT"&&process.resultRequirement==="ATTACHMENT"}
