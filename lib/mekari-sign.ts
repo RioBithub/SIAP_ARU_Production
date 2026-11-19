@@ -3,6 +3,8 @@ import { hmacHeaders, MEKARI_SANDBOX_BASE } from "./mekari-hmac.mjs";
 
 export { hmacHeaders, MEKARI_SANDBOX_BASE } from "./mekari-hmac.mjs";
 const MAX_PDF_SIZE = 10 * 1024 * 1024;
+const SEND_SIGNATURE_ROUTE = "/v1/documents/request_global_sign";
+const MAX_ERROR_BYTES = 16 * 1024;
 export const MEKARI_PILOT_JOB_MODE = "sandbox-test";
 
 export function sandboxAttachmentsEnabled() {
@@ -26,20 +28,127 @@ export function sandboxCredentials() {
 export class MekariError extends Error {
   readonly status: number;
   readonly retryAfter: number | null;
-  constructor(status: number, retryAfter: number | null = null, message?: string) {
+  readonly rejection?: MekariRejection;
+  constructor(status: number, retryAfter: number | null = null, message?: string, rejection?: MekariRejection) {
     super(message ?? (status === 424 ? "PDF final sedang disiapkan di sandbox." : status === 0
       ? "Sandbox belum memberi respons yang dapat dikonfirmasi." : "Sandbox Mekari merespons HTTP " + status + "."));
     this.status = status;
     this.retryAfter = retryAfter;
+    this.rejection = rejection;
   }
+}
+
+type MekariRejection = {
+  code: string | null;
+  reason: "QUOTA" | "VALIDATION" | null;
+  fields: string[];
+};
+
+const validationFields: Record<string, string> = {
+  doc: "PDF sumber", filename: "nama file", template_id: "templat", receivers: "penerima salinan",
+  signers: "data penandatangan", "signers.name": "nama penandatangan", "signers.email": "email penandatangan",
+  signing_order: "urutan tanda tangan", "signers.order": "urutan tanda tangan",
+  "signers.annotations": "posisi tanda tangan", "signers.annotations.type_of": "jenis kolom tanda tangan",
+  "signers.annotations.page": "halaman tanda tangan",
+  "signers.annotations.position_x": "posisi kotak tanda tangan", "signers.annotations.position_y": "posisi kotak tanda tangan",
+  "signers.annotations.element_width": "ukuran kotak tanda tangan", "signers.annotations.element_height": "ukuran kotak tanda tangan",
+  "signers.annotations.canvas_width": "ukuran halaman PDF", "signers.annotations.canvas_height": "ukuran halaman PDF",
+  callback_url: "konfigurasi callback Mekari",
+};
+
+function objectFields(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+async function readErrorBody(response: Response) {
+  const reader = response.body?.getReader();
+  if (!reader) return null;
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    if (Number(response.headers.get("Content-Length")) > MAX_ERROR_BYTES) return null;
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      size += part.value.length;
+      if (size > MAX_ERROR_BYTES) return null;
+      chunks.push(part.value);
+    }
+    return objectFields(JSON.parse(Buffer.concat(chunks, size).toString("utf8")));
+  } catch {
+    return null;
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+}
+
+async function readSendRejection(response: Response): Promise<MekariRejection> {
+  const body = await readErrorBody(response);
+  const data = objectFields(body?.data);
+  const code = typeof body?.code === "string" && body.code.length === 7 && /^MSN-\d{3}$/.test(body.code) ? body.code : null;
+  const validation = response.status === 400 || response.status === 422;
+  // The documented quota variant has no stable code. Its exact, known wording
+  // only affects the displayed hint. Retry decisions use the HTTP status.
+  const quota = response.status === 400 && [data?.message, body?.message].some(
+    message => typeof message === "string" && /^quota is insufficient\.?$/i.test(message.trim()),
+  );
+  const fields = new Set<string>();
+  if (validation && !quota) {
+    for (const key of Object.keys(objectFields(data?.params) ?? {})) {
+      const path = key.replace(/\[([a-z_]+|\d+)\]/g, ".$1").replace(/\.\d+(?=\.|$)/g, "");
+      if (Object.hasOwn(validationFields, path)) fields.add(validationFields[path]);
+    }
+  }
+  return { code, reason: quota ? "QUOTA" : fields.size ? "VALIDATION" : null, fields: [...fields] };
+}
+
+function sendRejectionMessage(status: number, rejection: MekariRejection) {
+  let hint: string;
+  switch (status) {
+    case 400:
+    case 422:
+      hint = rejection.reason === "QUOTA" ? "Kuota tanda tangan Sandbox tidak mencukupi. Periksa kuota akun sebelum mengirim ulang."
+        : rejection.fields.length ? `Periksa kolom yang ditandai Mekari: ${rejection.fields.join(", ")}.`
+          : "Mekari belum memberi rincian yang dapat ditampilkan. Periksa kuota, PDF, data penandatangan, dan penempatan tanda tangan.";
+      break;
+    case 401:
+      hint = "Minta admin memeriksa konfigurasi autentikasi HMAC Sandbox.";
+      break;
+    case 403:
+      hint = "Minta admin memeriksa kredensial dan akses akun ke pengiriman tanda tangan Sandbox.";
+      break;
+    case 404:
+      hint = "Minta admin memeriksa konfigurasi layanan Sandbox.";
+      break;
+    default:
+      hint = "Periksa daftar dokumen di akun Mekari Sandbox sebelum mengajukan ulang.";
+  }
+  const prefix = [400, 401, 403, 404, 422].includes(status)
+    ? "Mekari menolak pengajuan tanda tangan"
+    : "Mekari belum mengonfirmasi pengajuan tanda tangan";
+  return `${prefix} (HTTP ${status}). ${hint}${rejection.code ? ` Kode Mekari ${rejection.code}.` : ""}`;
+}
+
+export function sandboxSendFailure(error: unknown) {
+  const vendor = error instanceof MekariError ? error : null;
+  const httpStatus = vendor?.status || null;
+  const rejection = vendor?.rejection;
+  const status = httpStatus !== null && [400, 401, 403, 404, 422].includes(httpStatus) ? "FAILED" : "RECONCILE";
+  return {
+    status, httpStatus, providerCode: rejection?.code ?? null, reason: rejection?.reason ?? null,
+    invalidFields: rejection?.fields ?? [],
+    message: vendor && httpStatus !== null ? vendor.message
+      : "Status pengajuan belum dapat dipastikan. Periksa daftar dokumen di akun Mekari Sandbox sebelum mengajukan ulang.",
+  };
+}
+
+export function sandboxErrorStatus(error: unknown) {
+  return error instanceof MekariError && [401, 403, 404].includes(error.status) ? 424 : 400;
 }
 
 function badRequestMessage(route: string) {
   if (route === "/v1/documents/predict_annotations") {
     return "Mekari menolak prediksi posisi (HTTP 400). Gunakan Atur Posisi di PDF untuk menempatkan kotak tanda tangan.";
-  }
-  if (route === "/v1/documents/request_global_sign") {
-    return "Mekari menolak pengajuan tanda tangan (HTTP 400). Periksa kuota, PDF, dan data penandatangan di Sandbox.";
   }
   if (route.endsWith("/download")) return "Mekari menolak pengambilan PDF final (HTTP 400).";
   return "Mekari menolak pengecekan status dokumen (HTTP 400).";
@@ -71,9 +180,14 @@ async function request(method: "GET" | "POST", route: string, options: { body?: 
   if (!response.ok) {
     const hint = response.headers.get("Retry-After");
     const seconds = hint && /^\d+$/.test(hint) ? Number(hint) : hint ? Math.ceil((Date.parse(hint) - Date.now()) / 1000) : 0;
+    const retryAfter = seconds > 0 ? Math.min(seconds, 600) : null;
+    if (route === SEND_SIGNATURE_ROUTE) {
+      const rejection = await readSendRejection(response);
+      throw new MekariError(response.status, retryAfter, sendRejectionMessage(response.status, rejection), rejection);
+    }
     await response.body?.cancel().catch(() => {});
     const message = response.status === 400 ? badRequestMessage(route) : undefined;
-    throw new MekariError(response.status, seconds > 0 ? Math.min(seconds, 600) : null, message);
+    throw new MekariError(response.status, retryAfter, message);
   }
   return response;
 }
@@ -191,7 +305,7 @@ function providerId(value: unknown) {
 
 export async function sendSandboxSignature(filename: string, pdf: Buffer, signing: ReturnType<typeof configuredSandboxSigning>, callback: string | null, scope?: "attachment") {
   const signers = signing.signing_order ? signing.signers.map((signer, index) => ({ ...signer, order: index + 1 })) : signing.signers;
-  const response = await request("POST", "/v1/documents/request_global_sign", {
+  const response = await request("POST", SEND_SIGNATURE_ROUTE, {
     scope,
     body: {
       filename, doc: pdf.toString("base64"), signers, receivers: [],
@@ -199,7 +313,7 @@ export async function sendSandboxSignature(filename: string, pdf: Buffer, signin
       ...(callback ? { callback_url: callback } : {}),
     },
   });
-  const result = await response.json();
+  const result = await response.json().catch(() => { throw new MekariError(0); });
   return providerId(result?.data?.id);
 }
 

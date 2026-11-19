@@ -27,6 +27,7 @@ export async function auditLog(params: {
     [userId, action, entityType, entityId, details ? JSON.stringify(details) : null, ip, ua]
   );
   await notifyWorkflow(conn, { auditId: result.insertId, actorId: userId, action, entityType, entityId });
+  return result.insertId;
 }
 
 export function safeAuditValue(value: unknown) {

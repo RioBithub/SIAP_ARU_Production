@@ -9,15 +9,18 @@ import { getAccessibleLetter } from "@/lib/letter-access";
 import { discardUncommittedFiles, type StoredLetterFile } from "@/lib/letter-uploads";
 import {
   canRetrySandboxJob, configuredSandboxSigning, MekariError, predictSandboxAnnotations, sandboxAttachmentsEnabled,
-  sandboxCredentials, sandboxPdf, sandboxPollDelay, sandboxStatus, sendSandboxSignature, type SandboxProgress,
+  sandboxCredentials, sandboxErrorStatus, sandboxPdf, sandboxPollDelay, sandboxSendFailure, sandboxStatus,
+  sendSandboxSignature, type SandboxProgress,
 } from "@/lib/mekari-sign";
+import { latestMekariSendFailure, type MekariSendFailureNotice } from "@/lib/mekari-signing-audit";
 import type { SessionUser } from "@/lib/types";
 import { readStoredFile } from "@/lib/upload";
 import { saveProof } from "@/lib/v11-data";
 
 export const runtime = "nodejs";
 
-const error = (status: number, message: string) => NextResponse.json({ ok: false, error: message }, { status });
+const error = (status: number, message: string, reference?: string) =>
+  NextResponse.json({ ok: false, error: message, audit_reference: reference }, { status });
 
 async function sourceFor(user: SessionUser, id: string, conn: Pick<PoolConnection, "query"> = db) {
   const [rows] = await conn.query<RowDataPacket[]>(
@@ -51,9 +54,9 @@ async function findJob(conn: Pick<PoolConnection, "query">, id: string, lock = f
   return rows[0] ?? null;
 }
 
-function response(job: RowDataPacket | null, status = 200, retryAfter?: number, progress?: SandboxProgress) {
+function response(job: RowDataPacket | null, status = 200, retryAfter?: number, progress?: SandboxProgress, failure?: MekariSendFailureNotice | null) {
   const data = job && { id: job.source_attachment_id, status: job.status, mode: "sandbox", final_attachment_id: job.final_attachment_id,
-    can_retry: canRetrySandboxJob(job.status, job.provider_id, job.final_attachment_id) };
+    can_retry: canRetrySandboxJob(job.status, job.provider_id, job.final_attachment_id), send_failure: failure ?? undefined };
   return NextResponse.json({ ok: true, mode: "sandbox", data, retry_after: retryAfter, progress }, { status });
 }
 
@@ -71,7 +74,9 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
   if (!user) return error(401, "Silakan login.");
   if (!sandboxAttachmentsEnabled()) return error(409, "Sandbox lampiran belum aktif.");
   if (!await sourceFor(user, params.id)) return error(403, "Lampiran PDF tidak tersedia untuk akun ini.");
-  return response(await findJob(db, params.id));
+  const job = await findJob(db, params.id);
+  const failure = await latestMekariSendFailure("ATTACHMENT", params.id, job?.status);
+  return response(job, 200, undefined, undefined, failure);
 }
 
 export async function POST(request: Request, { params }: { params: { id: string } }) {
@@ -127,11 +132,16 @@ export async function POST(request: Request, { params }: { params: { id: string 
       if (existing) return response(existing);
       try {
         const providerId = await sendSandboxSignature(source.original_name, pdf, signing, null, "attachment");
-        await db.execute("UPDATE siap_v11_attachment_signing SET provider_id=?,status='IN_PROGRESS' WHERE source_attachment_id=?", [providerId, id]);
+        await db.execute("UPDATE siap_v11_attachment_signing SET provider_id=?,status='IN_PROGRESS' WHERE source_attachment_id=? AND status='REQUESTING'", [providerId, id]);
       } catch (cause) {
-        const status = cause instanceof MekariError && [400,401,403,404,422].includes(cause.status) ? "FAILED" : "RECONCILE";
-        await db.execute("UPDATE siap_v11_attachment_signing SET status=? WHERE source_attachment_id=?", [status, id]);
-        throw cause;
+        const failure = sandboxSendFailure(cause);
+        const auditId = await withTransaction(async conn => {
+          await conn.execute(
+            "UPDATE siap_v11_attachment_signing SET status=? WHERE source_attachment_id=? AND status='REQUESTING'", [failure.status, id],
+          );
+          return audit("ATTACHMENT_MEKARI_SEND_FAILED", failure, conn);
+        });
+        return error(sandboxErrorStatus(cause), failure.message, String(auditId));
       }
       return response(await findJob(db, id), 201);
     }
@@ -190,6 +200,6 @@ export async function POST(request: Request, { params }: { params: { id: string 
   } catch (cause) {
     await discardUncommittedFiles(files);
     const message = cause instanceof Error && !("code" in cause) ? cause.message : "Permintaan Sandbox gagal diproses.";
-    return error(cause instanceof MekariError && [401,403,404].includes(cause.status) ? 424 : 400, message);
+    return error(sandboxErrorStatus(cause), message);
   }
 }
