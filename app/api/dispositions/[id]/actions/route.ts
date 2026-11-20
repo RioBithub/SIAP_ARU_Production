@@ -54,7 +54,8 @@ async function parseRequest(request:Request){
   };
 }
 
-export async function POST(request:Request,{params}:{params:{id:string}}) {
+export async function POST(request:Request,{ params: routeParams }: { params: Promise<{ id: string }> }) {
+  const params = await routeParams;
   const user=await getCurrentUser();
 
   if(!user)

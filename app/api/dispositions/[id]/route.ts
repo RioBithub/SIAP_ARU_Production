@@ -1,4 +1,5 @@
 import { sandboxAttachmentsEnabled } from "@/lib/mekari-sign";
+import { devStaging } from "@/lib/dev-staging";
 import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { getCurrentUser } from "@/lib/auth";
@@ -15,7 +16,8 @@ import { listLetterAttachments } from "@/lib/letter-uploads";
 
 export const runtime="nodejs";
 
-export async function GET(_:Request,{params}:{params:{id:string}}){
+export async function GET(_:Request,{ params: routeParams }: { params: Promise<{ id: string }> }){
+  const params = await routeParams;
   const user=await getCurrentUser();
 
   if(!user)
@@ -127,13 +129,13 @@ export async function GET(_:Request,{params}:{params:{id:string}}){
       user.id === d.from_user_id || (user.id === d.to_user_id && user.id === d.current_owner_user_id &&
         ["UNSEEN","SEEN","IN_PROGRESS"].includes(d.status))
     ) && await canEditPaymentDocuments(db, paymentLetter, user))));
+  const canSign = user.role === "ROOT_ADMIN" || [d.from_user_id,d.to_user_id,d.current_owner_user_id].includes(user.id);
   return NextResponse.json({
     ok:true,
     data:{disposition:d,actions:history,attachments,sourceActions,
       sourceAttachments:sourceFiles.filter(file => file.source_kind !== "PAYMENT_DOCUMENT"),
       parent,children,previousTasks,payments,
       paymentDocuments:requirements && {...requirements, editable, invoiceAccess},
-      sandboxSigning: sandboxAttachmentsEnabled() && (user.role === "ROOT_ADMIN" ||
-        [d.from_user_id,d.to_user_id,d.current_owner_user_id].includes(user.id))}
+      sandboxSigning: sandboxAttachmentsEnabled() && canSign, localSigning: devStaging() && canSign}
   });
 }

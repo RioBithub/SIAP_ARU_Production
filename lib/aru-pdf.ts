@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { PDFDocument, PageSizes, StandardFonts, rgb, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
 import { safeFilename } from "@/lib/upload";
+import { devStaging } from "@/lib/dev-staging";
 
 const ink = rgb(0.10, 0.16, 0.22);
 const navy = rgb(0.04, 0.18, 0.36);
@@ -166,7 +167,8 @@ export class AruPdf {
     const pages = this.document.getPages();
     pages.forEach((page, i) => {
       page.drawLine({ start: { x: margin, y: 33 }, end: { x: margin + this.usableWidth, y: 33 }, color: line, thickness: 0.55 });
-      page.drawText("SIAP ARU", { x: margin, y: 21, size: 8, color: muted, font: this.font });
+      page.drawText(devStaging() ? "SIAP ARU STAGING - SIMULASI" : "SIAP ARU",
+        { x: margin, y: 21, size: 8, color: muted, font: this.font });
       page.drawText(`${i + 1} / ${pages.length}`, {
         x: page.getWidth() - margin - 26, y: 21, size: 8, color: muted, font: this.font,
       });

@@ -1,0 +1,38 @@
+server {
+    listen %ip%:%proxy_ssl_port% ssl;
+    server_name %domain_idn% %alias_idn%;
+    error_log /var/log/%web_system%/domains/%domain%.error.log error;
+
+    ssl_certificate %ssl_pem%;
+    ssl_certificate_key %ssl_key%;
+    ssl_early_data off;
+    include %home%/%user%/conf/web/%domain%/nginx.hsts.conf*;
+
+    if ($host != siap-dev.aruraharja.co.id) {
+        return 308 https://siap-dev.aruraharja.co.id$request_uri;
+    }
+
+    add_header X-Robots-Tag "noindex, nofollow, noarchive" always;
+    client_max_body_size 64m;
+    auth_basic "SIAP ARU Staging";
+    auth_basic_user_file /etc/nginx/siap-aru-dev.htpasswd;
+
+    location / {
+        proxy_http_version 1.1;
+        proxy_set_header Host siap-dev.aruraharja.co.id;
+        proxy_set_header X-Forwarded-Host siap-dev.aruraharja.co.id;
+        proxy_set_header X-Forwarded-Port 443;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header Authorization "";
+        proxy_set_header Upgrade "";
+        proxy_set_header Connection "";
+        proxy_hide_header X-Robots-Tag;
+        proxy_cache off;
+        proxy_buffering off;
+        proxy_pass http://127.0.0.1:33318;
+    }
+
+    include %home%/%user%/conf/web/%domain%/nginx.ssl.conf_*;
+}

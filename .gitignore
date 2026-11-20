@@ -1,7 +1,9 @@
 .next
 node_modules
 .env
-.env.local
+.env.*
+!.env.example
+!.env.production.example
 storage/*
 !storage/.gitkeep
 npm-debug.log*

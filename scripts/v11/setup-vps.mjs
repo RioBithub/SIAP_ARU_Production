@@ -1,11 +1,12 @@
 import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
-import { access, lstat, mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
 import mysql from "mysql2/promise";
+import { chooseDevAccounts } from "./dev-accounts.mjs";
 import {
   assertOutsideRepository, readStageConfig, repositoryRoot, stageEnvironment, validateStageConfig,
 } from "./stage-config.mjs";
@@ -79,7 +80,7 @@ async function bootstrap(config) {
   });
 }
 
-async function createStage(directory) {
+async function createStage(directory, dev) {
   console.log("Membuat schema dan akun simulasi SIAP ARU yang baru.");
   let defaultSocket = "";
   try { await access("/run/mysqld/mysqld.sock"); defaultSocket = "/run/mysqld/mysqld.sock"; } catch {}
@@ -88,9 +89,13 @@ async function createStage(directory) {
   const dbPort = socketPath ? undefined : Number(await ask("Port MySQL lokal", { fallback: "3306" }));
   const user = (await ask("User admin MySQL untuk membuat schema", { fallback: "root" })).trim();
   const password = await ask("Password admin MySQL, boleh kosong untuk socket auth", { secret: true });
-  const appPort = await availablePort(await ask("Port web staging", { fallback: "33317" }));
-  const demoPassword = await ask("Password akun simulasi, minimal 16 karakter", { secret: true });
-  if (demoPassword.length < 16) throw new Error("Password akun simulasi harus minimal 16 karakter.");
+  const appPort = await availablePort(await ask("Port web staging", { fallback: dev ? "33318" : "33317" }));
+  const demoPassword = await ask(dev ? "Password baru Root Admin staging, minimal 16 karakter" : "Password akun simulasi, minimal 16 karakter", { secret: true });
+  if (demoPassword.length < 16 || (dev && Buffer.byteLength(demoPassword) > 72)) {
+    throw new Error("Gunakan password minimal 16 karakter dan maksimal 72 byte untuk staging dev.");
+  }
+  const copyIdentities = dev && (await ask("Ambil identitas 8 akun aktif dari aru_siap (ya/tidak)", { fallback: "ya" })).trim().toLowerCase();
+  if (dev && !["ya", "tidak"].includes(copyIdentities)) throw new Error("Masukkan ya atau tidak untuk pilihan sumber akun.");
   const suffix = randomBytes(6).toString("hex");
   const work = path.join(directory, "runs", suffix);
   await mkdir(work, { recursive: true, mode: 0o700 });
@@ -102,16 +107,19 @@ async function createStage(directory) {
     SIAP_V11_STAGE_PROFILE: path.join(work, "profile.json"), UPLOAD_DIR: path.join(work, "uploads"),
     SIAP_V11_STAGE_URL: "http://127.0.0.1:" + appPort,
     SESSION_SECRET: randomBytes(40).toString("hex"), SIAP_V11_WEBHOOK_SECRET: randomBytes(32).toString("hex"),
-    SIAP_V11_MEKARI_MODE: "mock", NEXT_TELEMETRY_DISABLED: "1",
+    SIAP_V11_MEKARI_MODE: dev ? "off" : "mock", NEXT_TELEMETRY_DISABLED: "1",
+    ...(dev && { SIAP_DEV_STAGING: "1", APP_URL: "https://siap-dev.aruraharja.co.id", DB_CONNECTION_LIMIT: "5" }),
   };
   const admin = await mysql.createConnection({
     ...(socketPath ? { socketPath } : { host: "127.0.0.1", port: dbPort }),
     user, password, connectTimeout: 8000,
   });
+  let accounts;
   try {
     const [[{ port }]] = await admin.query("SELECT @@port AS port");
     config.DB_PORT = String(port);
     validateStageConfig(config);
+    if (copyIdentities === "ya") accounts = await chooseDevAccounts(admin, ask);
     await admin.query("CREATE DATABASE ?? CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci", [config.DB_NAME]);
     await admin.query("CREATE USER ?@'127.0.0.1' IDENTIFIED BY ?", [config.DB_USER, config.DB_PASSWORD]);
     const [partialRevokes] = await admin.query("SHOW VARIABLES LIKE 'partial_revokes'");
@@ -123,12 +131,21 @@ async function createStage(directory) {
   } finally {
     await admin.end();
   }
-  await bootstrap(config);
+  if (accounts) {
+    const file = path.join(work, "accounts.json");
+    await writeFile(file, JSON.stringify(accounts), { mode: 0o600, flag: "wx" });
+    try { await bootstrap({ ...config, SIAP_DEV_ACCOUNTS_FILE: file }); }
+    finally { await rm(file, { force: true }); }
+  } else {
+    await bootstrap(config);
+  }
   return config;
 }
 
 try {
-  const file = process.argv[2];
+  const [, , file, option] = process.argv;
+  if (option && option !== "--dev") throw new Error("Opsi setup tidak dikenal.");
+  const dev = option === "--dev";
   if (!path.isAbsolute(file ?? "")) throw new Error("Gunakan path absolut file konfigurasi, misalnya /etc/siap-aru-v11/stage.json.");
   assertOutsideRepository(file);
   const directory = path.dirname(file);
@@ -136,22 +153,30 @@ try {
   assertOutsideRepository(await realpath(directory));
   let exists = false;
   try { await lstat(file); exists = true; } catch (error) { if (error.code !== "ENOENT") throw error; }
-  const config = exists ? await readStageConfig(file) : await createStage(directory);
+  const config = exists ? await readStageConfig(file) : await createStage(directory, dev);
+  if (dev !== (config.SIAP_DEV_STAGING === "1")) throw new Error("Gunakan file konfigurasi khusus untuk masing-masing staging.");
   await checkMarker(config);
   if (!exists) await writeConfig(file, config);
 
-  console.log("Masukkan kredensial HMAC untuk Mekari Sign Sandbox.");
-  const clientId = (await ask("Client ID HMAC sandbox", { secret: true })).trim();
-  const clientSecret = await ask("Client Secret HMAC sandbox", { secret: true });
-  if (!/^[\w.\-]{1,150}$/.test(clientId) || !clientSecret) throw new Error("Client ID dan Client Secret sandbox wajib diisi.");
-  await writeConfig(file, {
-    ...config, MEKARI_CLIENT_ID: clientId, MEKARI_CLIENT_SECRET: clientSecret,
-    SIAP_V11_MEKARI_MODE: "sandbox", SIAP_V11_MEKARI_ALLOW_SEND: "1",
-  }, true);
-  console.log("Konfigurasi sandbox tersimpan dengan izin 600 di " + file);
-  console.log("Web staging " + config.SIAP_V11_STAGE_URL);
-  console.log("Login Sekretariat dengan secretariat@simulasi.siap.invalid dan password simulasi yang dipilih.");
-  console.log("Jalankan perintah smoke, build dan start mengikuti docs/v11/VPS-SANDBOX.md.");
+  if (dev) {
+    const profile = JSON.parse(await readFile(config.SIAP_V11_STAGE_PROFILE, "utf8"));
+    console.log("Staging dev siap dibangun. Login Root Admin staging memakai " + profile.accounts.root.email);
+    console.log("Web lokal " + config.SIAP_V11_STAGE_URL + " · domain " + config.APP_URL);
+    console.log("Jalankan build, start dan demo-dev mengikuti docs/v11/VPS-DEV.md.");
+  } else {
+    console.log("Masukkan kredensial HMAC untuk Mekari Sign Sandbox.");
+    const clientId = (await ask("Client ID HMAC sandbox", { secret: true })).trim();
+    const clientSecret = await ask("Client Secret HMAC sandbox", { secret: true });
+    if (!/^[\w.\-]{1,150}$/.test(clientId) || !clientSecret) throw new Error("Client ID dan Client Secret sandbox wajib diisi.");
+    await writeConfig(file, {
+      ...config, MEKARI_CLIENT_ID: clientId, MEKARI_CLIENT_SECRET: clientSecret,
+      SIAP_V11_MEKARI_MODE: "sandbox", SIAP_V11_MEKARI_ALLOW_SEND: "1",
+    }, true);
+    console.log("Konfigurasi sandbox tersimpan dengan izin 600 di " + file);
+    console.log("Web staging " + config.SIAP_V11_STAGE_URL);
+    console.log("Login Sekretariat dengan secretariat@simulasi.siap.invalid dan password simulasi yang dipilih.");
+    console.log("Jalankan perintah smoke, build dan start mengikuti docs/v11/VPS-SANDBOX.md.");
+  }
 } catch (error) {
   if (error.code === "ER_ACCESS_DENIED_ERROR") {
     console.error("Login admin MySQL ditolak. Periksa user/password atau pilih socket yang sesuai, lalu jalankan setup kembali.");

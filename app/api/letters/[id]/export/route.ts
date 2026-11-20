@@ -10,7 +10,8 @@ import { letterAccess } from "@/lib/letter-access";
 
 export const runtime = "nodejs";
 
-export async function GET(request: Request, { params }: { params: { id: string } }) {
+export async function GET(request: Request, { params: routeParams }: { params: Promise<{ id: string }> }) {
+  const params = await routeParams;
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ ok: false, error: "Silakan masuk." }, { status: 401 });
   if (!canHandleSecretariat(user.role)) {

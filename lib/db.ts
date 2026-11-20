@@ -1,4 +1,5 @@
 import mysql, { Pool, PoolConnection, RowDataPacket } from "mysql2/promise";
+import { devStaging } from "./dev-staging";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -12,6 +13,11 @@ function boolEnv(name: string, fallback = false) {
 }
 
 function makePool() {
+  if (devStaging() && (process.env.DB_HOST !== "127.0.0.1" ||
+      !/^siap_aru_sqa_v11_[a-z0-9]{4,24}$/.test(process.env.DB_NAME ?? "") ||
+      !/^v11_stage_[a-z0-9]+$/.test(process.env.DB_USER ?? "") || !process.env.DB_PASSWORD)) {
+    throw new Error("SIAP ARU dev memerlukan koneksi database staging.");
+  }
   const sslEnabled = boolEnv("DB_SSL", false);
   const ssl = sslEnabled
     ? { rejectUnauthorized: boolEnv("DB_SSL_REJECT_UNAUTHORIZED", true) }

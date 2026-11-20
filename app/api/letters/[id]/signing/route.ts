@@ -63,7 +63,8 @@ async function signingPdf(conn: PoolConnection, letterId: string, value: unknown
   return { id, bytes, name: String(source.original_name) };
 }
 
-export async function GET(_: Request, { params }: { params: { id: string } }) {
+export async function GET(_: Request, { params: routeParams }: { params: Promise<{ id: string }> }) {
+  const params = await routeParams;
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ ok: false }, { status: 401 });
   if (!await getAccessibleLetter(user, params.id) || !canHandleSecretariat(user.role)) {
@@ -74,7 +75,8 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
   return NextResponse.json({ ok: true, mode: mekariMode(), data: publicJob(job, failure) });
 }
 
-export async function POST(request: Request, { params }: { params: { id: string } }) {
+export async function POST(request: Request, { params: routeParams }: { params: Promise<{ id: string }> }) {
+  const params = await routeParams;
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   if (!canHandleSecretariat(user.role) || !await getAccessibleLetter(user, params.id)) {

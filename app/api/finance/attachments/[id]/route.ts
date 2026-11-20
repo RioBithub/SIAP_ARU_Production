@@ -8,7 +8,8 @@ import { auditLog } from "@/lib/audit";
 
 export const runtime="nodejs";
 
-export async function GET(request:Request,{params}:{params:{id:string}}){
+export async function GET(request:Request,{ params: routeParams }: { params: Promise<{ id: string }> }){
+  const params = await routeParams;
   const user=await getCurrentUser(); if(!user)return NextResponse.json({ok:false,error:"Unauthorized"},{status:401});
   if(!canSeeFinance(user.role))return NextResponse.json({ok:false,error:"Forbidden"},{status:403});
   const [rows]=await db.query<RowDataPacket[]>(`SELECT * FROM siap_finance_attachments WHERE id=? LIMIT 1`,[params.id]);
@@ -24,7 +25,8 @@ export async function GET(request:Request,{params}:{params:{id:string}}){
   }catch(e){return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Gagal membaca file."},{status:500});}
 }
 
-export async function DELETE(request:Request,{params}:{params:{id:string}}){
+export async function DELETE(request:Request,{ params: routeParams }: { params: Promise<{ id: string }> }){
+  const params = await routeParams;
   const user=await getCurrentUser(); if(!user)return NextResponse.json({ok:false,error:"Unauthorized"},{status:401});
   if(!canEditFinance(user.role))return NextResponse.json({ok:false,error:"Hanya Finance dan Root Admin yang dapat menghapus lampiran."},{status:403});
   try{

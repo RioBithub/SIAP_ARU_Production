@@ -5,6 +5,8 @@ import { auditLog } from "@/lib/audit";
 import { getCurrentUser } from "@/lib/auth";
 import { canHandleSecretariat } from "@/lib/correspondence-workflow";
 import { db, withTransaction } from "@/lib/db";
+import { createDevSignedPdf } from "@/lib/dev-signature";
+import { devStaging } from "@/lib/dev-staging";
 import { getAccessibleLetter } from "@/lib/letter-access";
 import { discardUncommittedFiles, type StoredLetterFile } from "@/lib/letter-uploads";
 import {
@@ -26,7 +28,7 @@ const error = (status: number, message: string, reference?: string) =>
 async function sourceFor(user: SessionUser, id: string, conn: Pick<PoolConnection, "query"> = db) {
   const [rows] = await conn.query<RowDataPacket[]>(
     `SELECT a.id,a.letter_id,a.disposition_id,a.original_name,a.storage_path,a.is_compressed,a.attachment_kind,l.direction,
-            v.letter_id AS workflow_id,
+            v.letter_id AS workflow_id,l.status AS letter_status,l.\`current_role\` AS letter_role,
             d.from_user_id,d.to_user_id,d.current_owner_user_id
      FROM siap_attachments a
      JOIN siap_letters l ON l.id=a.letter_id AND l.deleted_at IS NULL
@@ -53,6 +55,9 @@ async function sourceFor(user: SessionUser, id: string, conn: Pick<PoolConnectio
     const nota = await notaDocument(conn, source.letter_id);
     return nota?.source?.id === id ? source : null;
   }
+  if (devStaging() && (source.direction !== "OUTGOING" || !source.workflow_id ||
+      source.letter_status !== "WAITING_SIGNATURE" || source.letter_role !== "SECRETARIAT" ||
+      source.attachment_kind !== "ORIGINAL")) return null;
   return canHandleSecretariat(user.role) && await getAccessibleLetter(user, source.letter_id, conn) ? source : null;
 }
 
@@ -78,22 +83,74 @@ async function readSourcePdf(source: RowDataPacket) {
   return bytes;
 }
 
-export async function GET(_: Request, { params }: { params: { id: string } }) {
+function localResponse(job: RowDataPacket | null, status = 200) {
+  const data = job?.mode === "local" ? { status: job.status, final_attachment_id: job.final_attachment_id } : null;
+  return NextResponse.json({ ok: true, mode: "local", data }, { status });
+}
+
+async function simulate(request: Request, user: SessionUser, source: RowDataPacket) {
+  const files: StoredLetterFile[] = [];
+  try {
+    const body = await request.json();
+    if (body?.action !== "SIMULATE" || (body.mark_count !== 1 && body.mark_count !== 2)) {
+      return error(400, "Pilih satu atau dua paraf simulasi.");
+    }
+    const bytes = await createDevSignedPdf(await readSourcePdf(source), body.mark_count);
+    const result = await withTransaction(async conn => {
+      const [[letter]] = await conn.query<RowDataPacket[]>(
+        "SELECT id FROM siap_letters WHERE id=? AND deleted_at IS NULL FOR UPDATE", [source.letter_id],
+      );
+      if (!letter || !await sourceFor(user, source.id, conn)) return null;
+      const job = await findJob(conn, source.id, true);
+      if (job) return job.mode === "local" ? localResponse(job) : error(409, "PDF ini sudah memiliki hasil tanda tangan.");
+      const file = await saveProof(new File([new Uint8Array(bytes)], "Bukti-Tanda-Tangan-SIMULASI.pdf"), true, "ORIGINAL");
+      files.push(file);
+      const finalId = randomUUID();
+      await conn.execute(
+        `INSERT INTO siap_attachments
+         (id,letter_id,disposition_id,attachment_kind,original_name,stored_name,storage_path,mime_type,
+          original_size,stored_size,is_compressed,uploaded_by)
+         VALUES (?,?,?,'PROCESS',?,?,?,?,?,?,?,?)`,
+        [finalId, source.letter_id, source.disposition_id, file.originalName, file.storedName,
+          file.storagePath, file.mimeType, file.originalSize, file.storedSize, Number(file.isCompressed), user.id],
+      );
+      await conn.execute(
+        `INSERT INTO siap_v11_attachment_signing (source_attachment_id,requested_by,mode,status,final_attachment_id)
+         VALUES (?,?,'local','COMPLETED',?)`, [source.id, user.id, finalId],
+      );
+      await auditLog({ user, action: "ATTACHMENT_LOCAL_SIGNATURE", entityType: "ATTACHMENT", entityId: source.id,
+        metadata: { letterId: source.letter_id, finalAttachmentId: finalId, markCount: body.mark_count }, request }, conn);
+      return localResponse({ mode: "local", status: "COMPLETED", final_attachment_id: finalId } as RowDataPacket, 201);
+    });
+    return result ?? error(403, "Lampiran sudah tidak tersedia untuk akun ini.");
+  } catch (cause) {
+    await discardUncommittedFiles(files);
+    const message = cause instanceof Error && !("code" in cause) && !(cause instanceof SyntaxError)
+      ? cause.message : "Tanda tangan simulasi gagal dibuat.";
+    return error(400, message);
+  }
+}
+
+export async function GET(_: Request, { params: routeParams }: { params: Promise<{ id: string }> }) {
+  const params = await routeParams;
   const user = await getCurrentUser();
   if (!user) return error(401, "Silakan login.");
-  if (!sandboxAttachmentsEnabled()) return error(409, "Sandbox lampiran belum aktif.");
+  if (!devStaging() && !sandboxAttachmentsEnabled()) return error(409, "Sandbox lampiran belum aktif.");
   if (!await sourceFor(user, params.id)) return error(403, "Lampiran PDF tidak tersedia untuk akun ini.");
   const job = await findJob(db, params.id);
+  if (devStaging()) return localResponse(job);
   const failure = await latestMekariSendFailure("ATTACHMENT", params.id, job?.status);
   return response(job, 200, undefined, undefined, failure);
 }
 
-export async function POST(request: Request, { params }: { params: { id: string } }) {
+export async function POST(request: Request, { params: routeParams }: { params: Promise<{ id: string }> }) {
+  const params = await routeParams;
   const user = await getCurrentUser();
   if (!user) return error(401, "Silakan login.");
-  if (!sandboxAttachmentsEnabled()) return error(409, "Sandbox lampiran belum aktif.");
+  if (!devStaging() && !sandboxAttachmentsEnabled()) return error(409, "Sandbox lampiran belum aktif.");
   const source = await sourceFor(user, params.id);
   if (!source) return error(403, "Lampiran PDF tidak tersedia untuk akun ini.");
+  if (devStaging()) return simulate(request, user, source);
   const id = String(source.id);
   const audit = (action: string, metadata: Record<string, unknown>, conn?: PoolConnection) =>
     auditLog({ user, action, entityType: "ATTACHMENT", entityId: id,

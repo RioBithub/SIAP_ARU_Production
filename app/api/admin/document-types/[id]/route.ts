@@ -5,7 +5,8 @@ import { db } from "@/lib/db";
 import { auditLog } from "@/lib/audit";
 import { str } from "@/lib/http";
 
-export async function PATCH(request:Request,{params}:{params:{id:string}}){
+export async function PATCH(request:Request,{ params: routeParams }: { params: Promise<{ id: string }> }){
+  const params = await routeParams;
   const user=await getCurrentUser();
   if(!user) return NextResponse.json({ok:false,error:"Unauthorized"},{status:401});
   if(user.role!=="ROOT_ADMIN") return NextResponse.json({ok:false,error:"Forbidden"},{status:403});

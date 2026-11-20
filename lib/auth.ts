@@ -4,9 +4,10 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { db } from "@/lib/db";
+import { devStaging } from "@/lib/dev-staging";
 import type { Role, SessionUser } from "@/lib/types";
 
-const COOKIE_NAME = "siap_session";
+const cookieName = () => devStaging() ? "__Host-siap_dev_session" : "siap_session";
 const SESSION_HOURS = 12;
 
 function tokenHash(value: string) {
@@ -59,31 +60,31 @@ export async function createSession(userId: string, request?: Request) {
       request?.headers.get("user-agent")?.slice(0, 500) || null,
     ]
   );
-  cookies().set(COOKIE_NAME, raw, {
+  (await cookies()).set(cookieName(), raw, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: devStaging() || process.env.NODE_ENV === "production",
     path: "/",
     expires,
   });
 }
 
 export async function destroySession() {
-  const raw = cookies().get(COOKIE_NAME)?.value;
+  const raw = (await cookies()).get(cookieName())?.value;
   if (raw) {
     await db.execute(`DELETE FROM siap_sessions WHERE token_hash=?`, [tokenHash(raw)]);
   }
-  cookies().set(COOKIE_NAME, "", {
+  (await cookies()).set(cookieName(), "", {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: devStaging() || process.env.NODE_ENV === "production",
     path: "/",
     expires: new Date(0),
   });
 }
 
 export async function getAuthSession(transaction?: PoolConnection) {
-  const raw = cookies().get(COOKIE_NAME)?.value;
+  const raw = (await cookies()).get(cookieName())?.value;
   if (!raw) return null;
   const conn = transaction ?? db;
   const [rows] = await conn.query<RowDataPacket[]>(

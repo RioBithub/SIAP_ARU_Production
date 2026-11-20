@@ -24,7 +24,8 @@ function validatePosition(row: Record<string,unknown>) {
   if (overdue > outstanding) throw new Error("Total aging overdue tidak boleh melebihi total outstanding.");
 }
 
-export async function POST(request: Request,{params}:{params:{id:string}}) {
+export async function POST(request: Request,{ params: routeParams }: { params: Promise<{ id: string }> }) {
+  const params = await routeParams;
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ok:false,error:"Unauthorized"},{status:401});
   if (!canEditFinance(user.role)) return NextResponse.json({ok:false,error:"Hanya Finance dan Root Admin yang dapat membatalkan penyesuaian."},{status:403});

@@ -8,7 +8,8 @@ import { deleteStoredFile } from "@/lib/upload";
 
 export const runtime="nodejs";
 
-export async function DELETE(request:Request,{params}:{params:{id:string}}){
+export async function DELETE(request:Request,{ params: routeParams }: { params: Promise<{ id: string }> }){
+  const params = await routeParams;
   const user=await getCurrentUser();
   if(!user) return NextResponse.json({ok:false,error:"Unauthorized"},{status:401});
   if(!canEditFinance(user.role)) return NextResponse.json({ok:false,error:"Hanya Finance/Root yang dapat menghapus dokumen bank."},{status:403});

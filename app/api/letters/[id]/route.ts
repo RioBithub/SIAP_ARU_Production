@@ -1,5 +1,7 @@
 import { canEditPaymentDocuments, invoicePaymentAccess, paymentDocuments } from "@/lib/v11-payment-documents";
 import { sandboxAttachmentsEnabled } from "@/lib/mekari-sign";
+import { devOutgoingSignature } from "@/lib/dev-signature";
+import { devStaging } from "@/lib/dev-staging";
 import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { getCurrentUser } from "@/lib/auth";
@@ -21,7 +23,8 @@ import { discardUncommittedFiles, insertLetterAttachment, listLetterAttachments,
 
 export const runtime = "nodejs";
 
-export async function GET(_:Request,{params}:{params:{id:string}}) {
+export async function GET(_:Request,{ params: routeParams }: { params: Promise<{ id: string }> }) {
+  const params = await routeParams;
   const user=await getCurrentUser();
   if(!user) return NextResponse.json({ok:false,error:"Unauthorized"},{status:401});
   const access = letterAccess(user);
@@ -88,13 +91,17 @@ export async function GET(_:Request,{params}:{params:{id:string}}) {
     };
   }
   const nota = workflow && letter.direction === "INTERNAL" ? await notaDocument(db, params.id) : null;
+  const localSigning = devStaging() && Boolean(workflow) && letter.direction === "OUTGOING" &&
+    letter.status === "WAITING_SIGNATURE" && canHandleSecretariat(user.role);
   return NextResponse.json({ok:true,data:{letter,actions,attachments,business,v11,originalId,approvalId:approval?.id,
-    notaDocument: nota && { ...nota, editable: canEditNotaDocument(user, letter), sandbox: sandboxAttachmentsEnabled() },
+    notaDocument: nota && { ...nota, editable: canEditNotaDocument(user, letter), sandbox: sandboxAttachmentsEnabled(), local: devStaging() },
     sandboxSigning: sandboxAttachmentsEnabled() && canHandleSecretariat(user.role),
+    localSigning, localSignatureReady: localSigning && Boolean(await devOutgoingSignature(db, params.id)),
     sourceLetter, sourceDisposition, hasSourceDisposition: Boolean(sourceDispositionId), hasSourceLetter: Boolean(sourceLetterId)}});
 }
 
-export async function PATCH(request: Request, { params }: { params: { id: string } }) {
+export async function PATCH(request: Request, { params: routeParams }: { params: Promise<{ id: string }> }) {
+  const params = await routeParams;
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
 

@@ -10,7 +10,8 @@ export const runtime = "nodejs";
 const responseNotifications = `n.entity_type='LETTER' AND n.entity_id=? AND n.recipient_user_id=?
   AND n.read_at IS NULL AND audit.action='LETTER_RESPONSE'`;
 
-export async function GET(_: Request, { params }: { params: { id: string } }) {
+export async function GET(_: Request, { params: routeParams }: { params: Promise<{ id: string }> }) {
+  const params = await routeParams;
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ ok: false, error: "Silakan masuk." }, { status: 401 });
   const letter = await getAccessibleLetter(user, params.id);
@@ -35,7 +36,8 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
   } }, { headers: { "Cache-Control": "private, no-store" } });
 }
 
-export async function PATCH(request: Request, { params }: { params: { id: string } }) {
+export async function PATCH(request: Request, { params: routeParams }: { params: Promise<{ id: string }> }) {
+  const params = await routeParams;
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ ok: false, error: "Silakan masuk." }, { status: 401 });
   const letter = await getAccessibleLetter(user, params.id);

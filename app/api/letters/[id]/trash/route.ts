@@ -7,7 +7,8 @@ import { withTransaction } from "@/lib/db";
 import { required } from "@/lib/http";
 import { permanentlyDeleteLetter, retryPurgeFiles } from "@/lib/letter-purge";
 
-export async function POST(request: Request, { params }: { params: { id: string } }) {
+export async function POST(request: Request, { params: routeParams }: { params: Promise<{ id: string }> }) {
+  const params = await routeParams;
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ ok: false, error: "Silakan masuk." }, { status: 401 });
   if (user.role !== "ROOT_ADMIN") return NextResponse.json({ ok: false, error: "Khusus Root Admin." }, { status: 403 });

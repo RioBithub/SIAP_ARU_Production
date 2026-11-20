@@ -942,7 +942,8 @@ export default function DispositionsClient({user}:{user:SessionUser}){
             {!process&&detail.paymentDocuments&&<PaymentDocumentsPanel key={`payment-${detail.disposition.id}`} id={detail.disposition.letter_id}
               data={detail.paymentDocuments} attachments={sourceAttachments} onSaved={()=>refreshDetail(detail.disposition.id)}/>}
 
-            {detail.sandboxSigning && <AttachmentSandbox key={`attachment-sandbox-${detail.disposition.id}`}
+            {(detail.sandboxSigning || detail.localSigning) && <AttachmentSandbox key={`attachment-sandbox-${detail.disposition.id}`}
+              local={detail.localSigning} onSaved={() => refreshDetail(detail.disposition.id)}
               files={detail.attachments.filter((file:any) =>
                 ["ORIGINAL","ADDITIONAL"].includes(file.attachment_kind) ||
                 detail.actions.some((action:any) => action.id === file.disposition_action_id && action.action === "SUBMIT_RESULT"))

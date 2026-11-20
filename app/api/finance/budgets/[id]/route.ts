@@ -4,7 +4,8 @@ import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { auditLog } from "@/lib/audit";
 
-export async function DELETE(request:Request,{params}:{params:{id:string}}){
+export async function DELETE(request:Request,{ params: routeParams }: { params: Promise<{ id: string }> }){
+  const params = await routeParams;
   const user=await getCurrentUser();if(!user)return NextResponse.json({ok:false,error:"Unauthorized"},{status:401});
   if(user.role!=="ROOT_ADMIN")return NextResponse.json({ok:false,error:"Hanya Root Admin yang dapat menghapus anggaran."},{status:403});
   const [rows]=await db.query<RowDataPacket[]>(`SELECT * FROM siap_budgets WHERE id=? LIMIT 1`,[params.id]);

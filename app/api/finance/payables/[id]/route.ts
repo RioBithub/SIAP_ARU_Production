@@ -8,7 +8,8 @@ import { auditLog } from "@/lib/audit";
 
 import { linkedPayable } from "@/lib/v11-finance";
 
-export async function PATCH(request:Request,{params}:{params:{id:string}}){
+export async function PATCH(request:Request,{ params: routeParams }: { params: Promise<{ id: string }> }){
+  const params = await routeParams;
   const user=await getCurrentUser();if(!user)return NextResponse.json({ok:false,error:"Unauthorized"},{status:401});
   if(!canEditFinance(user.role))return NextResponse.json({ok:false,error:"Forbidden"},{status:403});
   try{
@@ -36,7 +37,8 @@ export async function PATCH(request:Request,{params}:{params:{id:string}}){
   }catch(e){return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Update gagal."},{status:400});}
 }
 
-export async function DELETE(request:Request,{params}:{params:{id:string}}){
+export async function DELETE(request:Request,{ params: routeParams }: { params: Promise<{ id: string }> }){
+  const params = await routeParams;
   const user=await getCurrentUser();if(!user)return NextResponse.json({ok:false,error:"Unauthorized"},{status:401});
   if(user.role!=="ROOT_ADMIN")return NextResponse.json({ok:false,error:"Hanya Root Admin yang dapat menghapus."},{status:403});
   if(await linkedPayable(params.id)) return NextResponse.json({ok:false,error:"Utang terhubung invoice V11 dan bukti pembayaran."},{status:409});

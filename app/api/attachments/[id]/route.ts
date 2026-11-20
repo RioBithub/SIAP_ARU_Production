@@ -16,7 +16,8 @@ function previewType(name: string, data: Buffer) {
   return null;
 }
 
-export async function GET(request:Request,{params}:{params:{id:string}}){
+export async function GET(request:Request,{ params: routeParams }: { params: Promise<{ id: string }> }){
+  const params = await routeParams;
   const user=await getCurrentUser();
 
   if(!user)

@@ -34,6 +34,11 @@ export function validateStageConfig(config) {
       url.pathname !== "/" || url.search || url.hash || url.username || url.password) {
     throw new Error("URL staging harus berupa http://127.0.0.1 pada port tersendiri.");
   }
+  if (config.SIAP_DEV_STAGING === "1" && (
+    config.APP_URL !== "https://siap-dev.aruraharja.co.id" || config.SIAP_V11_ENABLED !== "1" ||
+    config.SIAP_V11_MEKARI_MODE !== "off" ||
+    config.UPLOAD_DIR !== path.join(path.dirname(config.SIAP_V11_STAGE_PROFILE), "uploads")
+  )) throw new Error("Profil dev harus memakai domain, penyimpanan, dan mode simulasi staging.");
   return config;
 }
 
@@ -56,9 +61,14 @@ export async function readStageConfig(file) {
 export function stageEnvironment(config) {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
-    if (/^(DB_|MEKARI_|SIAP_V11_|SESSION_SECRET$|UPLOAD_DIR$|PORT$|HOSTNAME$|NODE_ENV$)/.test(key)) delete env[key];
+    if (/^(DB_|MEKARI_|SIAP_V11_|SIAP_DEV_|APP_URL$|SESSION_SECRET$|UPLOAD_DIR$|PORT$|HOSTNAME$|NODE_ENV$)/.test(key)) delete env[key];
   }
-  const allowed = /^(DB_|MEKARI_|SIAP_V11_|SESSION_SECRET$|UPLOAD_DIR$|NEXT_TELEMETRY_DISABLED$)/;
+  const allowed = /^(DB_|MEKARI_|SIAP_V11_|SIAP_DEV_|APP_URL$|SESSION_SECRET$|UPLOAD_DIR$|NEXT_TELEMETRY_DISABLED$)/;
   for (const [key, value] of Object.entries(config)) if (allowed.test(key)) env[key] = value;
+  if (config.SIAP_DEV_STAGING === "1") {
+    for (const key of Object.keys(env)) {
+      if (/^MEKARI_|^SIAP_V11_MEKARI_(?!MODE$)|^SIAP_V11_WEBHOOK_SECRET$/.test(key)) delete env[key];
+    }
+  }
   return env;
 }

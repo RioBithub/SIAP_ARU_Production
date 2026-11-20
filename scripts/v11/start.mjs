@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
-import { cp, readFile } from "node:fs/promises";
+import { cp, lstat, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import mysql from "mysql2/promise";
+import { assertOutsideRepository, validateStageConfig } from "./stage-config.mjs";
 
 const env = process.env;
 const profile = JSON.parse(await readFile(env.SIAP_V11_STAGE_PROFILE, "utf8"));
@@ -13,6 +14,18 @@ if (env.SIAP_V11_STAGE !== "1" || env.DB_HOST !== "127.0.0.1" || env.DB_NAME !==
     url.protocol !== "http:" || !url.port || Number(url.port) === 3200 ||
     !env.SESSION_SECRET || env.SESSION_SECRET.length < 32) throw new Error("Konfigurasi staging tidak aman atau berbeda dari profil bootstrap.");
 
+if (env.SIAP_DEV_STAGING === "1") {
+  validateStageConfig(env);
+  const uploads = await lstat(env.UPLOAD_DIR);
+  const location = await realpath(env.UPLOAD_DIR);
+  const profilePath = await realpath(env.SIAP_V11_STAGE_PROFILE);
+  assertOutsideRepository(location);
+  if (!uploads.isDirectory() || (uploads.mode & 0o077) || location !== path.join(path.dirname(profilePath), "uploads") ||
+      profile.appUrl !== env.SIAP_V11_STAGE_URL || !profile.dev) {
+    throw new Error("Penyimpanan atau profil dev tidak cocok dengan konfigurasi.");
+  }
+}
+
 const cn = await mysql.createConnection({
   host: env.DB_HOST, port: Number(env.DB_PORT), database: env.DB_NAME,
   user: env.DB_USER, password: env.DB_PASSWORD,
@@ -23,6 +36,10 @@ try {
   if (env.SIAP_V11_ENABLED === "1") {
     const [tables] = await cn.query("SHOW TABLES LIKE 'siap_v11_notifications'");
     if (!tables.length) throw new Error("Jalankan perintah migrate melalui scripts/v11/run.mjs sebelum memulai staging.");
+  }
+  if (env.SIAP_DEV_STAGING === "1") {
+    const [columns] = await cn.query("SHOW COLUMNS FROM siap_v11_attachment_signing LIKE 'mode'");
+    if (!columns.length) throw new Error("Jalankan migrasi tanda tangan simulasi sebelum memulai staging.");
   }
 } finally {
   await cn.end();

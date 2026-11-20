@@ -13,7 +13,8 @@ import { jakartaDate } from "@/lib/v11-workflow";
 
 export const runtime = "nodejs";
 
-export async function GET(_: Request, { params }: { params: { id: string } }) {
+export async function GET(_: Request, { params: routeParams }: { params: Promise<{ id: string }> }) {
+  const params = await routeParams;
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ ok: false, error: "Silakan masuk." }, { status: 401 });
   const row = await getBpk(db, user, { id: params.id });
@@ -22,7 +23,8 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
   return NextResponse.json({ ok: true, data: bpkRecord(row, user, payments) });
 }
 
-export async function PATCH(request: Request, { params }: { params: { id: string } }) {
+export async function PATCH(request: Request, { params: routeParams }: { params: Promise<{ id: string }> }) {
+  const params = await routeParams;
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ ok: false, error: "Silakan masuk." }, { status: 401 });
   const staged: StoredLetterFile[] = [];

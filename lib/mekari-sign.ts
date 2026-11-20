@@ -8,11 +8,12 @@ const MAX_ERROR_BYTES = 16 * 1024;
 export const MEKARI_PILOT_JOB_MODE = "sandbox-test";
 
 export function sandboxAttachmentsEnabled() {
-  return process.env.SIAP_V11_MEKARI_MODE === "sandbox" &&
+  return process.env.SIAP_DEV_STAGING !== "1" && process.env.SIAP_V11_MEKARI_MODE === "sandbox" &&
     process.env.SIAP_V11_MEKARI_ATTACHMENT_SANDBOX === "1";
 }
 
 export function mekariMode() {
+  if (process.env.SIAP_DEV_STAGING === "1") return null;
   const mode = process.env.SIAP_V11_MEKARI_MODE;
   if (process.env.SIAP_V11_STAGE !== "1" || !/^siap_aru_sqa_v11_[a-z0-9]{4,24}$/.test(process.env.DB_NAME ?? "")) return null;
   return mode === "mock" || mode === "sandbox" ? mode : null;

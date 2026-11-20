@@ -15,7 +15,8 @@ function formatDate(value: Date | string | null) {
   return date.toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
 }
 
-export default async function PrintDocumentPage({ params }: { params: { id: string } }) {
+export default async function PrintDocumentPage({ params: routeParams }: { params: Promise<{ id: string }> }) {
+  const params = await routeParams;
   const user = await requireUser();
   const letter = await getAccessibleLetter(user, params.id);
   if (!letter || letter.direction !== "OUTGOING" || ![SPK_OUTGOING, INVOICE_OUTGOING].includes(letter.document_type)) notFound();

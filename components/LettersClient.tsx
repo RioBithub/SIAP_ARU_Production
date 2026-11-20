@@ -439,7 +439,7 @@ export default function LettersClient({direction,user}:Props){
     if(signedIssue){
       const signed = form.get("signed_file");
       const method=String(form.get("signature_method")||"");
-      if (method!=="MEKARI_API") {
+      if (method!=="MEKARI_API" && method!=="STAGING_LOCAL") {
         if (!signed || typeof signed === "string" || signed.size === 0) {
           setError("Unggah naskah yang sudah ditandatangani.");setActionBusy(false);return;
         }
@@ -906,7 +906,10 @@ export default function LettersClient({direction,user}:Props){
             data={detail.v11.payment_documents} attachments={detail.attachments} onSaved={()=>refreshDetail(detail.letter.id)}/>}
           {detail.sandboxSigning && (!detail.notaDocument || signingFiles.length>0) && <AttachmentSandbox key={`attachment-sandbox-${detail.letter.id}`}
             files={signingFiles}/>}
-          {!detail.sandboxSigning&&detail.v11&&detail.letter.status==="WAITING_SIGNATURE"&&canHandleSecretariat(user.role)&&
+          {detail.localSigning && <AttachmentSandbox key={`local-signing-${detail.letter.id}`} local
+            files={signingFiles.filter((file:any) => file.id === detail.originalId)}
+            onSaved={() => refreshDetail(detail.letter.id)}/>}
+          {!detail.localSigning&&!detail.sandboxSigning&&detail.v11&&detail.letter.status==="WAITING_SIGNATURE"&&canHandleSecretariat(user.role)&&
             <V11SigningPanel key={`letter-signing-${detail.letter.id}`} id={detail.letter.id} files={signingFiles} onReady={setSigningReady}/>}
           <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:13}}>
             {canEditDetail()&&<button className="btn btn-secondary" onClick={openEdit}>Edit Metadata</button>}
@@ -1043,11 +1046,15 @@ export default function LettersClient({direction,user}:Props){
         <div className="field full"><label>{pendingAction.requiredComment?"Catatan / Alasan (wajib)":"Catatan Proses (opsional)"}</label><textarea className="textarea" name="comment" required={pendingAction.requiredComment} placeholder={pendingAction.action==="RETURN"?"Jelaskan apa yang harus direvisi oleh Staff...":pendingAction.action==="ISSUE"?"Contoh: Surat final telah ditandatangani dan siap dikirim.":"Catatan keputusan / arahan tambahan..."}/></div>
         {signedIssue&&<>
           <div className="field"><label>Metode Tanda Tangan</label><select aria-label="Metode tanda tangan" className="select" name="signature_method" required value={signatureMethod} onChange={e=>setSignatureMethod(e.target.value)}>
-            <option value="">Pilih metode...</option><option value="DIGITAL">Digital</option><option value="BASAH">Basah</option>
-            {detail.v11&&<option value="MEKARI_MANUAL">Unggah PDF Mekari manual</option>}
-            {detail.v11&&signingReady&&<option value="MEKARI_API">Gunakan PDF final Mekari staging</option>}
+            <option value="">Pilih metode...</option>
+            {detail.localSigning ? <option value="STAGING_LOCAL" disabled={!detail.localSignatureReady}>Gunakan PDF tanda tangan simulasi</option>
+              : <><option value="DIGITAL">Digital</option><option value="BASAH">Basah</option>
+                {detail.v11&&<option value="MEKARI_MANUAL">Unggah PDF Mekari manual</option>}
+                {detail.v11&&signingReady&&<option value="MEKARI_API">Gunakan PDF final Mekari staging</option>}
+              </>}
           </select></div>
-          {signatureMethod!=="MEKARI_API"&&<div className="field full"><label>Naskah Bertanda Tangan</label><input aria-label="Naskah bertanda tangan" className="input" type="file" name="signed_file" accept=".pdf,.jpg,.jpeg,.png" required/>
+          {detail.localSigning && !detail.localSignatureReady && <p className="field full notice">Buat tanda tangan simulasi dari PDF utama sebelum menerbitkan.</p>}
+          {!detail.localSigning&&signatureMethod!=="MEKARI_API"&&<div className="field full"><label>Naskah Bertanda Tangan</label><input aria-label="Naskah bertanda tangan" className="input" type="file" name="signed_file" accept=".pdf,.jpg,.jpeg,.png" required/>
             <span className="hint">Unggah PDF dari layanan TTD digital atau hasil pindai tanda tangan basah. Maksimal 10 MB.</span>
           </div>}
         </>}

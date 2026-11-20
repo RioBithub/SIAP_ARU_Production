@@ -3,11 +3,12 @@
 import { useCallback, useState, type FormEvent } from "react";
 import AttachmentActions from "@/components/AttachmentActions";
 import V11SigningPanel from "@/components/V11SigningPanel";
+import LocalSignature from "@/components/LocalSignature";
 import type { notaDocument } from "@/lib/nota-document";
 
 export default function NotaDocumentPanel({ id, data, refresh }: {
   id: string;
-  data: NonNullable<Awaited<ReturnType<typeof notaDocument>>> & { editable: boolean; sandbox: boolean };
+  data: NonNullable<Awaited<ReturnType<typeof notaDocument>>> & { editable: boolean; sandbox: boolean; local: boolean };
   refresh: () => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
@@ -51,7 +52,7 @@ export default function NotaDocumentPanel({ id, data, refresh }: {
     <div className="card-body">
       <div className="kpi-list">
         <div className="kpi-row"><span>Status tanda tangan</span><b>
-          {data.signed ? "Ditandatangani di Mekari Sandbox"
+          {data.signed ? (data.local ? "Tanda tangan simulasi tersedia" : "Ditandatangani di Mekari Sandbox")
             : data.manualReason ? "Sudah ditandatangani menurut pengirim" : "Belum ditandatangani"}
         </b></div>
         {!data.signed && data.manualReason && <div className="kpi-row"><span>Keterangan pengirim</span><b>{data.manualReason}</b></div>}
@@ -78,8 +79,10 @@ export default function NotaDocumentPanel({ id, data, refresh }: {
           </label>
         </div>
         {data.source && !data.signed && <div className="attachment-actions" style={{ marginTop: 8 }}>
-          {data.sandbox && !data.manualReason && <button type="button" className="btn btn-primary" disabled={busy}
-            aria-expanded={showSigning} onClick={() => { setShowSigning(!showSigning); setShowDeclaration(false); }}>Tanda Tangan Mekari Sandbox</button>}
+          {(data.sandbox || data.local) && !data.manualReason && <button type="button" className="btn btn-primary" disabled={busy}
+            aria-expanded={showSigning} onClick={() => { setShowSigning(!showSigning); setShowDeclaration(false); }}>
+            {data.local ? "Tanda Tangan Simulasi" : "Tanda Tangan Mekari Sandbox"}
+          </button>}
           {data.manualReason
             ? <button type="button" className="btn btn-secondary" disabled={busy}
               onClick={() => void save({ action: "RESET", source_id: data.source?.id })}>Tandai Belum Ditandatangani</button>
@@ -94,9 +97,10 @@ export default function NotaDocumentPanel({ id, data, refresh }: {
           </label>
           <div className="field full"><button className="btn btn-primary" disabled={busy}>Simpan Status Tanda Tangan</button></div>
         </form>}
-        {showSigning && data.source && !data.signed && data.sandbox && !data.manualReason &&
-          <V11SigningPanel key={data.source.id} id={data.source.id}
-            source={{ ...data.source, attachment_kind: "ORIGINAL" }} onReady={onSignature}/>}
+        {showSigning && data.source && !data.signed && !data.manualReason && (data.local
+          ? <LocalSignature key={data.source.id} id={data.source.id} onSaved={() => onSignature(true)}/>
+          : data.sandbox && <V11SigningPanel key={data.source.id} id={data.source.id}
+            source={{ ...data.source, attachment_kind: "ORIGINAL" }} onReady={onSignature}/>)}
       </>}
       {busy && <p role="status">Menyimpan PDF atau status tanda tangan…</p>}
       {error && <p className="error" role="alert">{error}</p>}

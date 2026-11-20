@@ -6,7 +6,8 @@ import { canEditFinance } from "@/lib/permissions";
 import { amount, str } from "@/lib/http";
 import { auditLog } from "@/lib/audit";
 
-export async function PATCH(request:Request,{params}:{params:{id:string}}){
+export async function PATCH(request:Request,{ params: routeParams }: { params: Promise<{ id: string }> }){
+  const params = await routeParams;
   const user=await getCurrentUser(); if(!user)return NextResponse.json({ok:false,error:"Unauthorized"},{status:401});
   if(!canEditFinance(user.role))return NextResponse.json({ok:false,error:"Forbidden"},{status:403});
   try{
@@ -20,7 +21,8 @@ export async function PATCH(request:Request,{params}:{params:{id:string}}){
     return NextResponse.json({ok:true});
   }catch(e){return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Update gagal."},{status:400});}
 }
-export async function DELETE(request:Request,{params}:{params:{id:string}}){
+export async function DELETE(request:Request,{ params: routeParams }: { params: Promise<{ id: string }> }){
+  const params = await routeParams;
   const user=await getCurrentUser(); if(!user)return NextResponse.json({ok:false,error:"Unauthorized"},{status:401});
   if(user.role!=="ROOT_ADMIN")return NextResponse.json({ok:false,error:"Hanya Root Admin yang dapat menghapus entry."},{status:403});
   const [rows]=await db.query<RowDataPacket[]>(`SELECT entry_type,category,description,amount FROM siap_finance_entries WHERE id=? LIMIT 1`,[params.id]);

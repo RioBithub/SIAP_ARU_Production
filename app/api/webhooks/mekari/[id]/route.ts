@@ -6,7 +6,8 @@ import { callbackAuthorized, mekariMode, providerStatus } from "@/lib/mekari-sig
 
 export const runtime = "nodejs";
 
-export async function POST(request: Request, { params }: { params: { id: string } }) {
+export async function POST(request: Request, { params: routeParams }: { params: Promise<{ id: string }> }) {
+  const params = await routeParams;
   const mode = mekariMode();
   const token = new URL(request.url).searchParams.get("token") || "";
   if (!mode || !callbackAuthorized(params.id, token)) return NextResponse.json({ ok: false }, { status: 403 });

@@ -25,7 +25,8 @@ function dateOnly(v: unknown) {
   return s;
 }
 
-export async function GET(_request: Request, { params }: { params: { kind: string } }) {
+export async function GET(_request: Request, { params: routeParams }: { params: Promise<{ kind: string }> }) {
+  const params = await routeParams;
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ ok:false,error:"Unauthorized" }, { status:401 });
   if (!canSeeFinance(user.role)) return NextResponse.json({ ok:false,error:"Forbidden" }, { status:403 });
@@ -38,7 +39,8 @@ export async function GET(_request: Request, { params }: { params: { kind: strin
   }
 }
 
-export async function PATCH(request: Request, { params }: { params: { kind: string } }) {
+export async function PATCH(request: Request, { params: routeParams }: { params: Promise<{ kind: string }> }) {
+  const params = await routeParams;
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ ok:false,error:"Unauthorized" }, { status:401 });
   if (!canEditFinance(user.role)) return NextResponse.json({ ok:false,error:"Forbidden" }, { status:403 });
@@ -61,7 +63,8 @@ export async function PATCH(request: Request, { params }: { params: { kind: stri
   }
 }
 
-export async function PUT(request: Request, { params }: { params: { kind: string } }) {
+export async function PUT(request: Request, { params: routeParams }: { params: Promise<{ kind: string }> }) {
+  const params = await routeParams;
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ ok:false,error:"Unauthorized" }, { status:401 });
   if (!canEditFinance(user.role)) return NextResponse.json({ ok:false,error:"Forbidden" }, { status:403 });

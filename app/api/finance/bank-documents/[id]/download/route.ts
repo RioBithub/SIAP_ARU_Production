@@ -7,7 +7,8 @@ import { readStoredFile } from "@/lib/upload";
 
 export const runtime="nodejs";
 
-export async function GET(_request:Request,{params}:{params:{id:string}}){
+export async function GET(_request:Request,{ params: routeParams }: { params: Promise<{ id: string }> }){
+  const params = await routeParams;
   const user=await getCurrentUser();
   if(!user) return NextResponse.json({ok:false,error:"Unauthorized"},{status:401});
   if(!canSeeBankStatement(user.role)) return NextResponse.json({ok:false,error:"Forbidden"},{status:403});

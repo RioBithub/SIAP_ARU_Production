@@ -9,10 +9,11 @@ import AccountSwitcher, { ACCOUNT_SWITCH_EVENT, RestoreAccountButton } from "@/c
 
 type Item = { href:string; label:string; icon:string; roles?:string[] };
 
-export default function AppShell({ user, rootName, targetId, children }: {
+export default function AppShell({ user, rootName, targetId, staging, children }: {
   user: SessionUser;
   rootName: string | null;
   targetId: string | null;
+  staging: boolean;
   children: React.ReactNode;
 }) {
   const pathname=usePathname();
@@ -36,7 +37,8 @@ export default function AppShell({ user, rootName, targetId, children }: {
   }, [rootName]);
 
   const groups:{label:string;items:Item[]}[]=[
-    {label:"Utama",items:[{href:"/dashboard",label:"Dashboard",icon:"⌂"}]},
+    {label:"Utama",items:[{href:"/dashboard",label:"Dashboard",icon:"⌂"},
+      ...(staging ? [{href:"/simulasi",label:"Bahan Simulasi",icon:"▤"}] : [])]},
     {label:"Persuratan",items:[
       {href:"/letters/incoming",label:"Surat Masuk",icon:"✉"},
       {href:"/letters/internal",label:"Nota Dinas",icon:"↥"},
@@ -113,6 +115,7 @@ export default function AppShell({ user, rootName, targetId, children }: {
           <button className="btn btn-secondary" onClick={logout}>Keluar</button>
         </div>
       </header>
+      {staging && <div className="staging-banner"><strong>STAGING</strong><span>Gunakan data simulasi untuk latihan SIAP ARU.</span></div>}
       {targetId && <div className="account-mode-banner">
         <div>
           <div><strong>Mode akun</strong> · {user.name} · {ROLE_LABELS[user.role]}{user.unit_name ? ` · ${user.unit_name}` : ""}</div>

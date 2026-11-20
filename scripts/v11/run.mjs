@@ -5,6 +5,7 @@ const commands = {
   bootstrap: ["scripts/v11/bootstrap.mjs"],
   migrate: ["scripts/v11/migrate.mjs"],
   demo: ["scripts/v11/demo-cases.mjs"],
+  "demo-dev": ["scripts/v11/demo-dev.mjs"],
   typecheck: ["node_modules/typescript/bin/tsc", "--noEmit"],
   build: ["node_modules/next/dist/bin/next", "build"],
   start: ["scripts/v11/start.mjs"],
@@ -13,11 +14,14 @@ const commands = {
 
 try {
   const [, , file, command] = process.argv;
-  if (!commands[command]) throw new Error("Pilih perintah bootstrap, migrate, demo, typecheck, build, start, atau smoke.");
+  if (!Object.hasOwn(commands, command)) throw new Error("Pilih perintah bootstrap, migrate, demo, demo-dev, typecheck, build, start, atau smoke.");
   const config = await readStageConfig(file);
-  const app = spawn(process.execPath, commands[command], {
-    cwd: repositoryRoot, env: stageEnvironment(config), stdio: "inherit",
-  });
+  if (config.SIAP_DEV_STAGING === "1" && ["smoke", "demo"].includes(command)) {
+    throw new Error("Untuk staging dev gunakan demo-dev. Integrasi Mekari dinonaktifkan.");
+  }
+  const env = stageEnvironment(config);
+  if (config.SIAP_DEV_STAGING === "1" && !["bootstrap", "demo-dev"].includes(command)) delete env.SIAP_V11_STAGE_PASSWORD;
+  const app = spawn(process.execPath, commands[command], { cwd: repositoryRoot, env, stdio: "inherit" });
   for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => app.kill(signal));
   app.once("error", () => {
     console.error("Perintah staging tidak dapat dijalankan.");

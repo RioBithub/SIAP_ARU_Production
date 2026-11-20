@@ -22,6 +22,8 @@ import { activeTasks, checkedDate, invoiceVerified, officialManager, receiptFiel
 import { DELIVERY_METHODS, jakartaDate } from "@/lib/v11-workflow";
 import { requireInvoicePaid } from "@/lib/v11-finance";
 import { mekariMode, MEKARI_PILOT_JOB_MODE } from "@/lib/mekari-sign";
+import { devOutgoingSignature } from "@/lib/dev-signature";
+import { devStaging } from "@/lib/dev-staging";
 
 export const runtime="nodejs";
 
@@ -96,7 +98,8 @@ async function parseRequest(request:Request) {
   };
 }
 
-export async function POST(request:Request,{params}:{params:{id:string}}) {
+export async function POST(request:Request,{ params: routeParams }: { params: Promise<{ id: string }> }) {
+  const params = await routeParams;
   const user=await getCurrentUser();
   if(!user) return NextResponse.json({ok:false,error:"Unauthorized"},{status:401});
 
@@ -199,7 +202,8 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
             const document = await notaDocument(conn, params.id);
             if (!document?.source) throw new Error("Buat atau unggah PDF Nota Dinas sebelum mengajukan.");
             if (!document.signed && !document.manualReason) {
-              throw new Error("Tandatangani PDF dengan Mekari Sandbox atau catat tanda tangan manual sebelum mengajukan.");
+              throw new Error(devStaging() ? "Buat tanda tangan simulasi atau catat tanda tangan manual sebelum mengajukan."
+                : "Tandatangani PDF dengan Mekari Sandbox atau catat tanda tangan manual sebelum mengajukan.");
             }
           }
           if (direction === "INTERNAL" && letter.current_role === "MANAGER" && status === "DRAFT"
@@ -388,7 +392,13 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
 
         if (secretariat || (documentType === SPK_OUTGOING && await getBusinessDocumentRow(params.id, conn))) {
           const method = parsed.signatureMethod;
-          if (workflow && method === "MEKARI_API") {
+          if (workflow && devStaging()) {
+            if (method !== "STAGING_LOCAL" || parsed.signedFile) throw new Error("Pilih PDF tanda tangan simulasi untuk penerbitan staging.");
+            signatureAttachmentId = await devOutgoingSignature(conn, params.id);
+            if (!signatureAttachmentId) throw new Error("Buat tanda tangan simulasi dari PDF aktif terlebih dahulu.");
+            signature = "DIGITAL";
+            signatureProvenance = "STAGING_LOCAL";
+          } else if (workflow && method === "MEKARI_API") {
             const [signing] = await conn.query<RowDataPacket[]>(
               "SELECT final_attachment_id,mode FROM siap_v11_signing WHERE letter_id=? AND status='COMPLETED'", [params.id],
             );

@@ -1,0 +1,20 @@
+[Unit]
+Description=SIAP ARU Staging Dev
+After=network.target mariadb.service mysql.service
+
+[Service]
+User=siap-dev
+Group=siap-dev
+WorkingDirectory=/opt/apps/siap-aru-dev
+ExecStart=/usr/bin/env node scripts/v11/run.mjs /var/lib/siap-aru-dev/stage.json start
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/siap-aru-dev /opt/apps/siap-aru-dev/.next/standalone
+
+[Install]
+WantedBy=multi-user.target

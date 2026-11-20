@@ -11,7 +11,10 @@ const nextConfig = {
   output: "standalone",
   experimental: { serverActions: { bodySizeLimit: "12mb" } },
   async headers() {
-    return [{ source: "/(.*)", headers: securityHeaders }];
+    const headers = process.env.SIAP_DEV_STAGING === "1"
+      ? [...securityHeaders, { key: "X-Robots-Tag", value: "noindex, nofollow, noarchive" }]
+      : securityHeaders;
+    return [{ source: "/(.*)", headers }];
   }
 };
 export default nextConfig;
