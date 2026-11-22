@@ -13,10 +13,12 @@ import { reversibleApproval } from "@/lib/letter-approval";
 import { canHandleSecretariat } from "@/lib/correspondence-workflow";
 import { listLetterActions, outgoingSources } from "@/lib/correspondence-data";
 import { checkedDate, invoiceKey, invoiceVerified, officialManager, persekotChecklist, receiptFields,
-  requestingUnit, saveProof, takeFile, v11Letter } from "@/lib/v11-data";
+  requestingUnit, saveProof, takeFile, v11Enabled, v11Letter } from "@/lib/v11-data";
 import { invoiceVerificationStatus, jakartaDate } from "@/lib/v11-workflow";
 import { invoicePaymentSummary } from "@/lib/v11-finance";
-import { canEditNotaDocument, notaDocument, saveNotaSource } from "@/lib/nota-document";
+import { canEditNotaDocument, canUploadNotaSignature, isDirectNota, isNotaDraft, notaAuthorId, notaDocument, requiresNotaProof,
+  saveNotaSource } from "@/lib/nota-document";
+import { directorsForNotaReply, notaReplyRecipient } from "@/lib/nota-routing";
 import { discardUncommittedFiles, insertLetterAttachment, listLetterAttachments, markPaymentAttachment, type StoredLetterFile } from "@/lib/letter-uploads";
 
 export const runtime = "nodejs";
@@ -88,8 +90,31 @@ export async function GET(_:Request,{params}:{params:{id:string}}) {
     };
   }
   const nota = workflow && letter.direction === "INTERNAL" ? await notaDocument(db, params.id) : null;
-  return NextResponse.json({ok:true,data:{letter,actions,attachments,business,v11,originalId,approvalId:approval?.id,
-    notaDocument: nota && { ...nota, editable: canEditNotaDocument(user, letter), sandbox: sandboxAttachmentsEnabled() },
+  const hasNotaRouting = letter.direction === "INTERNAL" && (workflow || v11Enabled());
+  const [notePeople, replyRecipient, replies, replyAuthors] = hasNotaRouting ? await Promise.all([
+    db.query<RowDataPacket[]>(
+      "SELECT id,name FROM siap_users WHERE id IN (?,?)",
+      [notaAuthorId(letter, workflow), workflow?.nota_signature_assistant_user_id ?? null],
+    ).then(([rows]) => rows),
+    notaReplyRecipient(db, user, letter, workflow),
+    db.query<RowDataPacket[]>(
+      `SELECT l.id,l.subject,l.status,l.sender FROM siap_letters l JOIN siap_v11_letters v ON v.letter_id=l.id
+       WHERE l.source_letter_id=? AND v.kind='NOTA_REPLY' AND l.status<>'CANCELLED' AND ${access.clause}
+       ORDER BY l.created_at DESC,l.id DESC`, [params.id, ...access.params],
+    ).then(([rows]) => rows),
+    directorsForNotaReply(db, user, letter, workflow),
+  ]) : [[], null, [], []];
+  const authorId = hasNotaRouting ? notaAuthorId(letter, workflow) : null;
+  const assistant = notePeople.find(person => person.id === workflow?.nota_signature_assistant_user_id);
+  return NextResponse.json({ok:true,data:{letter,actions,attachments,business,v11,
+    originalId: nota ? nota.source?.id : originalId, approvalId:approval?.id,
+    notaDocument: nota && { ...nota, editable: canEditNotaDocument(user, letter, workflow), sandbox: sandboxAttachmentsEnabled(),
+      uploadable: canUploadNotaSignature(user, letter, workflow), requiresProof: requiresNotaProof(workflow),
+      canAssignAssistant: isNotaDraft(letter) && authorId === user.id,
+      assistant: assistant ? { id: assistant.id, name: assistant.name } : null },
+    notaRouting: hasNotaRouting ? { authorId, authorName: notePeople.find(person => person.id === authorId)?.name,
+      isReply: workflow?.kind === "NOTA_REPLY", direct: isDirectNota(workflow), replies, replyAuthors,
+      replyRecipient: replyRecipient ? { id: replyRecipient.id, name: replyRecipient.name, unit: replyRecipient.unit_name } : null } : null,
     sandboxSigning: sandboxAttachmentsEnabled() && canHandleSecretariat(user.role),
     sourceLetter, sourceDisposition, hasSourceDisposition: Boolean(sourceDispositionId), hasSourceLetter: Boolean(sourceLetterId)}});
 }
@@ -116,14 +141,18 @@ export async function PATCH(request: Request, { params }: { params: { id: string
       const draft = ["DRAFT", "RETURNED_STAFF"].includes(letter.status);
       const owner = letter.created_by === user.id;
       const root = user.role === "ROOT_ADMIN";
+      const nota = Boolean(v11 && letter.direction === "INTERNAL");
       const intake = letter.uses_secretariat && letter.direction === "INCOMING" && letter.status === "SECRETARIAT_INTAKE";
       const editable = intake ? owner || canHandleSecretariat(user.role)
         : managed || letter.uses_secretariat || v11 ? draft && (owner || root)
+          || (nota && canEditNotaDocument(user, letter, v11))
         : root || (owner && draft);
       if (!editable) return 403;
       if (spbFile && v11?.kind !== "PERSEKOT") throw new Error("Berkas SPB hanya untuk pengajuan persekot.");
 
-      const conf = str(body.confidentiality, 20).toUpperCase();
+      const reply = v11?.kind === "NOTA_REPLY";
+      const fixedParties = isDirectNota(v11) || Boolean(v11?.nota_author_user_id);
+      const conf = reply ? "" : str(body.confidentiality, 20).toUpperCase();
       const publicValue = typeof body.is_public === "boolean" ? Number(body.is_public) : null;
       const incoming = (business || intake) && letter.direction === "INCOMING";
       const updateSource = letter.direction === "OUTGOING" && draft && (owner || root)
@@ -135,10 +164,10 @@ export async function PATCH(request: Request, { params }: { params: { id: string
         ? (v11 ? checkedDate : dateOnly)(body.received_date, "Tanggal diterima") : null;
       if (v11 && receivedDate && receivedDate > jakartaDate()) throw new Error("Tanggal penerimaan tidak boleh di masa depan.");
       if (v11Invoice && externalNumber && externalNumber.length > 120) throw new Error("Nomor invoice maksimal 120 karakter.");
-      const sender = str(body.sender, 255) || letter.sender;
+      const sender = fixedParties ? letter.sender : str(body.sender, 255) || letter.sender;
       const subject = str(body.subject, 500) || letter.subject;
       const summary = body.summary === undefined ? letter.summary : str(body.summary, 5000) || null;
-      const recipient = str(body.recipient, 255) || letter.recipient;
+      const recipient = fixedParties ? letter.recipient : str(body.recipient, 255) || letter.recipient;
       const unit = v11?.requesting_unit && body.requesting_unit !== undefined ? requestingUnit(body.requesting_unit) : v11?.requesting_unit;
       let managerId = letter.routing_target_user_id;
       if (v11?.requesting_unit && body.routing_target_user_id !== undefined) {
@@ -158,7 +187,7 @@ export async function PATCH(request: Request, { params }: { params: { id: string
          confidentiality=COALESCE(NULLIF(?,''),confidentiality),
          is_public=CASE WHEN COALESCE(NULLIF(?,''),confidentiality)='RAHASIA' THEN 0 ELSE COALESCE(?,is_public) END,
          routing_target_user_id=?,updated_by=? WHERE id=?`,
-        [str(body.subject, 500), str(body.sender, 255), str(body.recipient, 255), externalNumber, receivedDate,
+        [subject, sender, recipient, externalNumber, receivedDate,
           Number(updateSource), source?.sourceLetterId ?? null,
           body.summary === undefined ? letter.summary : str(body.summary, 5000) || null,
           body.notes === undefined ? letter.notes : str(body.notes, 5000) || null,
@@ -170,6 +199,7 @@ export async function PATCH(request: Request, { params }: { params: { id: string
       if (v11 && letter.direction === "INTERNAL" && (subject !== letter.subject || summary !== letter.summary ||
           sender !== letter.sender || recipient !== letter.recipient || (conf && conf !== letter.confidentiality))) {
         await saveNotaSource(conn, params.id, null, "GENERATED");
+        await conn.execute("UPDATE siap_letters SET active_original_attachment_id=NULL WHERE id=?", [params.id]);
       }
       let revision = v11?.invoice_revision;
       if (v11?.requesting_unit) {

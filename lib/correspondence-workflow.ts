@@ -33,6 +33,17 @@ export function resultRequirement(value: unknown): ResultRequirement {
 
 export const PURGE_CONFIRMATION = "HAPUS PERMANEN";
 
+export const NOTA_DIRECTORS = ["DIRECTOR_OPS", "PRESIDENT_DIRECTOR"] as const;
+
+export function isNotaDirector(role: Role) {
+  return NOTA_DIRECTORS.some(director => director === role);
+}
+
+export function canReceiveDirectorNota(sender: Role, recipient: Role) {
+  return ["MANAGER", "STAFF", "FINANCE", "SECRETARIAT"].includes(recipient) ||
+    (sender === "PRESIDENT_DIRECTOR" && recipient === "DIRECTOR_OPS");
+}
+
 export type LetterHistoryEntry = {
   id: string;
   action: string;
@@ -49,6 +60,8 @@ const letterActions: Record<string, string> = {
   REGISTER_INCOMING: "Surat Diregistrasi",
   CREATE_OUTGOING: "Draft Dibuat",
   CREATE_INTERNAL: "Nota Dinas Dibuat",
+  SEND_NOTA_REPLY: "Balasan Nota Dinas Dikirim",
+  SEND_NOTA_DIRECT: "Nota Dinas Direksi Dikirim",
   SUBMIT: "Diajukan",
   APPROVE: "Disetujui & Diteruskan",
   APPROVE_FINAL: "Disetujui / Selesai",
@@ -66,6 +79,8 @@ const letterActions: Record<string, string> = {
   GENERATE_NOTA_PDF: "PDF Nota Dinas dibuat",
   DECLARE_NOTA_SIGNED: "Tanda tangan dicatat oleh pengirim",
   RESET_NOTA_SIGNATURE: "Nota Dinas ditandai belum ditandatangani",
+  UPLOAD_NOTA_SIGNATURE: "PDF bertanda tangan diunggah",
+  ASSIGN_NOTA_SIGNATURE: "Bantuan tanda tangan diperbarui",
   UPDATE_INVOICE_PAYMENT_MODE: "Jenis pembayaran invoice diperbarui",
   REVIEW_INVOICE_PAYMENT_MODE: "Jenis pembayaran invoice disetujui ulang",
   IMPORT_LEGACY_EXCEL: "Diimpor dari Excel Lama",

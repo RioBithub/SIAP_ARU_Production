@@ -2,13 +2,14 @@
 
 import { FormEvent,useEffect,useMemo,useRef,useState } from "react";
 import type { Role, SessionUser } from "@/lib/types";
-import { PURGE_CONFIRMATION, REVIEW_ROLES, canHandleSecretariat, formatLetterFileSize as size, letterDirectionLabel, reviewRole } from "@/lib/correspondence-workflow";
+import { PURGE_CONFIRMATION, REVIEW_ROLES, canHandleSecretariat, canReceiveDirectorNota, isNotaDirector,
+  formatLetterFileSize as size, letterDirectionLabel, reviewRole } from "@/lib/correspondence-workflow";
 import Modal from "@/components/Modal";
 import StatusBadge, { statusLabel } from "@/components/StatusBadge";
 import BusinessDocumentFields, { BusinessDocumentSummary, ReferencePicker } from "@/components/BusinessDocumentFields";
 import { INVOICE_INCOMING, INVOICE_OUTGOING, SPK_INCOMING, SPK_OUTGOING, isBusinessDocument, isInvoice, type DocumentReference } from "@/lib/business-documents";
 
-import { DELIVERY_METHODS, MANAGER_SCOPES, staffUnit, type ManagerScope } from "@/lib/v11-workflow";
+import { DELIVERY_METHODS, MANAGER_SCOPES, staffUnit, unitManagerScope, type ManagerScope } from "@/lib/v11-workflow";
 import PaymentDocumentsPanel from "@/components/PaymentDocumentsPanel";
 import ConfidentialityBadge from "@/components/ConfidentialityBadge";
 import AttachmentActions from "@/components/AttachmentActions";
@@ -27,6 +28,12 @@ type Props={direction:Direction;user:SessionUser};
 type PendingAction={action:string;label:string;requiredComment?:boolean;issue?:boolean};
 
 type RoutingUser={id:string;name:string;role:Role;unit_name:string|null;v11_scope?:ManagerScope};
+type ReplyRecipient = { id: string; name: string; unit: string | null };
+type ReplyOrigin = {
+  id: string; subject: string; confidentiality: string;
+  recipient: ReplyRecipient | null;
+  authors: Array<{ id: string; name: string; recipient: ReplyRecipient }>;
+};
 const isReviewer=(account:RoutingUser)=>REVIEW_ROLES.some(role=>role===account.role);
 
 const today=()=>new Date().toISOString().slice(0,10);
@@ -45,7 +52,9 @@ const DOC_LABELS:Record<string,string>={
   NOTA_DINAS:"Nota Dinas",
   LEMBAR_PENGANTAR:"Lembar Pengantar"
 };
-const docLabel=(r:any)=>r.format_name||DOC_LABELS[r.document_type]||String(r.document_type||"-").replace(/_/g," ");
+const docLabel=(r:any)=>r.v11_kind==="NOTA_REPLY"?"Balasan Nota Dinas"
+  :r.v11_kind==="NOTA_DIRECT"?"Nota Dinas Direksi":r.format_name||DOC_LABELS[r.document_type]||String(r.document_type||"-").replace(/_/g," ");
+const directNotaSent=(kind:string,status:string)=>["NOTA_REPLY","NOTA_DIRECT"].includes(kind)&&status==="COMPLETED";
 const DOC_TYPE_CLASS:Record<string,string>={
   PERJANJIAN_KERJA_SAMA:"letter-pks",
   PURCHASE_ORDER:"letter-po",
@@ -119,13 +128,20 @@ export default function LettersClient({direction,user}:Props){
   const [sourceLetter,setSourceLetter]=useState<DocumentReference[]>([]);
   const [sourceDispositionId,setSourceDispositionId]=useState("");
   const [sourceLoading,setSourceLoading]=useState(false);
+  const [notaAuthor,setNotaAuthor]=useState("");
+  const [replyOrigin,setReplyOrigin]=useState<ReplyOrigin|null>(null);
   const hasSecretariat=routingUsers.some(account=>account.role==="SECRETARIAT");
   const incomingToSecretariat=direction==="INCOMING"&&(v11Enabled||(hasSecretariat&&!canHandleSecretariat(user.role)));
   const officialManagers=routingUsers.filter(account=>account.role==="MANAGER"&&account.v11_scope);
-  const managerNota=v11Enabled&&direction==="INTERNAL"&&user.role==="MANAGER";
+  const directorAccounts=routingUsers.filter(account=>isNotaDirector(account.role));
+  const noteAuthorRole=routingUsers.find(account=>account.id===notaAuthor)?.role || user.role;
+  const managerNota=v11Enabled&&direction==="INTERNAL"&&noteAuthorRole==="MANAGER";
+  const directingNota=v11Enabled&&direction==="INTERNAL"&&isNotaDirector(noteAuthorRole);
+  const staffManagerScope=unitManagerScope(staffUnit(user.unit_name));
+  const preparableAuthors=officialManagers.filter(account=>!staffManagerScope||account.v11_scope===staffManagerScope);
   const financeManager=officialManagers.some(account=>account.id===user.id&&account.v11_scope==="KSU");
   const reviewers=v11Enabled
-    ? managerNota ? routingUsers.filter(account=>["DIRECTOR_OPS","PRESIDENT_DIRECTOR"].includes(account.role)) : officialManagers
+    ? managerNota ? directorAccounts : officialManagers
     : routingUsers.filter(account=>direction==="INCOMING"&&hasSecretariat ? isReviewer(account) : account.role==="MANAGER");
   const reviewerLabel=(account:RoutingUser)=>account.v11_scope ? MANAGER_SCOPES[account.v11_scope]
     : [account.name,account.unit_name].filter(Boolean).join(" — ");
@@ -258,6 +274,8 @@ export default function LettersClient({direction,user}:Props){
   function openCreate(){
     setNotaKind("NOTA");
     setNotaSource("GENERATED");
+    setNotaAuthor("");
+    setReplyOrigin(null);
     setFormatId("");
     setLetterDate(today());
     setCustomBase("");
@@ -266,6 +284,18 @@ export default function LettersClient({direction,user}:Props){
     setError("");
     setCreateOpen(true);
   }
+
+  function openNotaReply() {
+    if (!detail?.notaRouting) return;
+    const { replyRecipient, replyAuthors } = detail.notaRouting;
+    const { id, subject, confidentiality } = detail.letter;
+    setDetailOpen(false);
+    openCreate();
+    setReplyOrigin({id, subject, confidentiality, recipient:replyRecipient, authors:replyAuthors});
+  }
+
+  const directNotaForm=directingNota&&notaKind==="NOTA";
+  const replyRecipient=replyOrigin?.recipient ?? replyOrigin?.authors.find(account=>account.id===notaAuthor)?.recipient;
 
   const canCreate=direction==="INTERNAL"||(direction==="OUTGOING"&&(canDraftOutgoing||(user.role==="FINANCE"&&sourceDispositionId)))
     ||(direction==="INCOMING"&&(canDraftOutgoing||user.role==="SECRETARIAT"
@@ -315,6 +345,7 @@ export default function LettersClient({direction,user}:Props){
       delete body.original_file;
       delete body.additional_files;
       if (direction==="INTERNAL" && v11Enabled) body.nota_document_source=notaSource;
+      if (replyOrigin) body.nota_reply_to_id=replyOrigin.id;
       if (direction==="INTERNAL" && notaKind==="PAYMENT_REQUEST") body.payment_request=true;
       if (direction==="INTERNAL" && persekot) {
         body.persekot=true;
@@ -360,7 +391,7 @@ export default function LettersClient({direction,user}:Props){
 
       setCreateOpen(false);
       setMessage(direction==="INCOMING"?(result.data.status==="SECRETARIAT_INTAKE"?"Surat diserahkan ke Sekretariat.":"Surat diregistrasi dan diteruskan.")
-        :direction==="INTERNAL"?"Nota Dinas tersimpan sebagai draft. Buka detail untuk mengajukan ke Manager."
+        :direction==="INTERNAL"?(notaAuthor?"Draf tersimpan untuk diperiksa pengirim.":"Draf Nota Dinas tersimpan.")
         :"Draft dan nomor dokumen tersimpan. Buka detail untuk mengajukan ke Manager reviewer.");
       await load();
       if (failedFiles.length) {
@@ -503,7 +534,7 @@ export default function LettersClient({direction,user}:Props){
   function canEditDetail(){
     if(!detail)return false;
     const letter=detail.letter;
-    const own=user.role==="ROOT_ADMIN"||letter.created_by===user.id;
+    const own=user.role==="ROOT_ADMIN"||letter.created_by===user.id||detail.notaRouting?.authorId===user.id;
     const draft=["DRAFT","RETURNED_STAFF"].includes(letter.status);
     if(letter.uses_secretariat&&letter.status==="SECRETARIAT_INTAKE") return own||canHandleSecretariat(user.role);
     if(detail.v11||letter.uses_secretariat||detail.business?.managed||isInvoice(letter.document_type)) return own&&draft;
@@ -553,10 +584,19 @@ export default function LettersClient({direction,user}:Props){
     const secretariat=Boolean(letter.uses_secretariat);
     const handlesSecretariat=secretariat&&letter.current_role==="SECRETARIAT"&&canHandleSecretariat(user.role);
     const buttons:Array<[string,string,string,boolean?,boolean?]>=[];
+    const draft=["DRAFT","RETURNED_STAFF"].includes(s);
+    const author=detail.notaRouting?.authorId||letter.created_by;
+    const delegated=author!==letter.created_by;
 
     if(d==="INCOMING"&&s==="SECRETARIAT_INTAKE"&&handlesSecretariat)
       buttons.push(["REGISTER_INCOMING","Registrasi & Teruskan","btn-primary"]);
-    if(["DRAFT","RETURNED_STAFF"].includes(s) && (user.role==="ROOT_ADMIN"||detail.letter.created_by===user.id)) {
+    if (draft && detail.notaRouting?.direct) {
+      if (author===user.id && isNotaDirector(user.role)) {
+        buttons.push(detail.notaRouting.isReply
+          ? ["SEND_NOTA_REPLY","Kirim Balasan Nota Dinas","btn-primary"]
+          : ["SEND_NOTA_DIRECT","Kirim Nota Dinas","btn-primary"]);
+      }
+    } else if(draft && (author===user.id || (!delegated&&user.role==="ROOT_ADMIN"))) {
       buttons.push(["SUBMIT",detail.v11&&d==="INTERNAL"?"Ajukan Nota Dinas":"Ajukan ke Manager","btn-primary",false,false]);
     }
     const expected=s==="SECRETARIAT_REVIEW"&&secretariat?"SECRETARIAT":reviewRole(s);
@@ -592,7 +632,8 @@ export default function LettersClient({direction,user}:Props){
     }
     if(d==="OUTGOING"&&s==="ISSUED"&&handlesSecretariat&&!letter.sent_date)
       buttons.push(["MARK_SENT","Catat Pengiriman","btn-primary"]);
-    if(!["CANCELLED","COMPLETED","ISSUED","REJECTED"].includes(s)&&(user.role==="ROOT_ADMIN"||detail.letter.created_by===user.id)) {
+    if(!["CANCELLED","COMPLETED","ISSUED","REJECTED"].includes(s)&&
+      (user.role==="ROOT_ADMIN"||author===user.id||(delegated&&draft&&letter.created_by===user.id))) {
       buttons.push(["CANCEL","Batalkan","btn-danger",true]);
     }
     if(detail.v11?.payment && financeManager && s==="APPROVED" && detail.v11.payment.status==="PAID")
@@ -601,8 +642,10 @@ export default function LettersClient({direction,user}:Props){
       (["ROOT_ADMIN","DIRECTOR_OPS","PRESIDENT_DIRECTOR"].includes(user.role)||letter.routing_target_user_id===user.id))
       buttons.push(["COMPLETE","Tandai Selesai","btn-success"]);
     if(detail.approvalId) buttons.push(["UNDO_APPROVAL","Batalkan Persetujuan","btn-secondary",true]);
+    const nota=detail.notaDocument;
+    const missingSignature=nota&&(!nota.source||(!nota.signed&&(nota.requiresProof||!nota.manualReason)));
     return buttons.map(b=><button key={b[0]} className={`btn ${b[2]}`}
-      disabled={b[0]==="SUBMIT"&&Boolean(detail.notaDocument&&!detail.notaDocument.signed&&!detail.notaDocument.manualReason)}
+      disabled={["SUBMIT","SEND_NOTA_REPLY","SEND_NOTA_DIRECT"].includes(b[0])&&Boolean(missingSignature)}
       onClick={()=>startAction(b[0],b[1],Boolean(b[3]),Boolean(b[4]))}>{b[1]}</button>);
   }
 
@@ -723,7 +766,7 @@ export default function LettersClient({direction,user}:Props){
       </button>
     </div>}
     <div className="card"><div className="table-wrap"><table className="table"><thead><tr>{direction!=="INTERNAL"&&<th>{direction==="INCOMING"?"Nomor Surat":"No."}</th>}<th>Jenis Dokumen</th><th>Perihal</th><th>{direction==="INCOMING"?"Pengirim":"Tujuan"}</th><th>Tanggal</th><th>Status</th><th>Tujuan Saat Ini</th><th>Sifat</th><th>Lampiran</th><th>{trash?"Dipindahkan":"Aktivitas"}</th><th>Aksi</th></tr></thead><tbody>
-      {!loading&&rows.map(r=><tr key={r.id} className={`letter-row ${docTypeClass(r.document_type)}`}>{direction!=="INTERNAL"&&<td className="mono"><b>{direction==="OUTGOING"?(outgoingNumber(r)||"-"):(r.external_number||"-")}</b></td>}<td><span className={`badge letter-type-badge ${docTypeClass(r.document_type)}`}>{docLabel(r)}</span></td><td><b>{r.subject}</b>{r.legacy_import_key&&<span className="muted" style={{display:"block",fontSize:9.5,marginTop:3}}>Data Excel lama{r.legacy_number_conflict?" • cek nomor historis":""}</span>}</td><td>{direction==="INCOMING"?r.sender:r.recipient}</td><td>{fmtDate(r.letter_date)}</td><td><StatusBadge status={r.sent_date&&r.status==="ISSUED"?"SENT":r.status}/></td><td><b style={{fontSize:11}}>{currentTargetLabel(r)}</b></td><td><ConfidentialityBadge value={r.confidentiality}/></td><td>{r.attachment_count}</td>
+      {!loading&&rows.map(r=><tr key={r.id} className={`letter-row ${docTypeClass(r.document_type)}`}>{direction!=="INTERNAL"&&<td className="mono"><b>{direction==="OUTGOING"?(outgoingNumber(r)||"-"):(r.external_number||"-")}</b></td>}<td><span className={`badge letter-type-badge ${docTypeClass(r.document_type)}`}>{docLabel(r)}</span></td><td><b>{r.subject}</b>{r.legacy_import_key&&<span className="muted" style={{display:"block",fontSize:9.5,marginTop:3}}>Data Excel lama{r.legacy_number_conflict?" • cek nomor historis":""}</span>}</td><td>{direction==="INCOMING"?r.sender:r.recipient}</td><td>{fmtDate(r.letter_date)}</td><td><StatusBadge status={r.sent_date&&r.status==="ISSUED"||directNotaSent(r.v11_kind,r.status)?"SENT":r.status}/></td><td><b style={{fontSize:11}}>{currentTargetLabel(r)}</b></td><td><ConfidentialityBadge value={r.confidentiality}/></td><td>{r.attachment_count}</td>
         <td className="letter-activity">{trash?<><span>{formatWorkflowTime(r.deleted_at)}</span><span className="muted">{r.deletion_reason}</span></>
           :<><span>Dibuat {formatWorkflowTime(r.created_at)}</span><span className="muted">Diperbarui {formatWorkflowTime(r.updated_at)}</span></>}</td>
         <td><div className="attachment-actions">{!trash&&<button className="btn btn-secondary" onClick={()=>openDetail(r.id)}>Detail</button>}
@@ -770,16 +813,17 @@ export default function LettersClient({direction,user}:Props){
       </form>
     </Modal>}
 
-    {createOpen&&<Modal title={direction==="INCOMING"?createLabel+" Masuk":createLabel} subtitle={direction==="INTERNAL"?"Nota Dinas digunakan Staff untuk menyampaikan laporan/permohonan ke Manager/atasan.":direction==="OUTGOING"?"Draft disusun Staff. Nomor direservasi per jenis surat dan seluruh proses tercatat di audit log.":"Semua perubahan tercatat di audit log."} onClose={()=>!createBusy&&setCreateOpen(false)}>
+    {createOpen&&<Modal title={replyOrigin?"Buat Balasan Nota Dinas":direction==="INCOMING"?createLabel+" Masuk":createLabel} subtitle={replyOrigin?"Balasan dikirim kepada pengirim Nota Dinas asal.":direction==="INTERNAL"?"Pilih pengirim, tujuan dan sumber PDF sebelum menyimpan draf.":direction==="OUTGOING"?"Draft disusun Staff. Nomor direservasi per jenis surat dan seluruh proses tercatat di audit log.":"Semua perubahan tercatat di audit log."} onClose={()=>!createBusy&&setCreateOpen(false)}>
       <form onSubmit={create} className="form-grid workflow-form">
         {error&&<div className="field full error" role="alert">{error}</div>}
         <div className="field">
           <label>Jenis Dokumen</label>
           {direction==="INTERNAL"
             ? <><input type="hidden" name="document_type" value="NOTA_DINAS"/>
-                {v11Enabled ? <select className="select" aria-label="Jenis Nota Dinas" value={notaKind}
-                  onChange={e=>setNotaKind(e.target.value)}><option value="NOTA">Nota Dinas</option>
+                {v11Enabled&&!replyOrigin ? <select className="select" aria-label="Jenis Nota Dinas" value={notaKind}
+                  onChange={e=>{setNotaKind(e.target.value);if(directingNota&&notaAuthor) setNotaAuthor("");}}><option value="NOTA">Nota Dinas</option>
                   <option value="PERSEKOT">Pengajuan Persekot</option><option value="PAYMENT_REQUEST">Pengajuan Pembayaran Nonpersekot</option></select>
+                  : replyOrigin ? <div className="input">Balasan Nota Dinas</div>
                   : <div className="input">Nota Dinas</div>}</>
             : <select aria-label="Jenis Dokumen" className="select" name={createType==="__CUSTOM__"?undefined:"document_type"} required value={createType} onChange={e=>{setCreateType(e.target.value);setFormatId("");}}>
                 {typeOptions.map(([value,label])=><option key={value} value={value}>{label}</option>)}
@@ -814,19 +858,36 @@ export default function LettersClient({direction,user}:Props){
             <span className="hint">Draft diajukan ke Manager ini, lalu Dirops → Dirut.</span>
           </div>
         </>}
-        {direction==="INTERNAL"&&
+        {direction==="INTERNAL"&&v11Enabled&&user.role==="STAFF"&&<label className="field">
+          <span>Siapkan draf untuk</span>
+          <select className="select" name="nota_author_user_id" value={notaAuthor} required={Boolean(replyOrigin)}
+            onChange={event=>setNotaAuthor(event.target.value)}>
+            <option value="">{replyOrigin?"Pilih Direktur":"Diri sendiri"}</option>
+            {replyOrigin ? replyOrigin.authors.map(account=><option value={account.id} key={account.id}>{account.name}</option>)
+              : [...preparableAuthors, ...(notaKind==="NOTA"?directorAccounts:[])].map(account=>
+                <option value={account.id} key={account.id}>{reviewerLabel(account)}</option>)}
+          </select>
+          {notaAuthor&&<span className="hint">Pengirim yang dipilih akan memeriksa dan mengirim atau mengajukan draf.</span>}
+        </label>}
+        {replyOrigin&&<div className="field full notice">
+          <b>Nota Dinas asal</b> · {replyOrigin.subject}
+          {replyRecipient&&<><br/><b>Penerima</b> · {[replyRecipient.name,replyRecipient.unit].filter(Boolean).join(" — ")}</>}
+        </div>}
+        {direction==="INTERNAL"&&!replyOrigin&&
           <div className="field">
-            <label>Tujuan Review Awal</label>
-            <select aria-label="Tujuan review" className="select" name="routing_target_user_id" required>
+            <label>{directNotaForm?"Penerima Nota Dinas":"Tujuan Review Awal"}</label>
+            <select key={noteAuthorRole+"-"+directNotaForm} aria-label={directNotaForm?"Penerima Nota Dinas":"Tujuan review"}
+              className="select" name="routing_target_user_id" required>
               <option value="">Pilih penerima...</option>
-              {reviewers.map(r=>
+              {(directNotaForm?routingUsers.filter(account=>canReceiveDirectorNota(noteAuthorRole,account.role)):reviewers).map(r=>
                 <option key={r.id} value={r.id}>
                   {reviewerLabel(r)}
                 </option>
               )}
             </select>
             <span className="hint">
-              {managerNota?"Nota yang dibuat Manager dapat diajukan ke Dirops atau Dirut.":"Nota Dinas diajukan ke Manager yang dipilih."}
+              {directNotaForm?"Direktur mengirim langsung ke akun yang dipilih."
+                :managerNota?"Nota diajukan ke Dirops atau Dirut.":"Nota Dinas diajukan ke Manager yang dipilih."}
             </span>
           </div>}
         <div className="field"><label>{direction==="INTERNAL"?"Tanggal Nota Dinas":"Tanggal Surat"}</label><input className="input" type="date" name="letter_date" value={letterDate} onChange={e=>setLetterDate(e.target.value)} required/>{direction==="OUTGOING"&&<span className="hint">Backdate diperbolehkan. Nomor existing tidak digeser; collision menghasilkan .1, .2, dst.</span>}</div>
@@ -838,11 +899,14 @@ export default function LettersClient({direction,user}:Props){
         {direction==="INCOMING"&&<div className="field"><label>Tanggal Diterima</label><input className="input" type="date" name="received_date" defaultValue={today()} required/></div>}
         {v11Enabled&&direction==="INCOMING"&&<><UnitField value={staffUnit(user.unit_name)||""}/><ReceiptFields upload/></>}
         {v11Enabled&&direction==="INTERNAL"&&persekot&&<PersekotFields/>}
-        <div className="field full"><label>Perihal</label><input className="input" name="subject" required/></div>
-        <div className="field"><label>Sifat Dokumen</label><select className="select" name="confidentiality" defaultValue="BIASA" required><option>BIASA</option><option>PENTING</option><option>RAHASIA</option></select></div>
+        <div className="field full"><label>Perihal</label><input className="input" name="subject" defaultValue={replyOrigin?("Balasan atas "+replyOrigin.subject).slice(0,500):""} required/></div>
+        <div className="field"><label>Sifat Dokumen</label><select className="select" name="confidentiality" defaultValue={replyOrigin?.confidentiality||"BIASA"} required>
+          {["BIASA","PENTING","RAHASIA"].slice(Math.max(0,["BIASA","PENTING","RAHASIA"].indexOf(replyOrigin?.confidentiality||"BIASA")))
+            .map(option=><option key={option}>{option}</option>)}
+        </select></div>
         {!v11Enabled&&<div className="field"><label>Visibilitas</label><label style={{display:"flex",alignItems:"center",gap:8,fontWeight:500}}><input type="checkbox" key={businessForm?"private":"regular"} name="is_public" defaultChecked={direction!=="INTERNAL"&&!businessForm&&!sourceDispositionId&&!sourceLetter.length}/> {direction==="INTERNAL"?"Dapat dilihat lebih luas oleh user persuratan":"Public untuk user yang punya akses persuratan"}</label></div>}
         <div className="field full"><label>{direction==="INTERNAL"?"Isi / Ringkasan Nota Dinas":"Ringkasan / Isi Ringkas"}</label><textarea className="textarea" name="summary"/></div>
-        <div className="field full"><label>Catatan</label><textarea className="textarea" name="notes" placeholder={direction==="INTERNAL"?"Keterangan tambahan untuk Manager":"Catatan awal proses"}/></div>
+        <div className="field full"><label>Catatan</label><textarea className="textarea" name="notes" placeholder="Catatan awal proses"/></div>
         {direction==="OUTGOING"&&(sourceDispositionId
           ?<div className="field full notice">Draf ini ditautkan ke Disposisi asal.</div>
           :<div className="field full">
@@ -871,13 +935,13 @@ export default function LettersClient({direction,user}:Props){
       <div className="grid-2">
         <div>
           <div className="kpi-list">
-            <div className="kpi-row"><span>Status</span><StatusBadge status={detail.letter.sent_date&&detail.letter.status==="ISSUED"?"SENT":detail.letter.status}/></div>
+            <div className="kpi-row"><span>Status</span><StatusBadge status={detail.letter.sent_date&&detail.letter.status==="ISSUED"||directNotaSent(detail.v11?.kind,detail.letter.status)?"SENT":detail.letter.status}/></div>
             <div className="kpi-row"><span>Tujuan Saat Ini</span><b>{detail.letter.owner_name?`${detail.letter.owner_name}${detail.letter.owner_unit?` — ${detail.letter.owner_unit}`:""}`:currentTargetLabel(detail.letter)}</b></div>
             {detail.letter.routing_target_name&&<div className="kpi-row"><span>Tujuan Awal</span><b>{detail.letter.routing_target_name}{detail.letter.routing_target_unit?` — ${detail.letter.routing_target_unit}`:""}</b></div>}
-            <div className="kpi-row"><span>Jenis Dokumen</span><b>{docLabel(detail.letter)}</b></div>
+            <div className="kpi-row"><span>Jenis Dokumen</span><b>{docLabel({...detail.letter,v11_kind:detail.v11?.kind})}</b></div>
             {direction==="OUTGOING"&&<div className="kpi-row"><span>Nomor Dokumen</span><b className="mono">{detail.letter.letter_number||outgoingNumber(detail.letter)||"-"}</b></div>}
             {detail.letter.recipient&&<div className="kpi-row"><span>Ditujukan Kepada</span><b>{detail.letter.recipient}</b></div>}
-            {detail.sourceLetter&&<div className="kpi-row"><span>Dokumen Asal</span>
+            {detail.sourceLetter&&<div className="kpi-row"><span>{detail.notaRouting?.isReply?"Nota Dinas Asal":"Dokumen Asal"}</span>
               <a href={"/letters/"+({INCOMING:"incoming",INTERNAL:"internal",OUTGOING:"outgoing"} as Record<string,string>)[detail.sourceLetter.direction]+"?letter_id="+encodeURIComponent(detail.sourceLetter.id)}>
                 {detail.sourceLetter.number||detail.sourceLetter.subject}
               </a></div>}
@@ -889,6 +953,7 @@ export default function LettersClient({direction,user}:Props){
             {detail.letter.sent_date&&<div className="kpi-row"><span>Tanggal Kirim</span><b>{fmtDate(detail.letter.sent_date)}</b></div>}
             <div className="kpi-row"><span>Sifat</span><b>{detail.letter.confidentiality}</b></div>
             {direction!=="INTERNAL"&&<div className="kpi-row"><span>Backdate</span><b>{detail.letter.is_backdated?"Ya":"Tidak"}</b></div>}
+            {detail.notaRouting?.authorName&&<div className="kpi-row"><span>Pengirim Nota Dinas</span><b>{detail.notaRouting.authorName}</b></div>}
             <div className="kpi-row"><span>Dibuat oleh</span><b>{detail.letter.creator_name} · {formatWorkflowTime(detail.letter.created_at)}</b></div>
             <div className="kpi-row"><span>Terakhir diperbarui</span><b>{formatWorkflowTime(detail.letter.updated_at)}</b></div>
             {direction==="OUTGOING"&&detail.letter.legacy_sheet_name&&<div className="kpi-row"><span>Sumber Historis</span><b>{detail.letter.legacy_sheet_name} • baris {detail.letter.legacy_row_no}</b></div>}
@@ -899,9 +964,10 @@ export default function LettersClient({direction,user}:Props){
           {direction==="OUTGOING"&&detail.letter.status==="RETURNED_STAFF"&&<div className="error" style={{marginTop:13}}><b>Dikembalikan ke Staff.</b> Baca catatan reviewer pada riwayat, revisi draft, lalu ajukan kembali mulai dari Manager.</div>}
           <div style={{marginTop:13}} className="notice">{detail.letter.summary||"Belum ada ringkasan."}</div>
           {detail.business&&<BusinessDocumentSummary details={detail.business} documentType={detail.letter.document_type}/>}
-          <WorkflowSummary data={detail.v11} date={detail.letter.received_date} files={detail.attachments}/>
+          {direction!=="INTERNAL"&&<WorkflowSummary data={detail.v11} date={detail.letter.received_date} files={detail.attachments}/>}
           {detail.notaDocument&&<NotaDocumentPanel key={`nota-${detail.letter.id}`} id={detail.letter.id}
-            data={detail.notaDocument} refresh={()=>refreshDetail(detail.letter.id)}/>}
+            data={detail.notaDocument} assistants={routingUsers.filter(account=>account.role==="SECRETARIAT")}
+            refresh={()=>refreshDetail(detail.letter.id)}/>}
           {detail.v11?.payment_documents && <PaymentDocumentsPanel key={`payment-${detail.letter.id}`} id={detail.letter.id}
             data={detail.v11.payment_documents} attachments={detail.attachments} onSaved={()=>refreshDetail(detail.letter.id)}/>}
           {detail.sandboxSigning && (!detail.notaDocument || signingFiles.length>0) && <AttachmentSandbox key={`attachment-sandbox-${detail.letter.id}`}
@@ -928,8 +994,21 @@ export default function LettersClient({direction,user}:Props){
               <a className="btn btn-secondary" href={"/letters/outgoing?source_letter_id="+encodeURIComponent(detail.letter.id)}>Buat Draf Surat Keluar</a>}
             {direction==="INTERNAL"&&<NotaResponses key={`responses-${detail.letter.id}`} id={detail.letter.id}
               refreshHistory={()=>refreshDetail(detail.letter.id)}/>}
+            {(detail.notaRouting?.replyRecipient||detail.notaRouting?.replyAuthors?.length>0)&&
+              <button type="button" className="btn btn-secondary" onClick={openNotaReply}>Buat Balasan Nota Dinas</button>}
             {actionButtons()}
           </div>
+          {detail.notaRouting?.replies?.length>0&&<div className="card workflow-document-panel">
+            <div className="card-head"><h3>Balasan Nota Dinas</h3></div>
+            <div className="card-body kpi-list">
+              {detail.notaRouting.replies.map((reply:{id:string;subject:string;status:string;sender:string})=>
+                <div className="kpi-row" key={reply.id}>
+                  <div><a href={"/letters/internal?letter_id="+encodeURIComponent(reply.id)}>{reply.subject}</a><br/>
+                    <span>{reply.sender}</span></div>
+                  <StatusBadge status={reply.status==="COMPLETED"?"SENT":reply.status}/>
+                </div>)}
+            </div>
+          </div>}
 
           <div className="card" style={{boxShadow:"none",marginTop:14}}>
             <div className="card-head"><div><h3>Dokumen & Lampiran Umum</h3><p>Dokumen utama disimpan apa adanya. Lampiran tambahan dikompresi hanya bila hasilnya lebih kecil. Semua file di bagian ini dapat diunduh kembali sesuai hak akses.</p></div></div>
@@ -947,11 +1026,12 @@ export default function LettersClient({direction,user}:Props){
                     if(file) await upload("ORIGINAL",file);
                     input.value="";
                   }}/></label>}
-                <label className="btn btn-secondary">+ Lampiran Tambahan<input hidden type="file" aria-label="Unggah lampiran tambahan" multiple onChange={async e=>{
+                {(!detail.notaDocument||detail.notaDocument.editable||!detail.notaDocument.uploadable)&&
+                  <label className="btn btn-secondary">+ Lampiran Tambahan<input hidden type="file" aria-label="Unggah lampiran tambahan" multiple onChange={async e=>{
                   const input=e.currentTarget;
                   for(const file of Array.from(input.files||[]).slice(0,5)) await upload("ADDITIONAL",file);
                   input.value="";
-                }}/></label>
+                }}/></label>}
               </div>
             </div>
           </div>
@@ -975,7 +1055,7 @@ export default function LettersClient({direction,user}:Props){
       <form className="form-grid workflow-form" onSubmit={editLetter}>
         {error&&<div className="field full error" role="alert">{error}</div>}
         <div className="field full"><label>Perihal</label><input className="input" name="subject" defaultValue={detail.letter.subject} required/></div>
-        {direction==="INCOMING"?<div className="field"><label>Asal / Pengirim</label><input className="input" name="sender" defaultValue={detail.letter.sender||""}/></div>:<div className="field"><label>Tujuan</label><input className="input" name="recipient" defaultValue={detail.letter.recipient||""}/></div>}
+        {direction==="INCOMING"?<div className="field"><label>Asal / Pengirim</label><input className="input" name="sender" defaultValue={detail.letter.sender||""}/></div>:<div className="field"><label>Tujuan</label><input className="input" name="recipient" readOnly={detail.notaRouting?.direct||Boolean(detail.v11?.nota_author_user_id)} defaultValue={detail.letter.recipient||""}/></div>}
         {direction==="INCOMING"&&<div className="field">
           <label>Ditujukan Kepada</label><select className="select" name="recipient" defaultValue={detail.letter.recipient||recipients.defaultRecipient} required>
             {[...new Set([recipients.defaultRecipient,...recipients.recipients,detail.letter.recipient].filter(Boolean))].map((name:any)=><option key={name}>{name}</option>)}
@@ -995,7 +1075,7 @@ export default function LettersClient({direction,user}:Props){
           <ReceiptFields initial={detail.v11}/>
         </>}
         {detail.v11?.kind==="PERSEKOT"&&<PersekotFields proof={detail.v11.spb_attachment_id}/>}
-        <div className="field"><label>Sifat</label><select className="select" name="confidentiality" defaultValue={detail.letter.confidentiality}><option>BIASA</option><option>PENTING</option><option>RAHASIA</option></select></div>
+        <div className="field"><label>Sifat</label><select className="select" name="confidentiality" defaultValue={detail.letter.confidentiality} disabled={detail.notaRouting?.isReply}><option>BIASA</option><option>PENTING</option><option>RAHASIA</option></select></div>
         <div className="field full"><label>Ringkasan</label><textarea className="textarea" name="summary" defaultValue={detail.letter.summary||""}/></div>
         <div className="field full"><label>Catatan</label><textarea className="textarea" name="notes" defaultValue={detail.letter.notes||""}/></div>
         {!detail.v11&&<div className="field full"><label style={{display:"flex",alignItems:"center",gap:8,fontWeight:500}}><input type="checkbox" name="is_public" defaultChecked={Boolean(detail.letter.is_public)}/> Public</label><span className="hint">Dokumen RAHASIA tidak dapat dibuat public. Root Admin tetap dapat melihat seluruh data.</span></div>}
@@ -1025,6 +1105,9 @@ export default function LettersClient({direction,user}:Props){
           <ReceiptFields initial={{...detail.v11,date:String(detail.letter.received_date||"").slice(0,10)}} register upload/>
         </>}
         {pendingAction.action==="APPROVE_FINAL"&&<p className="field full notice">Surat berstatus Disetujui di level Anda. Pilih Teruskan ke Dirops atau Dirut di detail jika perlu persetujuan dari atas. Tindak lanjut dan pembayaran mengikuti prosesnya masing-masing.</p>}
+        {["SEND_NOTA_DIRECT","SEND_NOTA_REPLY"].includes(pendingAction.action)&&<p className="field full notice">
+          PDF bertanda tangan akan tersedia bagi {detail.letter.recipient}.
+        </p>}
         {pendingAction.action==="UNDO_APPROVAL"&&<p className="field full notice">Surat kembali ke reviewer sebelum persetujuan ini. Koreksi tersedia selama tahap berikutnya belum memproses surat atau tanda tangan.</p>}
         {pendingAction.action==="MARK_SENT"&&detail.v11&&<>
           <label className="field"><span>Kanal Pengiriman</span><select className="select" name="dispatch_channel" required>

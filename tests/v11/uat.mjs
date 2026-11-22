@@ -1736,10 +1736,146 @@ try {
     }
     return "Chromium menampilkan badge tanggapan, PDF Nota Dinas, form dan unduhan BPK/SPB di ponsel, serta tautan PDF disposisi di desktop.";
   });
+  await test(67, async () => {
+    const fields = { direction: "INTERNAL", document_type: "NOTA_DINAS", letter_date: d,
+      subject: subject("Draf untuk Manager"), summary: "SIMULASI draf atas nama Manager Operasional.",
+      routing_target_user_id: roles.dirops.id, nota_author_user_id: roles.ops.id,
+      nota_document_source: "GENERATED", confidentiality: "RAHASIA" };
+    await post("staffkeu", "/api/letters", fields, 400);
+    await post("staff", "/api/letters", { ...fields, nota_author_user_id: roles.finance.id }, 400);
+    const { id } = await post("staff", "/api/letters", fields, 201);
+    state.delegatedNota = id;
+    const url = "/api/letters/" + id;
+    const endpoint = url + "/nota-document";
+    const draft = await detail("ops", id);
+    assert.equal(draft.letter.created_by, roles.staff.id);
+    assert.equal(draft.letter.current_owner_user_id, roles.ops.id);
+    assert.equal(draft.notaRouting.authorId, roles.ops.id);
+    assert.match(draft.letter.sender, /Manager Operasional/);
+    assert.equal(draft.notaDocument.requiresProof, true);
+    const { id: source } = draft.notaDocument.source;
+    await call("secretariat", url, { status: 403 });
+    await post("staff", endpoint, { action: "ASSIGN_ASSISTANT", assistant_id: roles.secretariat.id }, 403);
+    await post("ops", endpoint, { action: "ASSIGN_ASSISTANT", assistant_id: roles.secretariat.id });
+    assert((await call("secretariat", "/api/notifications")).items.some(item => item.href === "/letters/internal?letter_id=" + id));
+    assert.equal((await detail("secretariat", id)).notaDocument.uploadable, true);
+    await call("secretariat", url, { method: "PATCH", body: { subject: "Ubah metadata unauthorized" }, status: 403 });
+    await post("secretariat", endpoint, { action: "GENERATE" }, 403);
+    await post("ops", endpoint, { action: "DECLARE", source_id: source, reason: "SIMULASI tanpa berkas" }, 400);
+    await letterAction("ops", id, "SUBMIT", {}, [], 400);
+    const signed = fixturePdf(["SIMULASI - SALINAN PDF UNTUK UJI UNGGAH"]);
+    const signature = id => file(multipart({ action: "UPLOAD_SIGNATURE", source_id: id, signature_method: "BASAH" }, []),
+      "signed_file", "SIMULASI-Final-Manager.pdf", signed);
+    await post("staffkeu", endpoint, signature(source), 403);
+    await post("secretariat", endpoint, signature(source));
+    const first = await detail("ops", id);
+    assert.equal(first.notaDocument.method, "BASAH");
+    assert.equal(first.notaDocument.source.id, source);
+    assert(first.actions.some(action => action.action === "UPLOAD_NOTA_SIGNATURE" && action.actor_role === "SECRETARIAT"));
+    assert.deepEqual((await call("ops", "/api/attachments/" + first.notaDocument.signed.id, { raw: true })).bytes, signed);
+    await call("staff", url, { method: "PATCH", body: { summary: "SIMULASI revisi isi, bukti lama tidak berlaku." } });
+    assert.equal((await detail("ops", id)).notaDocument.signed, null);
+    await post("secretariat", endpoint, signature(source), 400);
+    await post("ops", endpoint, { action: "GENERATE" });
+    const current = (await detail("ops", id)).notaDocument.source.id;
+    await post("secretariat", endpoint, signature(current));
+    await letterAction("staff", id, "SUBMIT", {}, [], 400);
+    assert.equal((await letterAction("ops", id, "SUBMIT")).status, "DIRECTOR_OPS_REVIEW");
+    await call("secretariat", url, { status: 403 });
+    assert.equal((await detail("dirops", id)).notaDocument.method, "BASAH");
+    assert.equal((await detail("ops", id)).notaRouting.authorId, roles.ops.id);
+    return "Staff menyiapkan draf, Manager mengajukan, Sekretariat yang ditunjuk mengunggah PDF. Revisi membatalkan bukti lama dan akses bantuan berakhir ketika nota diajukan.";
+  });
+  await test(68, async () => {
+    const browser = await chromium.launch({ executablePath: env.SIAP_V11_CHROMIUM || undefined,
+      headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    try {
+      const context = await browser.newContext();
+      const as = role => context.addCookies([{ name: "siap_session",
+        value: sessions.get(role).slice("siap_session=".length), url: base.origin }]);
+      const page = await context.newPage();
+      const dialog = page.getByRole("dialog");
+      await as("staff");
+      await page.goto(new URL("/letters/internal", base).href);
+      await page.getByRole("button", { name: "+ Buat Nota Dinas", exact: true }).click();
+      await dialog.getByLabel("Siapkan draf untuk").selectOption(roles.dirut.id);
+      await dialog.getByLabel("Penerima Nota Dinas").selectOption(roles.ops.id);
+      await dialog.locator('input[name="subject"]').fill(subject("Nota Direksi langsung"));
+      await dialog.locator('textarea[name="summary"]').fill("SIMULASI arahan kerja dari Dirut.");
+      const savedResponse = page.waitForResponse(response => response.url().endsWith("/api/letters") && response.request().method() === "POST");
+      await dialog.getByRole("button", { name: "Simpan Draft", exact: true }).click();
+      const saved = await (await savedResponse).json();
+      assert(saved.ok, saved.error);
+      const id = saved.data.id;
+      await dialog.getByText("Pengirim Nota Dinas", { exact: true }).waitFor();
+      assert.equal(await dialog.getByRole("button", { name: "Kirim Nota Dinas", exact: true }).count(), 0);
+      await call("ops", "/api/letters/" + id, { status: 403 });
+      await letterAction("staff", id, "SEND_NOTA_DIRECT", {}, [], 400);
+      await letterAction("dirut", id, "COMPLETE", {}, [], 400);
+      await as("dirut");
+      await page.goto(new URL("/letters/internal?letter_id=" + id, base).href);
+      await dialog.getByRole("button", { name: "Unggah PDF Bertanda Tangan", exact: true }).click();
+      await dialog.getByLabel("Metode tanda tangan").selectOption("DIGITAL");
+      await dialog.getByLabel("PDF yang sudah bertanda tangan").setInputFiles({
+        name: "SIMULASI-Nota-Dirut.pdf", mimeType: "application/pdf", buffer: fixturePdf(["SIMULASI PDF Dirut"]),
+      });
+      await dialog.getByRole("button", { name: "Simpan PDF Bertanda Tangan", exact: true }).click();
+      await dialog.getByText("PDF bertanda tangan digital diunggah", { exact: true }).waitFor();
+      await page.screenshot({ path: path.join(out, "08-nota-direksi-pdf.png") });
+      await dialog.getByRole("button", { name: "Kirim Nota Dinas", exact: true }).click();
+      const confirmation = page.getByRole("dialog", { name: "Kirim Nota Dinas" });
+      await confirmation.getByRole("button", { name: "Kirim Nota Dinas", exact: true }).click();
+      await confirmation.waitFor({ state: "hidden" });
+      await page.goto(new URL("/letters/internal?letter_id=" + id, base).href);
+      await dialog.getByText("Terkirim", { exact: true }).waitFor();
+      const received = await detail("ops", id);
+      assert.equal(received.notaRouting.authorId, roles.dirut.id);
+      assert.equal(received.letter.current_owner_user_id, roles.ops.id);
+      assert.equal(received.letter.status, "COMPLETED");
+      assert((await call("ops", "/api/notifications")).items.some(item => item.href === "/letters/internal?letter_id=" + id));
+    } finally {
+      await browser.close();
+    }
+    return "Staf menyiapkan draf untuk Dirut melalui Chromium. Dirut mengunggah PDF dan mengirim langsung ke Manager; akun Staff dan aksi selesai generik tidak dapat mengirimkannya.";
+  });
+  await test(69, async () => {
+    const originalId = state.delegatedNota;
+    const original = await detail("dirops", originalId);
+    assert.equal(original.notaRouting.replyRecipient.id, roles.ops.id);
+    assert.deepEqual((await detail("staff", originalId)).notaRouting.replyAuthors.map(account => account.id), [roles.dirops.id]);
+    const draft = { direction: "INTERNAL", document_type: "NOTA_DINAS", letter_date: d, nota_reply_to_id: originalId,
+      subject: subject("Balasan Direktur"), summary: "SIMULASI arahan balasan kepada Manager.", nota_document_source: "GENERATED",
+      confidentiality: "BIASA", routing_target_user_id: roles.finance.id };
+    await post("dirut", "/api/letters", draft, 400);
+    await post("staffkeu", "/api/letters", { ...draft, nota_author_user_id: roles.dirops.id }, 400);
+    const prepared = await post("staff", "/api/letters", { ...draft, nota_author_user_id: roles.dirops.id }, 201);
+    assert.equal((await detail("staff", prepared.id)).notaRouting.authorId, roles.dirops.id);
+    assert.equal((await detail("ops", originalId)).notaRouting.replies.length, 0);
+    await letterAction("staff", prepared.id, "SEND_NOTA_REPLY", {}, [], 400);
+    const { id } = await post("dirops", "/api/letters", draft, 201);
+    assert.equal(id === originalId, false);
+    const detailReply = await detail("dirops", id);
+    assert.equal(detailReply.sourceLetter.id, originalId);
+    assert.equal(detailReply.letter.routing_target_user_id, roles.ops.id);
+    assert.equal(detailReply.letter.confidentiality, "RAHASIA");
+    await letterAction("dirops", id, "SEND_NOTA_REPLY", {}, [], 400);
+    const endpoint = "/api/letters/" + id + "/nota-document";
+    const readyFile = file(multipart({ action: "UPLOAD_SIGNATURE", source_id: detailReply.notaDocument.source.id,
+      signature_method: "DIGITAL" }, []), "signed_file");
+    await post("dirops", endpoint, readyFile);
+    await letterAction("dirops", id, "SUBMIT", {}, [], 400);
+    assert.equal((await letterAction("dirops", id, "SEND_NOTA_REPLY")).status, "COMPLETED");
+    assert.equal((await detail("ops", id)).sourceLetter.id, originalId);
+    assert.deepEqual((await detail("ops", originalId)).notaRouting.replies.map(reply => reply.id), [id]);
+    assert.equal((await detail("ops", originalId)).letter.status, "DIRECTOR_OPS_REVIEW");
+    assert((await call("ops", "/api/notifications")).items.some(item => item.href === "/letters/internal?letter_id=" + id && /Balasan/.test(item.title)));
+    await call("finance", "/api/letters/" + id, { status: 403 });
+    return "Balasan resmi dari Dirops terhubung ke nota asli, mewarisi sifat rahasia dan dikirim kepada pengirim resmi. Staff pada nota asal dapat menyiapkan draf untuk Dirops.";
+  });
 } finally {
   await sql.end();
   await writeFile(path.join(out, "uat.json"), JSON.stringify({ runId, db: profile.version, cases: result }, null, 2));
 }
 const totals = Object.fromEntries(["PASS","FAIL","SKIP"].map(status => [status,result.filter(row=>row.status===status).length]));
 console.log(JSON.stringify(totals));
-if (totals.FAIL || result.length !== 66) process.exitCode=1;
+if (totals.FAIL || result.length !== 69) process.exitCode=1;

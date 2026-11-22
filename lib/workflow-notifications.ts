@@ -12,16 +12,29 @@ export async function notifyWorkflow(conn: Connection, event: {
     const [people] = await conn.query<RowDataPacket[]>(
       `SELECT created_by AS user_id FROM siap_letters WHERE id=? AND direction='INTERNAL' AND deleted_at IS NULL
        UNION SELECT current_owner_user_id FROM siap_letters WHERE id=? AND direction='INTERNAL' AND deleted_at IS NULL
+       UNION SELECT nota_author_user_id FROM siap_v11_letters WHERE letter_id=?
        UNION SELECT actor_user_id FROM siap_letter_actions
        WHERE letter_id=? AND action IN ('RESPONSE','APPROVE','APPROVE_FINAL','RETURN','RETURN_PREVIOUS','REJECT')`,
-      [event.entityId, event.entityId, event.entityId],
+      [event.entityId, event.entityId, event.entityId, event.entityId],
     );
     for (const person of people) if (person.user_id) recipients.add(String(person.user_id));
     title = "Tanggapan baru pada Nota Dinas";
   } else if (event.entityType === "LETTER" &&
-      /^LETTER_(CREATE|REGISTER_INCOMING|SUBMIT|APPROVE|APPROVE_FINAL|RETURN|RETURN_PREVIOUS|REJECT|ISSUE|MARK_SENT|UNDO_APPROVAL|COMPLETE|PREPARE_ISSUE)$/.test(event.action)) {
+      ["LETTER_ASSIGN_NOTA_SIGNATURE", "LETTER_UPLOAD_NOTA_SIGNATURE"].includes(event.action)) {
+    const [[nota]] = await conn.query<RowDataPacket[]>(
+      `SELECT COALESCE(v.nota_author_user_id,l.created_by) author_id,v.nota_signature_assistant_user_id assistant_id
+       FROM siap_letters l JOIN siap_v11_letters v ON v.letter_id=l.id WHERE l.id=? AND l.deleted_at IS NULL`,
+      [event.entityId],
+    );
+    const assignment = event.action === "LETTER_ASSIGN_NOTA_SIGNATURE";
+    const recipient = assignment ? nota?.assistant_id : nota?.author_id;
+    if (recipient) recipients.add(String(recipient));
+    title = assignment ? "Diminta mengunggah PDF bertanda tangan" : "PDF Nota Dinas bertanda tangan sudah tersedia";
+  } else if (event.entityType === "LETTER" &&
+      /^LETTER_(CREATE|REGISTER_INCOMING|SUBMIT|SEND_NOTA_REPLY|SEND_NOTA_DIRECT|APPROVE|APPROVE_FINAL|RETURN|RETURN_PREVIOUS|REJECT|ISSUE|MARK_SENT|UNDO_APPROVAL|COMPLETE|PREPARE_ISSUE)$/.test(event.action)) {
     const [rows] = await conn.query<RowDataPacket[]>(
-      "SELECT l.*,v.kind AS workflow_kind FROM siap_letters l JOIN siap_v11_letters v ON v.letter_id=l.id WHERE l.id=? AND l.deleted_at IS NULL", [event.entityId],
+      `SELECT l.*,v.kind AS workflow_kind,v.nota_author_user_id FROM siap_letters l
+       JOIN siap_v11_letters v ON v.letter_id=l.id WHERE l.id=? AND l.deleted_at IS NULL`, [event.entityId],
     );
     const letter = rows[0];
     if (!letter) return;
@@ -36,11 +49,16 @@ export async function notifyWorkflow(conn: Connection, event: {
         letter.status, letter.created_by, letter.status, letter.document_type, letter.workflow_kind],
     );
     for (const user of users) recipients.add(String(user.id));
-    if (event.action === "LETTER_UNDO_APPROVAL") recipients.add(String(letter.created_by));
+    if (event.action === "LETTER_UNDO_APPROVAL" || ["APPROVED","REJECTED","COMPLETED"].includes(letter.status)) {
+      if (event.action === "LETTER_UNDO_APPROVAL") recipients.add(String(letter.created_by));
+      if (letter.nota_author_user_id) recipients.add(String(letter.nota_author_user_id));
+    }
     title = ({
-      LETTER_CREATE: "Surat baru perlu diregistrasi",
+      LETTER_CREATE: letter.nota_author_user_id ? "Draf Nota Dinas siap diperiksa" : "Surat baru perlu diregistrasi",
       LETTER_REGISTER_INCOMING: "Surat masuk menunggu pemeriksaan",
       LETTER_SUBMIT: "Draf surat menunggu pemeriksaan",
+      LETTER_SEND_NOTA_REPLY: "Balasan Nota Dinas dari Direksi",
+      LETTER_SEND_NOTA_DIRECT: "Nota Dinas dari Direksi",
       LETTER_RETURN: "Surat dikembalikan untuk perbaikan",
       LETTER_RETURN_PREVIOUS: "Surat dikembalikan untuk perbaikan",
       LETTER_REJECT: "Surat ditolak",

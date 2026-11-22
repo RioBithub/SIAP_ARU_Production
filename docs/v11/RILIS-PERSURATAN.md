@@ -18,6 +18,7 @@ Jalankan dari sesi operator VPS yang mengelola PM2 `siap-aru`. Langkah ini untuk
     database/migrations/2026-11-18-letter-purge.sql
     database/migrations/2026-11-19-v11-invoice-payment-mode.sql
     database/migrations/2026-11-19-v11-bpk-nota-documents.sql
+    database/migrations/2026-11-22-v11-nota-collaboration.sql
   )
   for migration in "${migrations[@]}"; do
     git cat-file -e "$target:$migration"
