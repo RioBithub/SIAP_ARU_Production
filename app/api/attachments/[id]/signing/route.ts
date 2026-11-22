@@ -16,7 +16,7 @@ import { latestMekariSendFailure, type MekariSendFailureNotice } from "@/lib/mek
 import { canEditNotaDocument, notaDocument } from "@/lib/nota-document";
 import type { SessionUser } from "@/lib/types";
 import { readStoredFile } from "@/lib/upload";
-import { saveProof } from "@/lib/v11-data";
+import { saveProof, v11Letter } from "@/lib/v11-data";
 
 export const runtime = "nodejs";
 
@@ -49,7 +49,7 @@ async function sourceFor(user: SessionUser, id: string, conn: Pick<PoolConnectio
   }
   if (source.direction === "INTERNAL" && source.workflow_id && source.attachment_kind === "ORIGINAL") {
     const letter = await getAccessibleLetter(user, source.letter_id, conn);
-    if (!letter || !canEditNotaDocument(user, letter)) return null;
+    if (!letter || !canEditNotaDocument(user, letter, await v11Letter(source.letter_id, conn))) return null;
     const nota = await notaDocument(conn, source.letter_id);
     return nota?.source?.id === id ? source : null;
   }

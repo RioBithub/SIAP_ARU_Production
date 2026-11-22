@@ -94,3 +94,13 @@ UAT-019 memblokir instruksi pembayaran Invoice Masuk dengan SPK tertaut ketika d
 Sepuluh tes adapter Mekari lulus. Uji tambahan memakai gateway simulasi untuk prediksi posisi, dua penandatangan berurutan, status tertunda, dan unduhan PDF final oleh reviewer setelah Nota Dinas diajukan. Akses hasil oleh akun lain ditolak. UAT-043 dan UAT-045 dilewati pada run lokal karena memerlukan koneksi vendor. Hasil smoke VPS sebelumnya tercatat di bagian Pemeriksaan Sandbox eksternal dari VPS.
 
 Keempat kasus Pak Nor juga lulus pada skema terpisah. PT XYZ memperlihatkan hasil yang naik dari Staff ke Manager, Dirops, lalu Dirut, dengan PDF tersedia setelah selesai.
+
+## Draf bersama dan balasan Nota Dinas
+
+22 November 2026 · Run A78B931 menghasilkan **67 PASS, 0 FAIL, 2 SKIP dari 69 skenario** pada MariaDB lokal. Typecheck, build, sepuluh tes adapter Mekari, migrasi ulang dan pemulihan 43 tabel lulus. Dua uji Mekari eksternal dilewati.
+
+| Kasus | Hasil |
+| --- | --- |
+| UAT-067 | Staff menyiapkan draf untuk Manager. Manager menunjuk Sekretariat, berkas bertanda tangan dapat diunduh dengan isi yang sama, dan revisi membatalkan keterkaitan tanda tangan lama. |
+| UAT-068 | Chromium menguji Staff memilih Dirut sebagai pengirim. Dirut mengunggah PDF dan mengirim nota ke Manager. Staff penyusun tidak dapat memakai aksi kirim. |
+| UAT-069 | Dirops mengirim balasan yang tertaut ke nota asal dan mewarisi sifat RAHASIA. Penerima balasan adalah pengirim resmi nota asal. |

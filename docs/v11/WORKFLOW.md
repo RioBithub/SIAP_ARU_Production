@@ -107,3 +107,10 @@ Terapkan `database/migrations/2026-11-18-v11-payment-documents.sql` dan `databas
 Semua akun internal dapat membuat BPK mandiri lewat **Keuangan → Bukti Pengeluaran (BPK)**. Pada invoice V11, Staff atau PIC yang berwenang dapat membuka **BPK untuk Invoice**, memeriksa data awal, dan mengisi DPP, PPN, potongan PPh, serta rincian penerima. Saat diajukan, PDF ditautkan ke **BPK Pengajuan** pada checklist yang sama.
 
 Finance atau Root Admin mencatat nomor bukti Accounting. Untuk BPK mandiri, Finance mencatat tanggal pembayaran, bank atau kas, dan referensi. Untuk invoice, bagian pembayaran membaca transaksi yang sudah disetujui di alur Finance. PDF SPB tersedia untuk persekot dan dapat diproses sesuai checklist.
+
+## Menyiapkan dan membalas Nota Dinas
+
+1. Staff membuka **Nota Dinas → Buat Nota Dinas → Siapkan draf untuk**. Pilih Manager sesuai unit, Dirops, atau Dirut. Isi perihal, isi nota, penerima atau tujuan review, serta sumber PDF. **Simpan Draft** mengirim notifikasi kepada pengirim yang dipilih. Detail menunjukkan pengirim dan akun yang menyusun draf.
+2. Setelah naskah ditandatangani, buka **PDF & Tanda Tangan Nota Dinas → Unggah PDF Bertanda Tangan**. Pilih **Digital** untuk PDF yang sudah ditandatangani digital atau **Basah** untuk hasil pindai PDF. Pengirim juga dapat memilih **Minta bantuan Sekretariat → Simpan Penugasan**. Akun Sekretariat itu bisa membuka draf dan mengunggah berkas final melalui notifikasi.
+3. Untuk draf atas nama Manager, Manager memeriksa dan memilih **Ajukan Nota Dinas** sesuai tujuan review. Untuk arahan Nota Dinas biasa atas nama Direktur, Direktur memilih **Kirim Nota Dinas**. Pengajuan pembayaran memakai jalur persetujuan pembayaran.
+4. Dirops atau Dirut yang menangani nota bisa membuka detail dan memilih **Buat Balasan Nota Dinas**. Staff yang punya akses atas nota asal juga bisa menyiapkan draf untuk Direktur yang menangani nota itu. Setelah PDF bertanda tangan tersedia, Direktur memilih **Kirim Balasan Nota Dinas**. Sistem menautkan kedua dokumen dan memberi notifikasi kepada pengirim nota asal.

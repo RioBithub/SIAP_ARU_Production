@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { NextResponse } from "next/server";
-import { notaDocument } from "@/lib/nota-document";
+import { isDirectNota, notaAuthorId, requireNotaSignature } from "@/lib/nota-document";
+import { activeNotaAccount } from "@/lib/nota-routing";
 import { canRespondToNota } from "@/lib/nota-responses";
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { getCurrentUser } from "@/lib/auth";
@@ -9,7 +10,8 @@ import { auditLog } from "@/lib/audit";
 import { cancelLedgerForLetter } from "@/lib/numbering";
 import { dateOnly, required, str } from "@/lib/http";
 import { activeReviewer } from "@/lib/correspondence-data";
-import { REVIEW_STATUS, canHandleSecretariat, reviewRole } from "@/lib/correspondence-workflow";
+import { canHandleSecretariat, canReceiveDirectorNota, isNotaDirector, NOTA_DIRECTORS,
+  REVIEW_STATUS, reviewRole } from "@/lib/correspondence-workflow";
 import { letterAccess } from "@/lib/letter-access";
 import { reversibleApproval, type ApprovalSnapshot } from "@/lib/letter-approval";
 import { saveUpload } from "@/lib/upload";
@@ -124,6 +126,9 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
       const workflow = await v11Letter(params.id, conn);
       const status=String(letter.status);
       const direction=String(letter.direction);
+      const notaReply = direction === "INTERNAL" && workflow?.kind === "NOTA_REPLY";
+      const directNota = direction === "INTERNAL" && isDirectNota(workflow);
+      const authorId = direction === "INTERNAL" ? notaAuthorId(letter, workflow) : String(letter.created_by);
       const documentType=String(letter.document_type);
       const business=isBusinessDocument(documentType);
       const v11Invoice = Boolean(workflow && documentType === INVOICE_INCOMING);
@@ -187,7 +192,10 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         if(!["DRAFT","RETURNED_STAFF"].includes(status))
           throw new Error("Dokumen tidak berada pada tahap yang dapat diajukan.");
 
-        if(user.role!=="ROOT_ADMIN" && String(letter.created_by)!==String(user.id))
+        if (directNota) throw new Error("Gunakan tombol Kirim pada detail Nota Dinas Direksi.");
+        if (workflow?.nota_author_user_id && user.id !== authorId)
+          throw new Error("Akun yang tercantum sebagai pengirim harus mengajukan Nota Dinas ini.");
+        if(user.role!=="ROOT_ADMIN" && authorId!==String(user.id))
           throw new Error("Hanya penyusun dokumen yang dapat mengajukan ulang.");
 
         let target: { id: string; role: keyof typeof REVIEW_STATUS } | null;
@@ -196,19 +204,12 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
             throw new Error("Unggah SPB PDF pada pengajuan persekot sebelum diajukan.");
           }
           if (direction === "INTERNAL") {
-            const document = await notaDocument(conn, params.id);
-            if (!document?.source) throw new Error("Buat atau unggah PDF Nota Dinas sebelum mengajukan.");
-            if (!document.signed && !document.manualReason) {
-              throw new Error("Tandatangani PDF dengan Mekari Sandbox atau catat tanda tangan manual sebelum mengajukan.");
-            }
-          }
-          if (direction === "INTERNAL" && letter.current_role === "MANAGER" && status === "DRAFT"
-              && user.role !== "ROOT_ADMIN" && user.role === "MANAGER") {
-            target = await activeReviewer(conn, letter.routing_target_user_id, ["DIRECTOR_OPS", "PRESIDENT_DIRECTOR"]);
-          } else if (direction === "INTERNAL") {
-            const [authors] = await conn.query<RowDataPacket[]>("SELECT role FROM siap_users WHERE id=?", [letter.created_by]);
-            target = authors[0]?.role === "MANAGER"
-              ? await activeReviewer(conn, letter.routing_target_user_id, ["DIRECTOR_OPS", "PRESIDENT_DIRECTOR"])
+            const author = await activeNotaAccount(conn, authorId);
+            if (!author || (workflow.nota_author_user_id && author.role !== "MANAGER"))
+              throw new Error("Akun pengirim Nota Dinas tidak aktif atau perannya berubah.");
+            await requireNotaSignature(conn, params.id, workflow);
+            target = author.role === "MANAGER"
+              ? await activeReviewer(conn, letter.routing_target_user_id, [...NOTA_DIRECTORS])
               : await officialManager(conn, letter.routing_target_user_id);
           } else {
             target = await officialManager(conn, letter.routing_target_user_id, workflow.requesting_unit);
@@ -228,6 +229,21 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         next=REVIEW_STATUS[target.role];
         nextRole=target.role;
         nextOwner=target.id;
+
+      } else if (action === "SEND_NOTA_REPLY" || action === "SEND_NOTA_DIRECT") {
+        if (!directNota || (action === "SEND_NOTA_REPLY") !== notaReply ||
+            status !== "DRAFT" || user.id !== authorId || !isNotaDirector(user.role)) {
+          throw new Error("Draf hanya dapat dikirim oleh Direktur yang tercantum sebagai pengirim.");
+        }
+        const recipient = await activeNotaAccount(conn, letter.routing_target_user_id);
+        if (!recipient || (!notaReply && !canReceiveDirectorNota(user.role, recipient.role))) {
+          throw new Error("Akun penerima sudah tidak aktif atau perannya berubah.");
+        }
+        await requireNotaSignature(conn, params.id, workflow!);
+        next = "COMPLETED";
+        nextRole = null;
+        nextOwner = recipient.id;
+        routingNote = "Dikirim ke " + recipient.name;
 
       } else if (action === "UNDO_APPROVAL") {
         if (!comment) throw new Error("Isi alasan pembatalan persetujuan.");
@@ -310,8 +326,8 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
           nextOwner = null;
          } else if ((outgoing && action === "RETURN") || status === "MANAGER_REVIEW" || (workflow && direction === "INTERNAL")) {
           next = "RETURNED_STAFF";
-          nextRole = "STAFF";
-          nextOwner = String(letter.created_by);
+          nextRole = workflow?.nota_author_user_id ? "MANAGER" : "STAFF";
+          nextOwner = authorId;
         } else if (status === "DIRECTOR_OPS_REVIEW") {
           const manager = await activeReviewer(conn, String(letter.routing_target_user_id || ""), ["MANAGER"]);
           next = "MANAGER_REVIEW";
@@ -439,6 +455,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         nextOwner = null;
 
       } else if(action==="COMPLETE") {
+        if (directNota) throw new Error("Nota Dinas Direksi selesai saat dikirim oleh pengirim.");
         if (v11Invoice) {
           const manager = await officialManager(conn, user.id);
           if (manager.scope !== "KSU" || status !== "APPROVED") throw new Error("Invoice diselesaikan oleh Manager Keuangan setelah disetujui.");
@@ -460,10 +477,11 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         nextOwner=null;
 
       } else if(action==="CANCEL") {
-        if(user.role!=="ROOT_ADMIN" && String(letter.created_by)!==String(user.id))
+        if(user.role!=="ROOT_ADMIN" && authorId!==String(user.id) &&
+          !(workflow?.nota_author_user_id && user.id===letter.created_by && ["DRAFT","RETURNED_STAFF"].includes(status)))
           throw new Error("Tidak berhak membatalkan dokumen.");
 
-        if (status === "REJECTED" || ((business || secretariat) && ["ISSUED","COMPLETED","CANCELLED"].includes(status))) {
+        if (status === "REJECTED" || ((business || secretariat || directNota) && ["ISSUED","COMPLETED","CANCELLED"].includes(status))) {
           throw new Error("Dokumen tidak dapat dibatalkan pada tahap ini.");
         }
         if(!comment)

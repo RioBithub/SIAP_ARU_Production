@@ -6,7 +6,7 @@ import { saveUpload } from "@/lib/upload";
 import { auditLog } from "@/lib/audit";
 import { INVOICE_INCOMING } from "@/lib/business-documents";
 import { saveProof, v11Letter } from "@/lib/v11-data";
-import { saveNotaSource } from "@/lib/nota-document";
+import { canEditNotaDocument, saveNotaSource } from "@/lib/nota-document";
 import { canHandleSecretariat } from "@/lib/correspondence-workflow";
 import { discardUncommittedFiles, insertLetterAttachment, type StoredLetterFile } from "@/lib/letter-uploads";
 
@@ -41,16 +41,19 @@ export async function POST(request:Request,{params}:{params:{id:string}}){
           throw new Error("Dokumen utama dapat dilengkapi saat penyusunan draf.");
         }
         const intake = letter.uses_secretariat && letter.status === "SECRETARIAT_INTAKE" && canHandleSecretariat(user.role);
-        if (user.role !== "ROOT_ADMIN" && letter.created_by !== user.id && !intake) {
+        if (user.role !== "ROOT_ADMIN" && letter.created_by !== user.id && !intake &&
+          !(workflow && canEditNotaDocument(user, letter, workflow))) {
           throw new Error("Akun ini tidak berwenang mengunggah dokumen asli.");
         }
       } else if (user.role !== "ROOT_ADMIN") {
         let allowed = Boolean(letter.is_public) || letter.created_by === user.id ||
+          (letter.direction === "INTERNAL" && workflow?.nota_author_user_id === user.id) ||
           letter.current_owner_user_id === user.id || (!letter.current_owner_user_id && letter.current_role === user.role);
         if (!allowed) {
           const [participants] = await conn.query<RowDataPacket[]>(
             `SELECT 1 FROM siap_dispositions WHERE letter_id=? AND (to_user_id=? OR from_user_id=?)
-             UNION ALL SELECT 1 FROM siap_letter_actions WHERE letter_id=? AND actor_user_id=? LIMIT 1`,
+             UNION ALL SELECT 1 FROM siap_letter_actions WHERE letter_id=? AND actor_user_id=?
+               AND action<>'UPLOAD_NOTA_SIGNATURE' LIMIT 1`,
             [params.id, user.id, user.id, params.id, user.id],
           );
           allowed = participants.length > 0;

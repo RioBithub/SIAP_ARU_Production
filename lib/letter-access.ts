@@ -24,10 +24,16 @@ export function letterAccess(user: SessionUser) {
             AND ((l.direction='INCOMING' AND l.document_type='INVOICE_MASUK')
               OR (l.direction='INTERNAL' AND v.kind IN ('PERSEKOT','PAYMENT_REQUEST')))
         ))
-      OR EXISTS (SELECT 1 FROM siap_letter_actions a WHERE a.letter_id=l.id AND a.actor_user_id=?)
+      OR (l.direction='INTERNAL' AND EXISTS (
+        SELECT 1 FROM siap_v11_letters vn WHERE vn.letter_id=l.id
+          AND (vn.nota_author_user_id=? OR (vn.nota_signature_assistant_user_id=? AND ?='SECRETARIAT'
+            AND l.status IN ('DRAFT','RETURNED_STAFF')))
+      ))
+      OR EXISTS (SELECT 1 FROM siap_letter_actions a WHERE a.letter_id=l.id AND a.actor_user_id=?
+        AND (l.direction<>'INTERNAL' OR a.action<>'UPLOAD_NOTA_SIGNATURE'))
     ))`,
     params: [user.id, user.id, user.role, user.id, user.id, user.id,
-      user.id, user.id, user.id, user.id, user.id, user.role, user.id],
+      user.id, user.id, user.id, user.id, user.id, user.role, user.id, user.id, user.role, user.id],
   };
 }
 
