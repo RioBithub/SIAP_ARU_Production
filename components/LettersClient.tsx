@@ -19,6 +19,10 @@ import { formatWorkflowTime } from "@/lib/workflow-time";
 import AttachmentSandbox from "@/components/AttachmentSandbox";
 import V11SigningPanel from "@/components/V11SigningPanel";
 import NotaDocumentPanel from "@/components/NotaDocumentPanel";
+import CorrespondenceLayoutFields from "@/components/CorrespondenceLayoutFields";
+import OutgoingDocumentPanel from "@/components/OutgoingDocumentPanel";
+import { emptyCorrespondenceLayout } from "@/lib/correspondence-layout";
+import { NOTA_NUMBER_CODES, type NumberSourceSettings } from "@/lib/correspondence-number-source";
 import NotaResponses from "@/components/NotaResponses";
 import NotaTargetFields from "@/components/NotaTargetFields";
 import { PersekotFields, ReceiptFields, UnitField, WorkflowSummary } from "@/components/V11LetterFields";
@@ -40,7 +44,7 @@ const notaOption = (account: Pick<RoutingUser, "id" | "name" | "unit_name"> & { 
   value: account.id, label: [account.name, account.unit_name].filter(Boolean).join(" — "), search: account.email,
 });
 
-const today=()=>new Date().toISOString().slice(0,10);
+const today=jakartaDate;
 const fmtDate=(v:any)=>v?new Date(String(v).slice(0,10)+"T00:00:00").toLocaleDateString("id-ID",{day:"2-digit",month:"short",year:"numeric"}):"-";
 const DOC_LABELS:Record<string,string>={
   PERJANJIAN_KERJA_SAMA:"Perjanjian Kerja Sama",
@@ -57,7 +61,7 @@ const DOC_LABELS:Record<string,string>={
   LEMBAR_PENGANTAR:"Lembar Pengantar"
 };
 const docLabel=(r:any)=>r.v11_kind==="NOTA_REPLY"?"Balasan Nota Dinas"
-  :r.v11_kind==="NOTA_DIRECT"?"Nota Dinas Direksi":r.format_name||DOC_LABELS[r.document_type]||String(r.document_type||"-").replace(/_/g," ");
+  :r.v11_kind==="NOTA_DIRECT"?"Nota Dinas Direksi":r.document_type==="NOTA_DINAS"?"Nota Dinas":r.format_name||DOC_LABELS[r.document_type]||String(r.document_type||"-").replace(/_/g," ");
 const directNotaSent=(kind:string,status:string)=>["NOTA_REPLY","NOTA_DIRECT"].includes(kind)&&status==="COMPLETED";
 const DOC_TYPE_CLASS:Record<string,string>={
   PERJANJIAN_KERJA_SAMA:"letter-pks",
@@ -127,8 +131,8 @@ export default function LettersClient({direction,user}:Props){
   const [formatId,setFormatId]=useState("");
   const [letterDate,setLetterDate]=useState(today);
   const [customBase,setCustomBase]=useState("");
-  const [numberPreview,setNumberPreview]=useState<{rendered:string;highestBase:number;year:number}|null>(null);
-  const [numberError,setNumberError]=useState("");;
+  const [numberPreview,setNumberPreview]=useState<{rendered:string;highestBase:number;year:number;source:NumberSourceSettings["source"]}|null>(null);
+  const [numberError,setNumberError]=useState("");
   const [sourceLetter,setSourceLetter]=useState<DocumentReference[]>([]);
   const [sourceDispositionId,setSourceDispositionId]=useState("");
   const [sourceLoading,setSourceLoading]=useState(false);
@@ -166,11 +170,17 @@ export default function LettersClient({direction,user}:Props){
   const [error,setError]=useState("");
   const [createOpen,setCreateOpen]=useState(false);
   const [draftRequestOpen,setDraftRequestOpen]=useState(false);
-  const [notaSource,setNotaSource]=useState<"GENERATED"|"UPLOAD">("GENERATED");
+  const [documentSource,setDocumentSource]=useState<"GENERATED"|"UPLOAD">("GENERATED");
+  const [layout,setLayout]=useState(emptyCorrespondenceLayout);
   const [detail,setDetail]=useState<any>(null);
   const [detailOpen,setDetailOpen]=useState(false);
   const [editOpen,setEditOpen]=useState(false);
   const [createType,setCreateType]=useState(direction==="INCOMING"?"SURAT_MASUK_UMUM":"SURAT_UMUM");
+  const notaFormats=formats.filter(format=>NOTA_NUMBER_CODES.some(code=>code===format.code));
+  const supportsSystemDraft=direction==="OUTGOING"||(direction==="INTERNAL"&&v11Enabled);
+  const selectedFormatId=direction==="INTERNAL"
+    ? formatId || NOTA_NUMBER_CODES.map(code=>notaFormats.find(format=>format.code===code)?.id).find(Boolean) || ""
+    : formatId;
   const [createBusy,setCreateBusy]=useState(false);
   const [pendingAction,setPendingAction]=useState<PendingAction|null>(null);
   const [actionFiles,setActionFiles]=useState<File[]>([]);
@@ -203,11 +213,10 @@ export default function LettersClient({direction,user}:Props){
     }
   }
   async function loadFormats(){
-    if(direction==="INTERNAL")return;
-    const typeRequest = fetch("/api/admin/document-types?direction=" + direction + "&active=1");
-    const formatRequest = direction==="OUTGOING" ? fetch("/api/admin/number-formats") : Promise.resolve(null);
+    const typeRequest = direction==="INTERNAL" ? Promise.resolve(null) : fetch("/api/admin/document-types?direction=" + direction + "&active=1");
+    const formatRequest = direction!=="INCOMING" ? fetch("/api/admin/number-formats") : Promise.resolve(null);
     const [typeResponse, formatResponse] = await Promise.all([typeRequest, formatRequest]);
-    if (typeResponse.ok) {
+    if (typeResponse?.ok) {
       const result = await typeResponse.json();
       if (result.ok) {
         setDocumentTypes(result.data);
@@ -242,10 +251,10 @@ export default function LettersClient({direction,user}:Props){
   useEffect(()=>{
     setNumberPreview(null);
     setNumberError("");
-    if(direction!=="OUTGOING"||!createOpen||!formatId||!letterDate) return;
+    if(!supportsSystemDraft||!createOpen||!selectedFormatId||!letterDate) return;
     const controller=new AbortController();
     const timer=window.setTimeout(()=>{
-      const params=new URLSearchParams({format_id:formatId,date:letterDate,base:customBase});
+      const params=new URLSearchParams({format_id:selectedFormatId,date:letterDate,base:customBase});
       void fetch("/api/admin/number-formats/preview?"+params,{signal:controller.signal})
         .then(response=>response.json())
         .then(result=>{
@@ -255,7 +264,7 @@ export default function LettersClient({direction,user}:Props){
         }).catch(()=>{if(!controller.signal.aborted)setNumberError("Pratinjau nomor belum dapat dimuat.");});
     },180);
     return ()=>{window.clearTimeout(timer);controller.abort();};
-  },[direction,createOpen,formatId,letterDate,customBase]);
+  },[supportsSystemDraft,createOpen,selectedFormatId,letterDate,customBase]);
 
   useEffect(()=>{
     const params=new URLSearchParams(window.location.search);
@@ -285,7 +294,8 @@ export default function LettersClient({direction,user}:Props){
 
   function openCreate(){
     setNotaKind("NOTA");
-    setNotaSource("GENERATED");
+    setDocumentSource("GENERATED");
+    setLayout(emptyCorrespondenceLayout());
     setNotaAuthor("");
     setReplyOrigin(null);
     setFormatId("");
@@ -365,8 +375,11 @@ export default function LettersClient({direction,user}:Props){
       body.is_public = body.is_public === "on";
       delete body.original_file;
       delete body.additional_files;
+      if (supportsSystemDraft && !draftRequestOpen) {
+        body.document_source=documentSource;
+        if (documentSource==="GENERATED") body.document_layout=layout;
+      }
       if (direction==="INTERNAL" && v11Enabled && !draftRequestOpen) {
-        body.nota_document_source=notaSource;
         if (replyOrigin) body.nota_reply_to_id=replyOrigin.id;
         if (notaKind==="PAYMENT_REQUEST") body.payment_request=true;
         if (persekot) body.persekot=true;
@@ -673,17 +686,18 @@ export default function LettersClient({direction,user}:Props){
     const nota=detail.notaDocument;
     const missingSignature=nota&&(!nota.source||(!nota.signed&&(nota.requiresProof||!nota.manualReason)));
     return buttons.map(b=><button key={b[0]} className={`btn ${b[2]}`}
-      disabled={["SUBMIT","SEND_NOTA_REPLY","SEND_NOTA_DIRECT"].includes(b[0])&&Boolean(missingSignature)}
+      disabled={["SUBMIT","SEND_NOTA_REPLY","SEND_NOTA_DIRECT"].includes(b[0])&&Boolean(missingSignature||detail.draftDocument?.needsSource)}
       onClick={()=>startAction(b[0],b[1],Boolean(b[3]),Boolean(b[4]))}>{b[1]}</button>);
   }
 
   const generalAttachments=useMemo(()=>detail?.attachments?.filter((a:any)=>
     !a.letter_action_id&&a.source_kind!=="PAYMENT_DOCUMENT"&&
-    a.id!==detail.notaDocument?.source?.id&&a.id!==detail.notaDocument?.signed?.id)||[],[detail]);
+    a.id!==detail.notaDocument?.source?.id&&a.id!==detail.notaDocument?.signed?.id&&a.id!==detail.draftDocument?.source?.id)||[],[detail]);
   const receiptFile=detail?.attachments?.find((file:any)=>file.id===detail.v11?.receipt_attachment_id);
   const signingFiles=(detail?.attachments??[]).filter((file:any)=>!file.letter_action_id&&(
     ["ADDITIONAL","PAYMENT_DOCUMENT"].includes(file.attachment_kind)||
-    (file.attachment_kind==="ORIGINAL"&&file.id===detail?.originalId&&!detail.notaDocument)));
+    (file.attachment_kind==="ORIGINAL"&&file.id===detail?.originalId&&!detail.notaDocument)))
+      .map((file:any)=>file.id===detail?.draftDocument?.source?.id?{...file,slots:detail.draftDocument.slots}:file);
 
   const pageDescription=direction==="INCOMING"
     ?"Registrasi surat eksternal yang diterima perusahaan, review, return, attachment, dan histori."
@@ -755,7 +769,7 @@ export default function LettersClient({direction,user}:Props){
     :trashTarget?.operation==="restore"?"Pulihkan Surat":"Pindah ke Sampah";
 
   return <main className="page">
-    <div className="page-head"><div><h2>{letterDirectionLabel(direction)}</h2><p>{pageDescription}</p></div><div style={{display:"flex",gap:8,flexWrap:"wrap",justifyContent:"flex-end"}}>{direction==="OUTGOING"&&<a className="btn btn-secondary" href="/api/letters/outgoing-excel">↓ Export Excel</a>}{direction==="OUTGOING"&&user.role==="ROOT_ADMIN"&&<button className="btn btn-secondary" onClick={()=>{setImportOpen(true);setImportResult(null);setImportFile(null)}}>↑ Import Excel Lama</button>}{isRoot&&<button className="btn btn-secondary" aria-pressed={trash}
+    <div className="page-head"><div><h2>{letterDirectionLabel(direction)}</h2><p>{pageDescription}</p></div><div style={{display:"flex",gap:8,flexWrap:"wrap",justifyContent:"flex-end"}}>{direction!=="INCOMING"&&["ROOT_ADMIN","STAFF","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR"].includes(user.role)&&<a className="btn btn-secondary" href="/api/letters/outgoing-excel">↓ Export Excel</a>}{direction==="OUTGOING"&&user.role==="ROOT_ADMIN"&&<button className="btn btn-secondary" onClick={()=>{setImportOpen(true);setImportResult(null);setImportFile(null)}}>↑ Import Excel Lama</button>}{isRoot&&<button className="btn btn-secondary" aria-pressed={trash}
       onClick={()=>{setTrash(!trash);resetFilters(!trash);}}>{trash?"Kembali ke Daftar Surat":"Sampah"}</button>}
       {!trash&&canAskStaff&&<button className="btn btn-secondary" onClick={()=>{setError("");setDraftRequestOpen(true);}}>+ Minta Staff Siapkan Nota Dinas</button>}
       {!trash&&canCreate&&<button className="btn btn-primary" onClick={openCreate}>+ {createLabel}</button>}</div></div>
@@ -795,8 +809,8 @@ export default function LettersClient({direction,user}:Props){
         {cleanupBusy?"Membersihkan…":"Coba Bersihkan Lampiran"}
       </button>
     </div>}
-    <div className="card"><div className="table-wrap"><table className="table"><thead><tr>{direction!=="INTERNAL"&&<th>{direction==="INCOMING"?"Nomor Surat":"No."}</th>}<th>Jenis Dokumen</th><th>Perihal</th><th>{direction==="INCOMING"?"Pengirim":"Tujuan"}</th><th>Tanggal</th><th>Status</th><th>Tujuan Saat Ini</th><th>Sifat</th><th>Lampiran</th><th>{trash?"Dipindahkan":"Aktivitas"}</th><th>Aksi</th></tr></thead><tbody>
-      {!loading&&rows.map(r=><tr key={r.id} className={`letter-row ${docTypeClass(r.document_type)}`}>{direction!=="INTERNAL"&&<td className="mono"><b>{direction==="OUTGOING"?(outgoingNumber(r)||"-"):(r.external_number||"-")}</b></td>}<td><span className={`badge letter-type-badge ${docTypeClass(r.document_type)}`}>{docLabel(r)}</span></td><td><b>{r.subject}</b>{r.legacy_import_key&&<span className="muted" style={{display:"block",fontSize:9.5,marginTop:3}}>Data Excel lama{r.legacy_number_conflict?" • cek nomor historis":""}</span>}</td><td>{direction==="INCOMING"?r.sender:r.recipient}</td><td>{fmtDate(r.letter_date)}</td><td><StatusBadge status={r.sent_date&&r.status==="ISSUED"||directNotaSent(r.v11_kind,r.status)?"SENT":r.status}/></td><td><b style={{fontSize:11}}>{currentTargetLabel(r)}</b></td><td><ConfidentialityBadge value={r.confidentiality}/></td><td>{r.attachment_count}</td>
+    <div className="card"><div className="table-wrap"><table className="table"><thead><tr><th>{direction==="OUTGOING"?"No.":"Nomor Surat"}</th><th>Jenis Dokumen</th><th>Perihal</th><th>{direction==="INCOMING"?"Pengirim":"Tujuan"}</th><th>Tanggal</th><th>Status</th><th>Tujuan Saat Ini</th><th>Sifat</th><th>Lampiran</th><th>{trash?"Dipindahkan":"Aktivitas"}</th><th>Aksi</th></tr></thead><tbody>
+      {!loading&&rows.map(r=><tr key={r.id} className={`letter-row ${docTypeClass(r.document_type)}`}><td className="mono"><b>{(direction==="OUTGOING"?outgoingNumber(r):direction==="INTERNAL"?r.letter_number:r.external_number)||"-"}</b></td><td><span className={`badge letter-type-badge ${docTypeClass(r.document_type)}`}>{docLabel(r)}</span></td><td><b>{r.subject}</b>{r.legacy_import_key&&<span className="muted" style={{display:"block",fontSize:9.5,marginTop:3}}>Data Excel lama{r.legacy_number_conflict?" • cek nomor historis":""}</span>}</td><td>{direction==="INCOMING"?r.sender:r.recipient}</td><td>{fmtDate(r.letter_date)}</td><td><StatusBadge status={r.sent_date&&r.status==="ISSUED"||directNotaSent(r.v11_kind,r.status)?"SENT":r.status}/></td><td><b style={{fontSize:11}}>{currentTargetLabel(r)}</b></td><td><ConfidentialityBadge value={r.confidentiality}/></td><td>{r.attachment_count}</td>
         <td className="letter-activity">{trash?<><span>{formatWorkflowTime(r.deleted_at)}</span><span className="muted">{r.deletion_reason}</span></>
           :<><span>Dibuat {formatWorkflowTime(r.created_at)}</span><span className="muted">Diperbarui {formatWorkflowTime(r.updated_at)}</span></>}</td>
         <td><div className="attachment-actions">{!trash&&<button className="btn btn-secondary" onClick={()=>openDetail(r.id)}>Detail</button>}
@@ -805,8 +819,8 @@ export default function LettersClient({direction,user}:Props){
           </button>}
           {isRoot&&trash&&<button className="btn btn-danger" onClick={()=>showTrashAction(r,"purge")}>Hapus Permanen</button>}
         </div></td></tr>)}
-      {!loading&&rows.length===0&&<tr><td colSpan={direction==="INTERNAL"?10:11}><div className="empty">{trash?"Sampah kosong.":queue?"Tidak ada surat di antrean Sekretariat.":"Tidak ada surat yang cocok."}</div></td></tr>}
-      {loading&&<tr><td colSpan={direction==="INTERNAL"?10:11}><div className="empty">Memuat...</div></td></tr>}
+      {!loading&&rows.length===0&&<tr><td colSpan={11}><div className="empty">{trash?"Sampah kosong.":queue?"Tidak ada surat di antrean Sekretariat.":"Tidak ada surat yang cocok."}</div></td></tr>}
+      {loading&&<tr><td colSpan={11}><div className="empty">Memuat...</div></td></tr>}
     </tbody></table></div></div>
 
     {trashTarget&&<Modal title={trashActionLabel} subtitle={trashTarget.subject}
@@ -891,6 +905,12 @@ export default function LettersClient({direction,user}:Props){
         {direction==="OUTGOING"&&<div className="field"><SearchableSelect label="Format Nomor" name="number_format_id" value={formatId} onChange={setFormatId}
           options={formats.filter((f:any)=>f.document_type===createType).map((f:any)=>({value:f.id,label:f.name}))}
           placeholder="Pilih format…" required/></div>}
+        {direction==="INTERNAL"&&v11Enabled&&<div className="field"><SearchableSelect label="Seri Nomor Nota Dinas"
+          name="number_format_id" value={selectedFormatId} onChange={setFormatId}
+          options={notaFormats.map(format=>({value:format.id,label:format.name}))}
+          placeholder="Pilih seri nomor…" required/>
+          <span className="hint">Nomor berbagi urutan dengan seri Surat Keluar yang dipilih. Bagian Umum memakai format UM.</span>
+        </div>}
         {direction==="OUTGOING"&&<div className="field"><label>Nomor Dasar Custom <span className="muted">(opsional)</span></label><input className="input" type="number" min="1" step="1" name="custom_number_base" placeholder="Otomatis" value={customBase} onChange={e=>setCustomBase(e.target.value)}/><span className="hint">Contoh 135. Jika 135 sudah terpakai pada jenis/tahun yang sama, sistem memakai 135.1, 135.2, dst.</span></div>}
         {direction==="INCOMING"&&<>
           <div className="field"><label>Nomor Surat Asal</label><input className="input" name="external_number" required/></div>
@@ -948,9 +968,9 @@ export default function LettersClient({direction,user}:Props){
             <span className="hint">Nota Dinas diajukan ke Manager yang dipilih.</span>
           </div>}
         <div className="field"><label>{direction==="INTERNAL"?"Tanggal Nota Dinas":"Tanggal Surat"}</label><input className="input" type="date" name="letter_date" value={letterDate} onChange={e=>setLetterDate(e.target.value)} required/>{direction==="OUTGOING"&&<span className="hint">Backdate diperbolehkan. Nomor existing tidak digeser; collision menghasilkan .1, .2, dst.</span>}</div>
-        {direction==="OUTGOING"&&formatId&&<div className="field full notice" role="status">
+        {supportsSystemDraft&&selectedFormatId&&<div className="field full notice" role="status">
           {numberPreview?<><b>Perkiraan nomor {numberPreview.rendered}</b><br/>
-            Urutan dasar tertinggi yang tercatat pada {numberPreview.year} {numberPreview.highestBase||"belum ada"}.
+            Urutan tertinggi {numberPreview.year} {numberPreview.highestBase||"belum ada"} · {numberPreview.source==="SHEETS"?"Google Sheets + register SIAP":"Register SIAP"}.
             Nomor dikunci saat draf tersimpan.</>:numberError||"Menghitung perkiraan nomor…"}
         </div>}
         {direction==="INCOMING"&&<div className="field"><label>Tanggal Diterima</label><input className="input" type="date" name="received_date" defaultValue={today()} required/></div>}
@@ -962,7 +982,17 @@ export default function LettersClient({direction,user}:Props){
             .map(option=><option key={option}>{option}</option>)}
         </select></div>
         {!v11Enabled&&<div className="field"><label>Visibilitas</label><label style={{display:"flex",alignItems:"center",gap:8,fontWeight:500}}><input type="checkbox" key={businessForm?"private":"regular"} name="is_public" defaultChecked={direction!=="INTERNAL"&&!businessForm&&!sourceDispositionId&&!sourceLetter.length}/> {direction==="INTERNAL"?"Dapat dilihat lebih luas oleh user persuratan":"Public untuk user yang punya akses persuratan"}</label></div>}
-        <div className="field full"><label>{direction==="INTERNAL"?"Isi / Ringkasan Nota Dinas":"Ringkasan / Isi Ringkas"}</label><textarea className="textarea" name="summary"/></div>
+        {supportsSystemDraft&&<label className="field full"><span>Sumber dokumen</span>
+          <select className="select" value={documentSource} onChange={e=>setDocumentSource(e.target.value as typeof documentSource)} required>
+            <option value="GENERATED">Buat dari sistem (PDF ARU)</option><option value="UPLOAD">Unggah sendiri</option>
+          </select>
+        </label>}
+        <label className="field full"><span>{supportsSystemDraft&&documentSource==="GENERATED"?"Isi utama dokumen"
+          :direction==="INTERNAL"?"Isi / Ringkasan Nota Dinas":"Ringkasan / Isi Ringkas"}</span>
+          <textarea className="textarea" name="summary" maxLength={5000}
+            required={supportsSystemDraft&&documentSource==="GENERATED"&&!layout.blocks.length}/></label>
+        {supportsSystemDraft&&documentSource==="GENERATED"&&<CorrespondenceLayoutFields layout={layout}
+          onChange={setLayout} outgoing={direction==="OUTGOING"} disabled={createBusy}/>}
         <div className="field full"><label>Catatan</label><textarea className="textarea" name="notes" placeholder="Catatan awal proses"/></div>
         {direction==="OUTGOING"&&(sourceDispositionId
           ?<div className="field full notice">Draf ini ditautkan ke Disposisi asal.</div>
@@ -971,13 +1001,7 @@ export default function LettersClient({direction,user}:Props){
           </div>)}
         {businessForm&&<BusinessDocumentFields key={createType} documentType={createType} outgoing={direction==="OUTGOING"}
           requireDueDate={v11Enabled&&createType===INVOICE_INCOMING}/>}
-        {direction==="INTERNAL"&&v11Enabled&&<label className="field full"><span>Sumber PDF Nota Dinas</span>
-          <select className="select" value={notaSource} onChange={e=>setNotaSource(e.target.value as typeof notaSource)} required>
-            <option value="GENERATED">Buat PDF dari Isi Nota</option><option value="UPLOAD">Unggah PDF sendiri</option>
-          </select>
-          {notaSource==="GENERATED"&&<small className="hint">Isi Ringkasan / Isi Ringkas untuk mencetak isi nota, lalu tandatangani PDF setelah draf tersimpan.</small>}
-        </label>}
-        {!(direction==="INTERNAL"&&v11Enabled&&notaSource==="GENERATED")&&<div className="field full">
+        {!(supportsSystemDraft&&documentSource==="GENERATED")&&<div className="field full">
           <label>{incomingFileRequired?"Dokumen Asli (wajib)":direction==="OUTGOING"?"File Draft / Dokumen Utama (opsional)":direction==="INTERNAL"?"PDF Nota Dinas":"Surat Asli (opsional)"}</label>
           <input aria-label={direction==="INTERNAL"?"PDF Nota Dinas":"Dokumen asli"} className="input" type="file" name="original_file"
             required={incomingFileRequired||direction==="INTERNAL"&&v11Enabled}
@@ -996,7 +1020,7 @@ export default function LettersClient({direction,user}:Props){
             <div className="kpi-row"><span>Tujuan Saat Ini</span><b>{detail.letter.owner_name?`${detail.letter.owner_name}${detail.letter.owner_unit?` — ${detail.letter.owner_unit}`:""}`:currentTargetLabel(detail.letter)}</b></div>
             {detail.letter.routing_target_name&&<div className="kpi-row"><span>Tujuan Awal</span><b>{detail.letter.routing_target_name}{detail.letter.routing_target_unit?` — ${detail.letter.routing_target_unit}`:""}</b></div>}
             <div className="kpi-row"><span>Jenis Dokumen</span><b>{docLabel({...detail.letter,v11_kind:detail.v11?.kind})}</b></div>
-            {direction==="OUTGOING"&&<div className="kpi-row"><span>Nomor Dokumen</span><b className="mono">{detail.letter.letter_number||outgoingNumber(detail.letter)||"-"}</b></div>}
+            {direction!=="INCOMING"&&<div className="kpi-row"><span>Nomor Dokumen</span><b className="mono">{detail.letter.letter_number||outgoingNumber(detail.letter)||"-"}</b></div>}
             {detail.letter.recipient&&<div className="kpi-row"><span>Ditujukan Kepada</span><b>{detail.letter.recipient}</b></div>}
             {detail.notaRouting?.additionalRecipients?.length>0&&<div className="kpi-row"><span>Penerima tambahan</span>
               <b>{detail.notaRouting.additionalRecipients.map((account:RoutingUser)=>notaOption(account).label).join(", ")}</b>
@@ -1029,6 +1053,8 @@ export default function LettersClient({direction,user}:Props){
           </div>}
           {detail.business&&<BusinessDocumentSummary details={detail.business} documentType={detail.letter.document_type}/>}
           {direction!=="INTERNAL"&&<WorkflowSummary data={detail.v11} date={detail.letter.received_date} files={detail.attachments}/>}
+          {detail.draftDocument&&<OutgoingDocumentPanel key={`outgoing-${detail.letter.id}`} id={detail.letter.id}
+            data={detail.draftDocument} refresh={()=>refreshDetail(detail.letter.id)}/>}
           {detail.notaDocument&&<NotaDocumentPanel key={`nota-${detail.letter.id}`} id={detail.letter.id}
             data={detail.notaDocument} assistants={routingUsers.filter(account=>account.role==="SECRETARIAT")}
             refresh={()=>refreshDetail(detail.letter.id)}/>}

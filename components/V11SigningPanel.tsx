@@ -5,11 +5,12 @@ import type { SandboxProgress, SignatureAnnotation } from "@/lib/mekari-sign";
 import type { MekariSendFailureNotice } from "@/lib/mekari-signing-audit";
 import SignaturePlacement from "@/components/SignaturePlacement";
 import AttachmentActions from "@/components/AttachmentActions";
+import type { DraftSignatureSlot } from "@/lib/correspondence-layout";
 
 type Mode = "mock" | "sandbox";
 type Job = { id: string; status: string; mode: Mode; final_attachment_id: string | null; can_retry?: boolean;
   send_failure?: MekariSendFailureNotice };
-export type SandboxSource = { id: string; original_name: string; attachment_kind: string };
+export type SandboxSource = { id: string; original_name: string; attachment_kind: string; slots?: DraftSignatureSlot[] };
 type Coordinate = keyof Omit<SignatureAnnotation, "type_of">;
 type DraftSigner = {
   id: number;
@@ -70,6 +71,7 @@ export default function V11SigningPanel({ id, files = [], onReady, source }: {
   const path = source ? "/api/attachments/" + source.id + "/signing" : "/api/letters/" + id + "/signing";
   const attachmentMode = Boolean(source);
   const selectedPdf = source?.id ?? attachmentId;
+  const slots = (source ?? files.find(file => file.id === selectedPdf))?.slots;
   useEffect(() => {
     const controller = new AbortController();
     onReady?.(false);
@@ -112,6 +114,16 @@ export default function V11SigningPanel({ id, files = [], onReady, source }: {
 
   function editSigner(signerId: number, change: Partial<Omit<DraftSigner, "id">>) {
     setSigners(current => current.map(signer => signer.id === signerId ? { ...signer, ...change } : signer));
+  }
+
+  function applyDraftSlots() {
+    if (!slots?.length) return;
+    const people = slots.map(({ name, annotation }) => ({
+      ...newSigner(nextSignerId.current++), name, coordinates: editableCoordinates(annotation),
+      email: signers.find(person => person.name.trim() === name)?.email ?? "",
+    }));
+    setSigners(people);
+    setPlacementSigner(people[0].id);
   }
 
   function moveSigner(index: number, offset: number) {
@@ -244,6 +256,9 @@ export default function V11SigningPanel({ id, files = [], onReady, source }: {
                 <option value="sequential">Berurutan</option>
               </select>
             </label>
+            {Boolean(slots?.length) && <div className="field full">
+              <button type="button" className="btn btn-secondary" onClick={applyDraftSlots}>Pakai posisi dari draf</button>
+            </div>}
             {signers.map((signer, index) => <fieldset className="form-grid signing-signer" key={signer.id}>
               <legend>Penandatangan {index + 1}</legend>
               <label className="field"><span>Nama penandatangan uji</span>

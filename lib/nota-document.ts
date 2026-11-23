@@ -1,7 +1,5 @@
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
-import { AruPdf } from "@/lib/aru-pdf";
 import type { SessionUser } from "@/lib/types";
-import { saveProof } from "@/lib/v11-data";
 
 type Queryable = Pick<PoolConnection, "query">;
 export const isNotaDraft = (letter: RowDataPacket) =>
@@ -77,26 +75,4 @@ export async function notaDocument(conn: Queryable, letterId: string) {
     manualReason: (row.manual_reason as string | null) ?? null,
     needsSource: Boolean(row.source_kind && !row.source_id),
   };
-}
-
-export async function generatedNotaFile(input: {
-  id: string; date: string; author: string; unit: string | null; recipient: string | null;
-  additionalRecipients?: string[];
-  subject: string; summary: string; confidentiality: string; reference?: string | null;
-}) {
-  const pdf = await AruPdf.create("NOTA DINAS", `Dokumen internal • ${input.confidentiality}`);
-  pdf.fields([{ label: "Tanggal", value: input.date.split("-").reverse().join("/") },
-    { label: "Unit pengirim", value: input.unit }]);
-  pdf.fields([{ label: "Dari", value: input.author }, { label: "Kepada", value: input.recipient }]);
-  pdf.fields([{ label: "Perihal", value: input.subject }]);
-  if (input.additionalRecipients?.length) {
-    pdf.section("PENERIMA TAMBAHAN");
-    pdf.paragraph(input.additionalRecipients.join("\n"));
-  }
-  if (input.reference) pdf.fields([{ label: "Nota Dinas yang dibalas", value: input.reference }]);
-  pdf.section("ISI NOTA DINAS");
-  pdf.paragraph(input.summary);
-  pdf.signatureLines([{ label: "Pengirim", value: input.author }]);
-  const bytes = await pdf.bytes();
-  return saveProof(new File([new Uint8Array(bytes)], `Nota-Dinas-${input.id.slice(0, 8)}.pdf`), true, "ORIGINAL");
 }

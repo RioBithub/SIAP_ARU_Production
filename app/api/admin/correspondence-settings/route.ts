@@ -2,9 +2,12 @@ import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2/promise";
 import { auditLog } from "@/lib/audit";
 import { getCurrentUser } from "@/lib/auth";
-import { delegatedUsers, delegationKey, incomingRecipients } from "@/lib/correspondence-settings";
+import { delegatedUsers, delegationKey, incomingRecipients, numberSourceSettings } from "@/lib/correspondence-settings";
 import { withTransaction } from "@/lib/db";
 import { str } from "@/lib/http";
+import { REGISTER_SHEETS } from "@/lib/aru-register";
+import { normalizeSheetUrl, readNumberRegister } from "@/lib/google-number-register";
+import type { NumberSourceSettings } from "@/lib/correspondence-number-source";
 
 export async function GET(request: Request) {
   const user = await getCurrentUser();
@@ -18,8 +21,27 @@ export async function GET(request: Request) {
   return NextResponse.json({
     ok: true, data: {
       ...recipients, delegation: managerId ? await delegatedUsers(managerId) : null,
+      ...(user.role === "ROOT_ADMIN" && !requestedManager ? { numbering: await numberSourceSettings() } : {}),
     },
   }, { headers: { "Cache-Control": "private, no-store" } });
+}
+
+export async function POST(request: Request) {
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ ok: false }, { status: 401 });
+  if (user.role !== "ROOT_ADMIN") return NextResponse.json({ ok: false }, { status: 403 });
+  try {
+    const body = await request.json();
+    const sheetUrl = normalizeSheetUrl(body.sheetUrl);
+    const matches = await readNumberRegister(sheetUrl, REGISTER_SHEETS);
+    return NextResponse.json({ ok: true, data: { sheetUrl,
+      tabs: matches.map(({ config, rows, incompleteDates }) => ({
+        tab: config.sheet, count: rows.length, incompleteDates,
+      })) } });
+  } catch (error) {
+    return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "Koneksi Google Sheets gagal." },
+      { status: 400 });
+  }
 }
 
 export async function PATCH(request: Request) {
@@ -28,10 +50,20 @@ export async function PATCH(request: Request) {
   if (user.role !== "ROOT_ADMIN") return NextResponse.json({ ok: false }, { status: 403 });
   try {
     const body = await request.json();
+    let numbering: NumberSourceSettings | undefined;
+    if (body.kind === "numbering") {
+      if (body.source !== "SIAP" && body.source !== "SHEETS") throw new Error("Pilih sumber nomor surat.");
+      const sheetUrl = body.source === "SHEETS" || body.sheetUrl ? normalizeSheetUrl(body.sheetUrl) : "";
+      if (body.source === "SHEETS") await readNumberRegister(sheetUrl, REGISTER_SHEETS);
+      numbering = { source: body.source, sheetUrl };
+    }
     await withTransaction(async conn => {
       let key: string;
       let value: unknown;
-      if (body.kind === "recipients") {
+      if (numbering) {
+        key = "number_source";
+        value = numbering;
+      } else if (body.kind === "recipients") {
         if (!Array.isArray(body.recipients) || !body.recipients.length || body.recipients.length > 40 ||
             body.recipients.some((item: unknown) => typeof item !== "string" || !item.trim() || item.trim().length > 255)) {
           throw new Error("Isi daftar tujuan dengan 1 sampai 40 nama yang berbeda.");
@@ -74,7 +106,7 @@ export async function PATCH(request: Request) {
       await auditLog({ user, action: "CORRESPONDENCE_SETTING_UPDATE", entityType: "SETTINGS",
         entityId: key, metadata: { value }, request }, conn);
     });
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, ...(numbering ? { data: numbering } : {}) });
   } catch (error) {
     return NextResponse.json({ ok: false, error: error instanceof Error && !("code" in error)
       ? error.message : "Pengaturan belum dapat disimpan." }, { status: 400 });

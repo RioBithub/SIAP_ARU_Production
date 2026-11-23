@@ -7,9 +7,12 @@ import { withTransaction } from "@/lib/db";
 import { required, str } from "@/lib/http";
 import { getAccessibleLetter } from "@/lib/letter-access";
 import { discardUncommittedFiles, insertLetterAttachment, type StoredLetterFile } from "@/lib/letter-uploads";
-import { canEditNotaDocument, canUploadNotaSignature, generatedNotaFile, isNotaDraft, notaAuthorId,
+import { canEditNotaDocument, canUploadNotaSignature, isNotaDraft, notaAuthorId,
   notaDocument, requiresNotaProof, saveNotaSource } from "@/lib/nota-document";
 import { activeNotaAccount, listNotaRecipients, notaPartyLabel } from "@/lib/nota-routing";
+import { checkedCorrespondenceLayout } from "@/lib/correspondence-layout";
+import { correspondenceDraft, saveCorrespondencePdf, senderTitle } from "@/lib/correspondence-draft-data";
+import { defaultNotaFormatId, reserveLetterNumber } from "@/lib/numbering";
 import { readStoredFile } from "@/lib/upload";
 import { proofMimeType, saveProof, takeFile, v11Letter } from "@/lib/v11-data";
 
@@ -60,18 +63,29 @@ export async function POST(request: Request, { params }: { params: { id: string 
         const [[dates]] = await conn.query<RowDataPacket[]>("SELECT DATE_FORMAT(letter_date,'%Y-%m-%d') date FROM siap_letters WHERE id=?", [params.id]);
         const origin = workflow.kind === "NOTA_REPLY" && letter.source_letter_id
           ? await getAccessibleLetter(user, letter.source_letter_id, conn) : null;
-        const file = await generatedNotaFile({
-          id: params.id, date: dates.date, author: author.name, unit: author.unit_name, recipient: letter.recipient,
-          additionalRecipients: (await listNotaRecipients(conn, params.id)).map(notaPartyLabel),
-          subject: letter.subject, summary: required(letter.summary, "Isi Nota Dinas", 5000),
+        let number = letter.letter_number;
+        if (!number) {
+          const formatId = await defaultNotaFormatId(conn);
+          const reserved = await reserveLetterNumber({
+            conn, formatId, letterId: params.id, letterDate: dates.date, userId: user.id, documentType: "NOTA_DINAS",
+          });
+          number = reserved.rendered;
+          await conn.execute("UPDATE siap_letters SET number_format_id=?,letter_number=? WHERE id=?", [formatId, number, params.id]);
+        }
+        const layout = body.document_layout === undefined
+          ? (await correspondenceDraft(conn, params.id))?.layout ?? checkedCorrespondenceLayout(undefined)
+          : checkedCorrespondenceLayout(body.document_layout);
+        const file = await saveCorrespondencePdf(conn, {
+          id: params.id, userId: user.id, direction: "INTERNAL", number, date: dates.date,
+          author: author.name, authorTitle: senderTitle(author),
+          recipient: [letter.recipient, ...(await listNotaRecipients(conn, params.id)).map(notaPartyLabel)].filter(Boolean).join("\n"),
+          subject: letter.subject, body: letter.summary ?? "", layout,
           confidentiality: letter.confidentiality, reference: origin?.subject,
-        });
-        staged.push(file);
-        sourceId = await insertLetterAttachment(conn, params.id, user.id, file, "ORIGINAL");
+        }, staged);
+        sourceId = file.id;
         await saveNotaSource(conn, params.id, sourceId, "GENERATED");
-        await conn.execute("UPDATE siap_letters SET active_original_attachment_id=? WHERE id=?", [sourceId, params.id]);
         event = "GENERATE_NOTA_PDF";
-        detail = file.originalName;
+        detail = file.name;
       } else {
         if (!current?.source || body.source_id !== current.source.id) {
           throw new Error("Buka PDF utama terbaru sebelum mencatat tanda tangan.");

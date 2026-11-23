@@ -1,5 +1,6 @@
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { db } from "@/lib/db";
+import type { NumberSourceSettings } from "@/lib/correspondence-number-source";
 
 type Queryable = Pick<PoolConnection, "query">;
 export const DEFAULT_INCOMING_RECIPIENT = "PT Aru Raharja";
@@ -25,4 +26,8 @@ export function delegationKey(managerId: string) {
 
 export function delegatedUsers(managerId: string, conn: Queryable = db) {
   return setting<string[]>(conn, delegationKey(managerId));
+}
+
+export async function numberSourceSettings(conn: Queryable = db): Promise<NumberSourceSettings> {
+  return await setting<NumberSourceSettings>(conn, "number_source") ?? { source: "SIAP", sheetUrl: "" };
 }
