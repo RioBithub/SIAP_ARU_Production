@@ -23,7 +23,7 @@ function getIp(request?: Request) {
 
 export async function verifyCredentials(email: string, password: string): Promise<SessionUser | null> {
   const [rows] = await db.query<RowDataPacket[]>(
-    `SELECT id,name,email,password_hash,role,unit_name,is_active
+    `SELECT id,name,alias,email,password_hash,role,unit_name,is_active
      FROM siap_users WHERE email=? LIMIT 1`,
     [email.trim().toLowerCase()]
   );
@@ -37,6 +37,7 @@ export async function verifyCredentials(email: string, password: string): Promis
     email: String(row.email),
     role: row.role as Role,
     unit_name: row.unit_name ? String(row.unit_name) : null,
+    alias: row.alias ? String(row.alias) : null,
   };
 }
 
@@ -87,9 +88,9 @@ export async function getAuthSession(transaction?: PoolConnection) {
   if (!raw) return null;
   const conn = transaction ?? db;
   const [rows] = await conn.query<RowDataPacket[]>(
-    `SELECT u.id,u.name,u.email,u.role,u.unit_name,s.id AS session_id,s.impersonated_user_id,
+    `SELECT u.id,u.name,u.alias,u.email,u.role,u.unit_name,s.id AS session_id,s.impersonated_user_id,
             target.id AS target_id,target.name AS target_name,target.email AS target_email,
-            target.role AS target_role,target.unit_name AS target_unit_name
+            target.alias AS target_alias,target.role AS target_role,target.unit_name AS target_unit_name
      FROM siap_sessions s
      JOIN siap_users u ON u.id=s.user_id AND u.is_active=1
      LEFT JOIN siap_users target ON target.id=s.impersonated_user_id AND target.is_active=1
@@ -106,6 +107,7 @@ export async function getAuthSession(transaction?: PoolConnection) {
     email: String(row.email),
     role: row.role as Role,
     unit_name: row.unit_name ? String(row.unit_name) : null,
+    alias: row.alias ? String(row.alias) : null,
   };
   const targetId = row.impersonated_user_id ? String(row.impersonated_user_id) : null;
   let user: SessionUser | null = owner;
@@ -117,6 +119,7 @@ export async function getAuthSession(transaction?: PoolConnection) {
       email: String(row.target_email),
       role: row.target_role as Role,
       unit_name: row.target_unit_name ? String(row.target_unit_name) : null,
+      alias: row.target_alias ? String(row.target_alias) : null,
       impersonatedByUserId: owner.id,
     } : null;
   }

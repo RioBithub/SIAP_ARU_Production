@@ -11,7 +11,7 @@ export async function GET() {
     return NextResponse.json({ error: "Hanya Root Admin yang dapat mengganti akun." }, { status: 403 });
   }
   const [accounts] = await db.query<RowDataPacket[]>(
-    `SELECT id,name,email,role,unit_name FROM siap_users
+    `SELECT id,name,alias,email,role,unit_name FROM siap_users
      WHERE is_active=1 AND id<>? ORDER BY name,email`,
     [session.owner.id],
   );

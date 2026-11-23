@@ -13,6 +13,7 @@ export type SessionUser = {
   email: string;
   role: Role;
   unit_name: string | null;
+  alias: string | null;
   impersonatedByUserId?: string;
 };
 

@@ -95,7 +95,7 @@ export default function AccountSwitcher({ targetId }: { targetId: string | null 
 
   const query = search.trim().toLowerCase();
   const matches = accounts.filter(account => account.id !== targetId &&
-    [account.name, account.email, ROLE_LABELS[account.role], account.unit_name].some(value => value?.toLowerCase().includes(query))
+    [account.name, account.alias, account.email, ROLE_LABELS[account.role], account.unit_name].some(value => value?.toLowerCase().includes(query))
   );
 
   return <>
@@ -116,7 +116,7 @@ export default function AccountSwitcher({ targetId }: { targetId: string | null 
           {matches.map(account => <button type="button" key={account.id} className="account-picker-item"
             disabled={switching} onClick={() => void changeAccount(account.id)}>
             <strong>{account.name}</strong>
-            <small>{ROLE_LABELS[account.role]}{account.unit_name ? ` · ${account.unit_name}` : ""}</small>
+            <small>{account.alias || ROLE_LABELS[account.role]}{account.unit_name ? ` · ${account.unit_name}` : ""}</small>
             <span>{account.email}</span>
           </button>)}
         </div>

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2/promise";
-import { auditProfileUpdate, duplicateProfileEmail, profileEmail, profileName } from "@/lib/account-profile";
+import { auditProfileUpdate, duplicateProfileEmail, profileEmail, profileName, profileOptional } from "@/lib/account-profile";
 import { getCurrentUser, hashPassword } from "@/lib/auth";
 import { db, withTransaction } from "@/lib/db";
 import { auditLog } from "@/lib/audit";
@@ -21,21 +21,25 @@ export async function PATCH(request: Request, { params }: { params: { id: string
     const passwordHash = fields.password ? await hashPassword(String(fields.password)) : null;
     const profile = await withTransaction(async conn => {
       const [[target]] = await conn.query<RowDataPacket[]>(
-        "SELECT name,email FROM siap_users WHERE id=? FOR UPDATE", [params.id],
+        "SELECT name,email,alias,unit_name FROM siap_users WHERE id=? FOR UPDATE", [params.id],
       );
       if (!target) return null;
-      const before = { name: String(target.name), email: String(target.email) };
-      const after = { name: updatedName ?? before.name, email: updatedEmail ?? before.email };
-      const changeUnit = fields.unit_name !== undefined;
+      const before = { name: String(target.name), email: String(target.email), alias: target.alias as string | null, unit_name: target.unit_name as string | null };
+      const after = {
+        name: updatedName ?? before.name,
+        email: updatedEmail ?? before.email,
+        alias: fields.alias === undefined ? before.alias : profileOptional(fields.alias, "Alias", 150),
+        unit_name: fields.unit_name === undefined ? before.unit_name : profileOptional(fields.unit_name, "Unit", 120),
+      };
       const isActive = typeof fields.is_active === "boolean" ? Number(fields.is_active) : null;
       await conn.execute(
-        `UPDATE siap_users SET name=?,email=?,role=COALESCE(NULLIF(?,''),role),
-          unit_name=IF(?,?,unit_name),is_active=COALESCE(?,is_active),
+        `UPDATE siap_users SET name=?,email=?,alias=?,role=COALESCE(NULLIF(?,''),role),
+          unit_name=?,is_active=COALESCE(?,is_active),
           password_hash=COALESCE(?,password_hash) WHERE id=?`,
-        [after.name, after.email, role, Number(changeUnit), str(fields.unit_name, 120) || null, isActive, passwordHash, params.id],
+        [after.name, after.email, after.alias, role, after.unit_name, isActive, passwordHash, params.id],
       );
       await auditProfileUpdate(conn, user, params.id, before, after, "ADMIN", request);
-      if (role || changeUnit || isActive !== null || passwordHash) {
+      if (role || isActive !== null || passwordHash) {
         await auditLog({
           user, action: "USER_UPDATE", entityType: "USER", entityId: params.id,
           metadata: { role: role || undefined, is_active: fields.is_active, passwordReset: passwordHash ? true : undefined }, request,
