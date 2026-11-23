@@ -11,18 +11,19 @@ export async function extractPdfText(file:File){
   if(file.size<=0) throw new Error("File PDF kosong.");
   if(file.size>10*1024*1024) throw new Error("Ukuran PDF maksimal 10 MB.");
 
-  const dir=await fs.mkdtemp(path.join(os.tmpdir(),"siap-bri-"));
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),"siap-bank-pdf-"));
   const pdfPath=path.join(dir,"statement.pdf");
   try{
     await fs.writeFile(pdfPath,Buffer.from(await file.arrayBuffer()));
     try{
-      const {stdout}=await execFileAsync("pdftotext",["-layout","-enc","UTF-8",pdfPath,"-"],{maxBuffer:12*1024*1024});
+      const {stdout}=await execFileAsync("pdftotext",["-layout","-enc","UTF-8",pdfPath,"-"],{maxBuffer:12*1024*1024, timeout:20_000});
       const text=String(stdout||"").trim();
       if(!text) throw new Error("PDF tidak memiliki text layer yang dapat dibaca.");
       return text;
     }catch(error:any){
       if(error?.code==="ENOENT") throw new Error("Parser PDF server belum tersedia. Install paket poppler-utils (pdftotext) lalu coba lagi.");
-      throw error;
+      if (error instanceof Error && !("code" in error)) throw error;
+      throw new Error("PDF tidak dapat dibaca. Periksa apakah file rusak atau memerlukan kata sandi.");
     }
   }finally{
     await fs.rm(dir,{recursive:true,force:true}).catch(()=>{});

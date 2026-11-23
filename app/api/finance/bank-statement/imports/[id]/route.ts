@@ -3,6 +3,7 @@ import type { RowDataPacket } from "mysql2";
 import { getCurrentUser } from "@/lib/auth";
 import { canEditFinance } from "@/lib/permissions";
 import { db } from "@/lib/db";
+import { BankWriteError, bankWriteStatus, withBankAccountWrite } from "@/lib/bank-write";
 import { auditLog } from "@/lib/audit";
 import { amount } from "@/lib/http";
 
@@ -16,18 +17,22 @@ export async function PATCH(request:Request,{params}:{params:{id:string}}){
     const body=await request.json();
     const opening=amount(body.opening_balance,"Saldo awal");
     const closing=amount(body.closing_balance,"Saldo akhir");
-    const [rows]=await db.query<RowDataPacket[]>(`SELECT id,bank_account_id,status,statement_opening_balance,statement_closing_balance FROM siap_bank_import_batches WHERE id=? LIMIT 1`,[params.id]);
-    const batch=rows[0];
-    if(!batch) return NextResponse.json({ok:false,error:"Riwayat import tidak ditemukan."},{status:404});
-    if(String(batch.status)!=="ACTIVE") throw new Error("Import yang sudah di-undo tidak dapat dikoreksi.");
-    await db.execute(
-      `UPDATE siap_bank_import_batches
-       SET manual_opening_balance=?,manual_closing_balance=?,corrected_by=?,corrected_at=UTC_TIMESTAMP()
-       WHERE id=?`,[opening,closing,user.id,params.id]
-    );
-    await auditLog({user,action:"BANK_IMPORT_BALANCE_CORRECTION",entityType:"BANK_IMPORT",entityId:params.id,request,metadata:{accountId:String(batch.bank_account_id),sourceOpening:Number(batch.statement_opening_balance),sourceClosing:Number(batch.statement_closing_balance),manualOpening:opening,manualClosing:closing}});
+    const [[target]]=await db.query<RowDataPacket[]>("SELECT bank_account_id FROM siap_bank_import_batches WHERE id=?", [params.id]);
+    if(!target) throw new BankWriteError("Riwayat impor tidak ditemukan.",404);
+    await withBankAccountWrite(user.role,String(target.bank_account_id),async conn=>{
+      const [rows]=await conn.query<RowDataPacket[]>(`SELECT id,bank_account_id,status,statement_opening_balance,statement_closing_balance FROM siap_bank_import_batches WHERE id=? LIMIT 1`,[params.id]);
+      const batch=rows[0];
+      if(!batch) throw new BankWriteError("Riwayat impor tidak ditemukan.",404);
+      if(String(batch.status)!=="ACTIVE") throw new Error("Import yang sudah di-undo tidak dapat dikoreksi.");
+      await conn.execute(
+        `UPDATE siap_bank_import_batches
+         SET manual_opening_balance=?,manual_closing_balance=?,corrected_by=?,corrected_at=UTC_TIMESTAMP()
+         WHERE id=?`,[opening,closing,user.id,params.id]
+      );
+      await auditLog({user,action:"BANK_IMPORT_BALANCE_CORRECTION",entityType:"BANK_IMPORT",entityId:params.id,request,metadata:{accountId:String(batch.bank_account_id),sourceOpening:Number(batch.statement_opening_balance),sourceClosing:Number(batch.statement_closing_balance),manualOpening:opening,manualClosing:closing}},conn);
+    });
     return NextResponse.json({ok:true});
   }catch(e){
-    return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Gagal mengoreksi saldo import."},{status:400});
+    return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Gagal mengoreksi saldo import."},{status:bankWriteStatus(e)});
   }
 }

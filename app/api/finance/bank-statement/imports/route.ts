@@ -17,7 +17,7 @@ export async function GET(request:Request){
     let where="";
     if(accountId){where="WHERE b.bank_account_id=?";params.push(accountId);}
     const [rows]=await db.query<RowDataPacket[]>(
-      `SELECT b.id,b.bank_account_id,a.bank_name,a.account_name,a.account_number,b.original_name,b.source_bank,b.source_format,b.parser_version,
+      `SELECT b.id,b.bank_account_id,a.bank_name,a.account_name,a.account_number,a.finance_locked,b.original_name,b.source_bank,b.source_format,b.parser_version,
               DATE_FORMAT(b.statement_date,'%Y-%m-%d') statement_date,
               DATE_FORMAT(b.period_from,'%Y-%m-%d') period_from,
               DATE_FORMAT(b.period_to,'%Y-%m-%d') period_to,

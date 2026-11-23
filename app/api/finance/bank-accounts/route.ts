@@ -14,7 +14,10 @@ export async function GET(){
   if(!user) return NextResponse.json({ok:false,error:"Unauthorized"},{status:401});
   if(!canSeeBankStatement(user.role)) return NextResponse.json({ok:false,error:"Forbidden"},{status:403});
   const [rows]=await db.query<RowDataPacket[]>(
-    `SELECT a.*,u.name updated_by_name
+    `SELECT a.*,u.name updated_by_name,
+       DATE_FORMAT(LEAST(a.opening_balance_date, COALESCE(
+         (SELECT MIN(b.period_from) FROM siap_bank_import_batches b WHERE b.bank_account_id=a.id AND b.status='ACTIVE'),
+         a.opening_balance_date)), '%Y-%m-%d') first_data_date
      FROM siap_bank_accounts a
      JOIN siap_users u ON u.id=a.updated_by
      WHERE a.is_active=1

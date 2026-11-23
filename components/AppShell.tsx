@@ -55,7 +55,7 @@ export default function AppShell({ user, rootName, targetId, children }: {
     ]},
     {label:"Perbankan",items:[
       {href:"/finance/bank-statement",label:"Rekening Koran",icon:"▤",roles:["ROOT_ADMIN","FINANCE","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR"]},
-      {href:"/finance/bank-statement/import",label:"Import BRI",icon:"↑",roles:["ROOT_ADMIN","FINANCE","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR"]},
+      {href:"/finance/bank-statement/import",label:"Impor Rekening Koran",icon:"↑",roles:["ROOT_ADMIN","FINANCE","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR"]},
       {href:"/finance/bank-statement/documents",label:"Dokumen Bank",icon:"▰",roles:["ROOT_ADMIN","FINANCE","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR"]},
     ]},
     {label:"Administrasi",items:[

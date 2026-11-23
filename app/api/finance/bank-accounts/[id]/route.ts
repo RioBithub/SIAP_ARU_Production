@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
-import type { ResultSetHeader } from "mysql2";
 import { getCurrentUser } from "@/lib/auth";
-import { db } from "@/lib/db";
+import { bankWriteStatus, withBankAccountWrite } from "@/lib/bank-write";
 import { auditLog } from "@/lib/audit";
 import { canEditFinance } from "@/lib/permissions";
 import { amount, dateOnly, required, str } from "@/lib/http";
@@ -19,14 +18,15 @@ export async function PATCH(request:Request,{params}:{params:{id:string}}){
     const accountNumber=required(b.account_number,"Nomor rekening",120);
     const openingBalance=amount(b.opening_balance,"Saldo awal");
     const openingBalanceDate=dateOnly(b.opening_balance_date,"Tanggal saldo awal");
-    const [result]=await db.execute<ResultSetHeader>(
-      `UPDATE siap_bank_accounts SET bank_name=?,account_name=?,account_number=?,product_name=?,currency=?,branch_name=?,unit_name=?,company_address=?,opening_balance=?,opening_balance_date=?,updated_by=? WHERE id=? AND is_active=1`,
-      [bankName,accountName,accountNumber,str(b.product_name,150)||null,(str(b.currency,10)||"IDR").toUpperCase(),str(b.branch_name,180)||null,str(b.unit_name,180)||null,str(b.company_address,500)||null,openingBalance,openingBalanceDate,user.id,params.id]
-    );
-    if(!result.affectedRows) return NextResponse.json({ok:false,error:"Rekening tidak ditemukan."},{status:404});
-    await auditLog({user,action:"BANK_ACCOUNT_UPDATE",entityType:"BANK_ACCOUNT",entityId:params.id,metadata:{bankName,accountName,accountNumber,openingBalance,openingBalanceDate},request});
+    await withBankAccountWrite(user.role,params.id,async conn=>{
+      await conn.execute(
+        `UPDATE siap_bank_accounts SET bank_name=?,account_name=?,account_number=?,product_name=?,currency=?,branch_name=?,unit_name=?,company_address=?,opening_balance=?,opening_balance_date=?,updated_by=? WHERE id=? AND is_active=1`,
+        [bankName,accountName,accountNumber,str(b.product_name,150)||null,(str(b.currency,10)||"IDR").toUpperCase(),str(b.branch_name,180)||null,str(b.unit_name,180)||null,str(b.company_address,500)||null,openingBalance,openingBalanceDate,user.id,params.id]
+      );
+      await auditLog({user,action:"BANK_ACCOUNT_UPDATE",entityType:"BANK_ACCOUNT",entityId:params.id,metadata:{bankName,accountName,accountNumber,openingBalance,openingBalanceDate},request},conn);
+    });
     return NextResponse.json({ok:true});
   }catch(e){
-    return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Gagal mengubah rekening."},{status:400});
+    return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Gagal mengubah rekening."},{status:bankWriteStatus(e)});
   }
 }
