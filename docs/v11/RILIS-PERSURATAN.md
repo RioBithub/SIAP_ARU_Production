@@ -141,3 +141,9 @@ Di **Perbankan → Rincian Rekening Koran**, pilih rekening BRI atau Mandiri lal
 Rincian menampilkan angka buku bank dan tautan ke transaksi rekening koran yang punya satu pasangan berdasarkan tanggal, arah mutasi, dan nominal. Rincian mengikuti koreksi atau pembatalan transaksi ketika laporan dimuat ulang. Periksa baris berstatus **Belum cocok** atau **Perlu diperiksa**. Pilih periode untuk mengunduh hasil ke Excel.
 
 Di **User & Role → Edit Profil**, Root Admin dapat mengubah Unit dan Alias. Alias tampil di bawah nama akun dan bisa dicari saat ganti akun. Pengguna juga dapat mengubah aliasnya melalui **Profil Saya**. Perubahan tercatat sebagai `USER_PROFILE_UPDATE` di Audit Log.
+
+### Tanda tangan Surat Keluar
+
+Setelah ACC final dan finalisasi nomor jika melalui Sekretariat, buka **Tanda Tangan Surat Keluar** di detail surat. Staff penyusun dan petugas Sekretariat yang dapat mengakses surat bisa mengunggah PDF final, termasuk PDF dari Mekari atau hasil pindai. Saat menerbitkan, pilih **Gunakan PDF final yang sudah disimpan**. PDF final dapat diunduh dari panel yang sama dan PDF draf tetap tersedia di detail.
+
+Jika Sandbox aktif, pilih **Mekari Sign Sandbox** pada PDF utama untuk uji tanda tangan. Pada produksi, gunakan unggahan PDF bertanda tangan untuk penerbitan. Pada Nota Dinas, Staff penyusun dan Sekretariat yang ditunjuk dapat menggunakan Sandbox serta mengunggah PDF bertanda tangan, termasuk PDF dari Mekari.

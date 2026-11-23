@@ -14,6 +14,8 @@ import {
 } from "@/lib/mekari-sign";
 import { latestMekariSendFailure, type MekariSendFailureNotice } from "@/lib/mekari-signing-audit";
 import { readStoredFile } from "@/lib/upload";
+import type { SessionUser } from "@/lib/types";
+import { canPrepareOutgoingSignature } from "@/lib/outgoing-signature";
 import { saveProof } from "@/lib/v11-data";
 
 export const runtime = "nodejs";
@@ -32,13 +34,14 @@ function publicJob(job: RowDataPacket | null, failure?: MekariSendFailureNotice 
     send_failure: failure ?? undefined };
 }
 
-async function lockSigningLetter(conn: PoolConnection, id: string) {
+async function lockSigningLetter(conn: PoolConnection, id: string, user: SessionUser) {
   const [rows] = await conn.query<RowDataPacket[]>(
-    `SELECT l.status,l.direction,l.` + "`current_role`" + ` AS owner_role
+    `SELECT l.status,l.direction,l.uses_secretariat,l.created_by
      FROM siap_letters l JOIN siap_v11_letters v ON v.letter_id=l.id WHERE l.id=? AND l.deleted_at IS NULL FOR UPDATE`, [id],
   );
-  if (!rows[0] || rows[0].direction !== "OUTGOING" || rows[0].status !== "WAITING_SIGNATURE" ||
-      rows[0].owner_role !== "SECRETARIAT") throw new Error("Surat belum menunggu tanda tangan Sekretariat.");
+  const letter = rows[0];
+  if (!letter || !canPrepareOutgoingSignature(user, letter)) throw new Error("Surat belum siap ditandatangani oleh akun ini.");
+  return String(letter.status);
 }
 
 async function signingPdf(conn: PoolConnection, letterId: string, value: unknown) {
@@ -66,7 +69,8 @@ async function signingPdf(conn: PoolConnection, letterId: string, value: unknown
 export async function GET(_: Request, { params }: { params: { id: string } }) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ ok: false }, { status: 401 });
-  if (!await getAccessibleLetter(user, params.id) || !canHandleSecretariat(user.role)) {
+  const letter = await getAccessibleLetter(user, params.id);
+  if (!letter || (!canHandleSecretariat(user.role) && !canPrepareOutgoingSignature(user, letter))) {
     return NextResponse.json({ ok: false }, { status: 403 });
   }
   const job = await getJob(db, params.id);
@@ -77,7 +81,8 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
-  if (!canHandleSecretariat(user.role) || !await getAccessibleLetter(user, params.id)) {
+  const letter = await getAccessibleLetter(user, params.id);
+  if (!letter || (!canHandleSecretariat(user.role) && !canPrepareOutgoingSignature(user, letter))) {
     return NextResponse.json({ ok: false, error: "Forbidden" }, { status: 403 });
   }
   const mode = mekariMode();
@@ -91,7 +96,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
     if (body.action === "PREDICT") {
       if (mode !== "sandbox") throw new Error("Prediksi posisi tersedia dalam mode Mekari Sandbox.");
       const source = await withTransaction(async conn => {
-        await lockSigningLetter(conn, params.id);
+        await lockSigningLetter(conn, params.id, user);
         const job = await getJob(conn, params.id);
         if (job && (job.mode !== mode || !canRetrySandboxJob(job.status, job.provider_id, job.final_attachment_id))) {
           throw new Error("Surat ini sudah memiliki permintaan tanda tangan.");
@@ -106,7 +111,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
     if (body.action === "START") {
       const signing = mode === "sandbox" ? configuredSandboxSigning(body) : null;
       const result = await withTransaction(async conn => {
-        await lockSigningLetter(conn, params.id);
+        await lockSigningLetter(conn, params.id, user);
         const existing = await getJob(conn, params.id, true);
         if (existing && (mode !== "sandbox" || existing.mode !== mode || body.retry_failed !== true ||
             !canRetrySandboxJob(existing.status, existing.provider_id, existing.final_attachment_id))) {
@@ -154,7 +159,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
     }
     if (body.action !== "REFRESH") throw new Error("Aksi Mekari tidak dikenal.");
     const job = await withTransaction(async conn => {
-      await lockSigningLetter(conn, params.id);
+      await lockSigningLetter(conn, params.id, user);
       const current = await getJob(conn, params.id, true);
       if (!current || current.mode !== mode) throw new Error("Permintaan Mekari untuk mode ini belum ada.");
       const retryAfter = current.status === "IN_PROGRESS" ? sandboxPollDelay(current.next_poll_at) : 0;
@@ -182,7 +187,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
     }
     if (status === "IN_PROGRESS") return NextResponse.json({ ok: true, data: publicJob(current), progress, retry_after: job.retryAfter });
     const data = await withTransaction(async conn => {
-      await lockSigningLetter(conn, params.id);
+      const statusAtSigning = await lockSigningLetter(conn, params.id, user);
       const latest = await getJob(conn, params.id, true);
       if (!latest || latest.id !== current.id || latest.status !== "IN_PROGRESS") return publicJob(latest);
       let attachmentId: string | null = null;
@@ -192,8 +197,8 @@ export async function POST(request: Request, { params }: { params: { id: string 
         const actionId = randomUUID();
         await conn.execute(
           `INSERT INTO siap_letter_actions (id,letter_id,actor_user_id,action,from_status,to_status,comment)
-           VALUES (?,?,?,'MEKARI_PDF_READY','WAITING_SIGNATURE','WAITING_SIGNATURE',?)`,
-          [actionId, params.id, user.id, mode === "mock" ? "PDF simulasi tersedia." : "PDF Mekari sandbox tersedia."],
+           VALUES (?,?,?,'MEKARI_PDF_READY',?,?,?)`,
+          [actionId, params.id, user.id, statusAtSigning, statusAtSigning, mode === "mock" ? "PDF simulasi tersedia." : "PDF Mekari sandbox tersedia."],
         );
         attachmentId = await insertLetterAttachment(conn, params.id, user.id, file, "PROCESS", actionId);
       }

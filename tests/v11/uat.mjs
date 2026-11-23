@@ -1778,11 +1778,12 @@ try {
     await post("secretariat", endpoint, signature(source), 400);
     await post("ops", endpoint, { action: "GENERATE" });
     const current = (await detail("ops", id)).notaDocument.source.id;
-    await post("secretariat", endpoint, signature(current));
+    await post("secretariat", endpoint, file(multipart({ action: "UPLOAD_SIGNATURE", source_id: current,
+      signature_method: "MEKARI_MANUAL" }, []), "signed_file", "SIMULASI-Final-Mekari.pdf", signed));
     await letterAction("staff", id, "SUBMIT", {}, [], 400);
     assert.equal((await letterAction("ops", id, "SUBMIT")).status, "DIRECTOR_OPS_REVIEW");
     await call("secretariat", url, { status: 403 });
-    assert.equal((await detail("dirops", id)).notaDocument.method, "BASAH");
+    assert.equal((await detail("dirops", id)).notaDocument.method, "MEKARI_MANUAL");
     assert.equal((await detail("ops", id)).notaRouting.authorId, roles.ops.id);
     return "Staff menyiapkan draf, Manager mengajukan, Sekretariat yang ditunjuk mengunggah PDF. Revisi membatalkan bukti lama dan akses bantuan berakhir ketika nota diajukan.";
   });
@@ -2116,10 +2117,38 @@ try {
     await assign("managerit", row.id, "staffsupport", { parent_id: parent.id }, 400);
     return "Daftar unit mengikuti akun aktif, alias bisa dicari, Root Admin ditolak, Manager IT mendelegasikan lewat unit atau PIC lintas unit yang diizinkan.";
   });
+  await test(74, async () => {
+    const row = await outgoing("ttd-surat-keluar");
+    const endpoint = "/api/letters/" + row.id + "/signed-document";
+    const signed = fixturePdf(["SIMULASI PDF final bertanda tangan dari luar SIAP"]);
+    const upload = () => file(multipart({ signature_method: "MEKARI_MANUAL" }, []), "signed_file", "SIMULASI-final.pdf", signed);
+    await post("staff", endpoint, upload(), 403);
+    await approveOut(row.id);
+    await post("sdm", endpoint, upload(), 403);
+    const note = await detail("staff", row.id);
+    assert.equal(note.outgoingSigning, true);
+    const signing = "/api/letters/" + row.id + "/signing";
+    const job = await post("staff", signing, { action: "START", attachment_id: note.originalId }, 201);
+    assert.equal(job.status, "IN_PROGRESS");
+    assert.equal((await post("staff", signing, { action: "REFRESH" })).status, "COMPLETED");
+    const first = await post("staff", endpoint, upload(), 201);
+    const final = await post("secretariat", endpoint, upload(), 201);
+    assert.notEqual(first.attachmentId, final.attachmentId);
+    await letterAction("staff", row.id, "ISSUE", { signature_method: "SAVED_SIGNATURE" }, [], 400);
+    const issued = await letterAction("secretariat", row.id, "ISSUE", { signature_method: "SAVED_SIGNATURE" });
+    assert.equal(issued.status, "ISSUED");
+    const result = await detail("secretariat", row.id);
+    assert.equal(result.originalId, note.originalId);
+    assert.equal(result.v11.signature_attachment_id, final.attachmentId);
+    assert.equal(result.attachments.find(item => item.id === final.attachmentId).source_kind, "SIGNED");
+    assert.deepEqual((await call("staff", "/api/attachments/" + final.attachmentId, { raw: true })).bytes, signed);
+    await post("secretariat", endpoint, upload(), 403);
+    return "Staff dapat meminta Mekari simulasi dan mengunggah PDF final. Sekretariat mengganti PDF lalu menerbitkan memakai file tersimpan. Hak penerbitan, status, dan PDF asli terjaga.";
+  });
 } finally {
   await sql.end();
   await writeFile(path.join(out, "uat.json"), JSON.stringify({ runId, db: profile.version, cases: result }, null, 2));
 }
 const totals = Object.fromEntries(["PASS","FAIL","SKIP"].map(status => [status,result.filter(row=>row.status===status).length]));
 console.log(JSON.stringify(totals));
-if (totals.FAIL || result.length !== 73) process.exitCode=1;
+if (totals.FAIL || result.length !== 74) process.exitCode=1;

@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { NextResponse } from "next/server";
+import { uploadedOutgoingSignatureMethod } from "@/lib/outgoing-signature";
 import { isDirectNota, isNotaDraft, notaAuthorId, notaDocument, requireNotaSignature } from "@/lib/nota-document";
 import { activeNotaAccount, listNotaRecipients, notaPrimaryTarget, validateNotaRecipients } from "@/lib/nota-routing";
 import { canRespondToNota } from "@/lib/nota-responses";
@@ -423,9 +424,20 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
           if (pilotJobs.length) throw new Error("Surat simulasi dengan konfigurasi pilot lama tidak dapat diterbitkan.");
         }
 
-        if (secretariat || (documentType === SPK_OUTGOING && await getBusinessDocumentRow(params.id, conn))) {
+        if (secretariat || (documentType === SPK_OUTGOING && await getBusinessDocumentRow(params.id, conn)) ||
+            (workflow && (parsed.signatureMethod || workflow.signature_attachment_id))) {
           const method = parsed.signatureMethod;
-          if (workflow && method === "MEKARI_API") {
+          if (workflow && (method === "SAVED_SIGNATURE" || (!method && workflow.signature_attachment_id))) {
+            const savedMethod = uploadedOutgoingSignatureMethod(workflow.signature_provenance);
+            const [[signed]] = await conn.query<RowDataPacket[]>(
+              "SELECT id FROM siap_attachments WHERE id=? AND letter_id=? AND disposition_id IS NULL AND attachment_kind='PROCESS'",
+              [workflow.signature_attachment_id, params.id],
+            );
+            if (!savedMethod || !signed || parsed.signedFile) throw new Error("PDF bertanda tangan tersimpan belum tersedia.");
+            signature = savedMethod === "BASAH" ? "BASAH" : "DIGITAL";
+            signatureProvenance = savedMethod;
+            signatureAttachmentId = signed.id;
+          } else if (workflow && method === "MEKARI_API") {
             const [signing] = await conn.query<RowDataPacket[]>(
               "SELECT final_attachment_id,mode FROM siap_v11_signing WHERE letter_id=? AND status='COMPLETED'", [params.id],
             );

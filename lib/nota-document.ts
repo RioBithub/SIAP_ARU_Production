@@ -64,7 +64,7 @@ export async function notaDocument(conn: Queryable, letterId: string) {
      LEFT JOIN siap_v11_attachment_signing job ON job.source_attachment_id=a.id AND job.status='COMPLETED'
      LEFT JOIN siap_attachments signed ON signed.id=job.final_attachment_id AND signed.letter_id=l.id
      LEFT JOIN siap_attachments manual ON manual.id=v.signature_attachment_id AND manual.letter_id=l.id
-       AND manual.disposition_id IS NULL AND v.signature_provenance IN ('DIGITAL','BASAH') AND a.id IS NOT NULL
+       AND manual.disposition_id IS NULL AND v.signature_provenance IN ('DIGITAL','BASAH','MEKARI_MANUAL') AND a.id IS NOT NULL
      WHERE l.id=? AND l.direction='INTERNAL'`, [letterId],
   );
   if (!row) return null;
@@ -72,7 +72,7 @@ export async function notaDocument(conn: Queryable, letterId: string) {
     source: row.source_id ? { id: String(row.source_id), original_name: String(row.original_name) } : null,
     sourceKind: row.source_kind as "UPLOAD" | "GENERATED" | null,
     signed: row.signed_id ? { id: String(row.signed_id), original_name: String(row.signed_name) } : null,
-    method: row.method as "DIGITAL" | "BASAH" | "MEKARI_SANDBOX" | null,
+    method: row.method as "DIGITAL" | "BASAH" | "MEKARI_MANUAL" | "MEKARI_SANDBOX" | null,
     manualReason: (row.manual_reason as string | null) ?? null,
     needsSource: Boolean(row.source_kind && !row.source_id),
   };

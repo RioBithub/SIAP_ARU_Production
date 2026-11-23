@@ -85,6 +85,7 @@ const letterActions: Record<string, string> = {
   GENERATE_OUTGOING_PDF: "PDF Surat Keluar dibuat",
   DECLARE_NOTA_SIGNED: "Tanda tangan dicatat oleh pengirim",
   RESET_NOTA_SIGNATURE: "Nota Dinas ditandai belum ditandatangani",
+  UPLOAD_OUTGOING_SIGNATURE: "PDF Surat Keluar bertanda tangan diunggah",
   UPLOAD_NOTA_SIGNATURE: "PDF bertanda tangan diunggah",
   ASSIGN_NOTA_SIGNATURE: "Bantuan tanda tangan diperbarui",
   UPDATE_INVOICE_PAYMENT_MODE: "Jenis pembayaran invoice diperbarui",

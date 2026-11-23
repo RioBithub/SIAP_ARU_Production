@@ -9,6 +9,7 @@ import { getAccessibleLetter } from "@/lib/letter-access";
 import { discardUncommittedFiles, insertLetterAttachment, type StoredLetterFile } from "@/lib/letter-uploads";
 import { canEditNotaDocument, canUploadNotaSignature, isNotaDraft, notaAuthorId,
   notaDocument, requiresNotaProof, saveNotaSource } from "@/lib/nota-document";
+import { uploadedOutgoingSignatureMethod } from "@/lib/outgoing-signature";
 import { activeNotaAccount, listNotaRecipients, notaPartyLabel } from "@/lib/nota-routing";
 import { checkedCorrespondenceLayout } from "@/lib/correspondence-layout";
 import { correspondenceDraft, saveCorrespondencePdf, senderTitle } from "@/lib/correspondence-draft-data";
@@ -94,7 +95,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
           const file = takeFile(form?.get("signed_file"));
           const method = String(body.signature_method || "");
           if (!file) throw new Error("Pilih PDF yang sudah bertanda tangan.");
-          if (method !== "DIGITAL" && method !== "BASAH") throw new Error("Pilih metode tanda tangan.");
+          if (!uploadedOutgoingSignatureMethod(method)) throw new Error("Pilih metode tanda tangan.");
           signedFile = await saveProof(file, true, "ORIGINAL");
           staged.push(signedFile);
           // The action row must exist before inserting its attachment.
