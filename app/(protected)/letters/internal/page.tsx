@@ -1,7 +1,7 @@
-import LettersClient from "@/components/LettersClient";
+import CorrespondenceScreen from "@/components/CorrespondenceScreen";
 import { requireUser } from "@/lib/auth";
 
 export default async function Page(){
   const user=await requireUser();
-  return <LettersClient direction="INTERNAL" user={user}/>;
+  return <CorrespondenceScreen view="INTERNAL" user={user}/>;
 }

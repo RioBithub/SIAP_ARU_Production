@@ -1872,10 +1872,57 @@ try {
     await call("finance", "/api/letters/" + id, { status: 403 });
     return "Balasan resmi dari Dirops terhubung ke nota asli, mewarisi sifat rahasia dan dikirim kepada pengirim resmi. Staff pada nota asal dapat menyiapkan draf untuk Dirops.";
   });
+  await test(70, async () => {
+    const manifest = JSON.parse(await readFile(".next/react-loadable-manifest.json", "utf8"));
+    const modules = Object.entries(manifest);
+    const letters = modules.find(([name]) => name.endsWith("@/components/LettersClient"))?.[1].files ?? [];
+    const dispositions = modules.find(([name]) => name.endsWith("@/components/DispositionsClient"))?.[1].files ?? [];
+    const asset = letters.find(file => file.endsWith(".js") && dispositions.includes(file));
+    assert(asset, "Aset JavaScript Persuratan untuk simulasi 404 tidak ditemukan.");
+    const browser = await chromium.launch({ executablePath: env.SIAP_V11_CHROMIUM || undefined,
+      headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    try {
+      for (const [route, heading] of [
+        ["/letters/incoming", "Surat Masuk"], ["/letters/internal", "Nota Dinas"],
+        ["/letters/outgoing", "Surat Keluar"], ["/dispositions", "Disposisi"],
+      ]) {
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+        try {
+          const value = sessions.get("ops").slice("siap_session=".length);
+          await context.addCookies([{ name: "siap_session", value, url: base.origin }]);
+          const page = await context.newPage();
+          const matchesAsset = url => url.pathname === "/_next/" + asset;
+          let blocked = 0;
+          await page.route(matchesAsset, request => {
+            blocked++;
+            return request.fulfill({ status: 404 });
+          });
+          await page.goto(new URL("/archive", base).href);
+          await page.getByRole("heading", { name: "Arsip Dokumen", exact: true }).waitFor();
+          assert.equal(blocked, 0);
+
+          const target = new URL(route + "?sqa=reload", base).href;
+          await page.goto(target);
+          const reload = page.getByRole("button", { name: "Muat ulang halaman", exact: true });
+          await reload.waitFor();
+          assert(blocked > 0);
+          await page.unroute(matchesAsset);
+          await reload.click();
+          await page.getByRole("heading", { name: heading, exact: true }).waitFor();
+          assert.equal(page.url(), target);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+    }
+    return "Empat halaman Persuratan pulih setelah aset tersedia dan pengguna memilih muat ulang. Arsip Dokumen terbuka saat aset uji gagal.";
+  });
 } finally {
   await sql.end();
   await writeFile(path.join(out, "uat.json"), JSON.stringify({ runId, db: profile.version, cases: result }, null, 2));
 }
 const totals = Object.fromEntries(["PASS","FAIL","SKIP"].map(status => [status,result.filter(row=>row.status===status).length]));
 console.log(JSON.stringify(totals));
-if (totals.FAIL || result.length !== 69) process.exitCode=1;
+if (totals.FAIL || result.length !== 70) process.exitCode=1;

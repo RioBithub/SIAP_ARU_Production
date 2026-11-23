@@ -42,6 +42,11 @@ Jalankan dari sesi operator VPS yang mengelola PM2 `siap-aru`. Langkah ini untuk
   upload_dir="$(node -e "require('@next/env').loadEnvConfig(process.cwd(),false);process.stdout.write(require('path').resolve(process.env.UPLOAD_DIR||'./storage'))")"
   tar -czf "$backup/lampiran.tar.gz" -C "$upload_dir" .
   tar -tzf "$backup/lampiran.tar.gz" >/dev/null
+  if [ -f .next/siap-static-rilis.tar.gz ]; then
+    cp .next/siap-static-rilis.tar.gz "$backup/next-static.tar.gz"
+  elif [ -d .next/static ]; then
+    tar -czf "$backup/next-static.tar.gz" -C .next static
+  fi
   printf 'Backup tersimpan di %s\n' "$backup"
 
   git pull --ff-only origin main
@@ -49,6 +54,10 @@ Jalankan dari sesi operator VPS yang mengelola PM2 `siap-aru`. Langkah ini untuk
   npm ci --include=dev
   npm run typecheck
   npm run build
+  tar -czf .next/siap-static-rilis.tar.gz -C .next static
+  if [ -f "$backup/next-static.tar.gz" ]; then
+    tar --skip-old-files -xzf "$backup/next-static.tar.gz" -C .next
+  fi
 
   cat "${migrations[@]}" | mariadb "${db_args[@]}" aru_siap
   if [ -d .next/standalone ]; then
@@ -65,8 +74,11 @@ Jalankan dari sesi operator VPS yang mengelola PM2 `siap-aru`. Langkah ini untuk
 
 Ketik password admin MariaDB saat muncul prompt. Jika backup basis data atau lampiran gagal, periksa penyebabnya sebelum meneruskan rilis. Jika proses berhenti di migrasi atau build, lihat baris error pertama. Migrasi bisa dijalankan ulang. Setelah restart, health yang diharapkan ialah `{"ok":true,"status":"healthy","database":"connected"}`.
 
+Satu rilis aset statis sebelumnya tetap tersedia setelah restart untuk tab yang masih memuat versi lama. Arsip `.next/siap-static-rilis.tar.gz` berisi aset build baru saja, sehingga rilis berikutnya mengambil satu set aset sebelumnya.
+
 ## Verifikasi dari situs utama
 
+- Setelah restart, buka **Surat Masuk**, **Nota Dinas**, **Surat Keluar**, dan **Disposisi** dari tab baru dan tab yang sudah terbuka sebelum rilis. Jika halaman menampilkan pesan gagal dimuat, klik **Muat ulang halaman** untuk mengambil tampilan terbaru.
 - Sebagai Sekretariat, buka Surat Masuk dan Surat Keluar. Daftar awal memuat semua surat yang dapat diakses. Gunakan **Antrian Sekretariat** untuk memfilter ke pekerjaan yang masih berada di Sekretariat.
 - Buka satu lampiran PDF simulasi lewat **Pratinjau**. Untuk menguji undangan, gunakan dokumen dan email penguji yang disetujui mengikuti [panduan Mekari Sandbox](MEKARI-SANDBOX.md).
 - Sebagai Root Admin, buka **Pengaturan Persuratan** lalu pastikan pilihan tujuan Surat Masuk dan PIC sesuai akun dan unit perusahaan. **Sampah** menyediakan **Pulihkan** dan **Hapus Permanen**. Uji hapus permanen hanya pada surat simulasi yang dibuat untuk uji tersebut. Masukkan alasan dan ketik `HAPUS PERMANEN`. Status tanda tangan aktif, catatan Finance yang terhubung, dan rujukan bisnis dapat mencegah penghapusan.
