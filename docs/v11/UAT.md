@@ -99,6 +99,8 @@ Keempat kasus Pak Nor juga lulus pada skema terpisah. PT XYZ memperlihatkan hasi
 
 22 November 2026 · Run A78B931 menghasilkan **67 PASS, 0 FAIL, 2 SKIP dari 69 skenario** pada MariaDB lokal. Typecheck, build, sepuluh tes adapter Mekari, migrasi ulang dan pemulihan 43 tabel lulus. Dua uji Mekari eksternal dilewati.
 
+23 November 2026 · Run C628C8F menghasilkan **67 PASS, 0 FAIL, 3 SKIP dari 70 skenario** pada MariaDB lokal. UAT-070 menahan satu aset JavaScript Persuratan dengan HTTP 404 pada Chromium ponsel. Surat Masuk, Nota Dinas, Surat Keluar, dan Disposisi menampilkan pilihan **Muat ulang halaman**, lalu kembali ke alamat semula saat aset tersedia. Arsip Dokumen dapat dibuka saat aset uji diblokir. Pemeriksaan backup/restore dan kedua uji Mekari eksternal dilewati pada run ini.
+
 | Kasus | Hasil |
 | --- | --- |
 | UAT-067 | Staff menyiapkan draf untuk Manager. Manager menunjuk Sekretariat, berkas bertanda tangan dapat diunduh dengan isi yang sama, dan revisi membatalkan keterkaitan tanda tangan lama. |
