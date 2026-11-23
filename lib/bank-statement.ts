@@ -14,6 +14,7 @@ export type BankStatementAccount = {
   opening_balance:number;
   opening_balance_date:string;
   is_active:number;
+  finance_locked:number;
 };
 
 export type BankStatementRow = {
@@ -26,6 +27,7 @@ export type BankStatementRow = {
   credit_amount:number;
   notes:string|null;
   creator_name:string;
+  imported:boolean;
   balance:number;
 };
 
@@ -49,10 +51,10 @@ export async function getBankStatement(accountId:string,fromRaw:string,toRaw:str
   const manualOpeningDate=String(rawAccount.opening_balance_date_text||rawAccount.opening_balance_date).slice(0,10);
   let anchorDate=manualOpeningDate;
   let anchorBalance=Number(rawAccount.opening_balance||0);
-  let balanceSource:{type:"MANUAL"|"BRI_IMPORT";import_id?:string;period_from?:string;period_to?:string;statement_date?:string;official_closing_balance?:number}|null={type:"MANUAL"};
+  let balanceSource:{type:"MANUAL"|"BRI_IMPORT"|"MANDIRI_IMPORT";import_id?:string;period_from?:string;period_to?:string;statement_date?:string;official_closing_balance?:number}|null={type:"MANUAL"};
 
   const [anchorRows]=await db.query<RowDataPacket[]>(
-    `SELECT id,DATE_FORMAT(statement_date,'%Y-%m-%d') statement_date_text,
+    `SELECT id,source_bank,DATE_FORMAT(statement_date,'%Y-%m-%d') statement_date_text,
             DATE_FORMAT(period_from,'%Y-%m-%d') period_from_text,DATE_FORMAT(period_to,'%Y-%m-%d') period_to_text,
             COALESCE(manual_opening_balance,statement_opening_balance) effective_opening,
             COALESCE(manual_closing_balance,statement_closing_balance) effective_closing
@@ -66,7 +68,7 @@ export async function getBankStatement(accountId:string,fromRaw:string,toRaw:str
     anchorDate=String(a.period_from_text);
     anchorBalance=Number(a.effective_opening||0);
     balanceSource={
-      type:"BRI_IMPORT",import_id:String(a.id),period_from:String(a.period_from_text),period_to:String(a.period_to_text),
+      type:a.source_bank==="MANDIRI"?"MANDIRI_IMPORT":"BRI_IMPORT",import_id:String(a.id),period_from:String(a.period_from_text),period_to:String(a.period_to_text),
       statement_date:String(a.statement_date_text),official_closing_balance:Number(a.effective_closing||0)
     };
   }else if(from<manualOpeningDate){
@@ -81,33 +83,33 @@ export async function getBankStatement(accountId:string,fromRaw:string,toRaw:str
        AND transaction_at<CONCAT(?, ' 00:00:00')`,
     [accountId,anchorDate,from]
   );
-  const openingBalance=anchorBalance+Number(beforeRows[0]?.net||0);
+  const openingBalance=Math.round((anchorBalance+Number(beforeRows[0]?.net||0))*100)/100;
 
   const [txRows]=await db.query<RowDataPacket[]>(
     `SELECT t.id,
             DATE_FORMAT(t.transaction_at,'%Y-%m-%d %H:%i:%s') transaction_at_text,
-            t.description,t.teller_id,t.reference_no,t.debit_amount,t.credit_amount,t.notes,t.created_at,
+            t.description,t.teller_id,t.reference_no,t.debit_amount,t.credit_amount,t.notes,t.created_at,t.import_batch_id,
             u.name creator_name
      FROM siap_bank_transactions t
      JOIN siap_users u ON u.id=t.created_by
      WHERE t.bank_account_id=? AND t.status='ACTIVE'
        AND t.transaction_at>=CONCAT(?, ' 00:00:00')
        AND t.transaction_at<DATE_ADD(CONCAT(?, ' 00:00:00'),INTERVAL 1 DAY)
-     ORDER BY t.transaction_at ASC,t.created_at ASC`,
+     ORDER BY t.transaction_at ASC,t.created_at ASC,t.import_batch_id ASC,t.source_row_no ASC,t.id ASC`,
     [accountId,from,to]
   );
 
-  let running=openingBalance;
+  let running=Math.round(openingBalance*100);
   let totalDebit=0;
   let totalCredit=0;
   const rows:BankStatementRow[]=txRows.map((r:any)=>{
     const debit=Number(r.debit_amount||0);
     const credit=Number(r.credit_amount||0);
-    totalDebit+=debit;
-    totalCredit+=credit;
-    running+=credit-debit;
+    totalDebit+=Math.round(debit*100);
+    totalCredit+=Math.round(credit*100);
+    running+=Math.round(credit*100)-Math.round(debit*100);
     const rawNote=r.notes?String(r.notes):"";
-    const visibleNote=/^Import BRI PDF:/i.test(rawNote)?null:(rawNote||null);
+    const visibleNote=/^Import (?:BRI|MANDIRI) PDF:/i.test(rawNote)?null:(rawNote||null);
     return {
       id:String(r.id),
       transaction_at:String(r.transaction_at_text),
@@ -118,7 +120,8 @@ export async function getBankStatement(accountId:string,fromRaw:string,toRaw:str
       credit_amount:credit,
       notes:visibleNote,
       creator_name:String(r.creator_name||""),
-      balance:running
+      imported:Boolean(r.import_batch_id),
+      balance:running/100
     };
   });
 
@@ -134,16 +137,17 @@ export async function getBankStatement(accountId:string,fromRaw:string,toRaw:str
     company_address:rawAccount.company_address?String(rawAccount.company_address):null,
     opening_balance:anchorBalance,
     opening_balance_date:anchorDate,
-    is_active:Number(rawAccount.is_active||0)
+    is_active:Number(rawAccount.is_active||0),
+    finance_locked:Number(rawAccount.finance_locked||0)
   };
 
   return {
     account,
     period:{from,to},
     opening_balance:openingBalance,
-    total_debit:totalDebit,
-    total_credit:totalCredit,
-    closing_balance:running,
+    total_debit:totalDebit/100,
+    total_credit:totalCredit/100,
+    closing_balance:running/100,
     rows,
     balance_source:balanceSource,
     generated_at:new Date().toISOString()

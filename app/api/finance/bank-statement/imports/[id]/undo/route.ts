@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { getCurrentUser } from "@/lib/auth";
 import { canEditFinance } from "@/lib/permissions";
-import { withTransaction } from "@/lib/db";
+import { db } from "@/lib/db";
+import { BankWriteError, bankWriteStatus, withBankAccountWrite } from "@/lib/bank-write";
 import { auditLog } from "@/lib/audit";
 import { required } from "@/lib/http";
 
@@ -15,8 +16,10 @@ export async function POST(request:Request,{params}:{params:{id:string}}){
   try{
     const body=await request.json().catch(()=>({}));
     const reason=required(body.reason,"Alasan undo",1000);
-    const result=await withTransaction(async conn=>{
-      const [rows]=await conn.query<RowDataPacket[]>(`SELECT id,bank_account_id,status,original_name,inserted_count FROM siap_bank_import_batches WHERE id=? FOR UPDATE`,[params.id]);
+    const [[target]]=await db.query<RowDataPacket[]>("SELECT bank_account_id FROM siap_bank_import_batches WHERE id=?", [params.id]);
+    if(!target) throw new BankWriteError("Riwayat impor tidak ditemukan.",404);
+    const result=await withBankAccountWrite(user.role,String(target.bank_account_id),async conn=>{
+      const [rows]=await conn.query<RowDataPacket[]>(`SELECT id,bank_account_id,status,original_name,source_bank FROM siap_bank_import_batches WHERE id=? FOR UPDATE`,[params.id]);
       const batch=rows[0];
       if(!batch) throw new Error("Riwayat import tidak ditemukan.");
       if(String(batch.status)!=="ACTIVE") throw new Error("Import ini sudah pernah di-undo.");
@@ -27,11 +30,13 @@ export async function POST(request:Request,{params}:{params:{id:string}}){
         `UPDATE siap_bank_import_batches SET status='UNDONE',undone_by=?,undone_at=UTC_TIMESTAMP(),undo_reason=? WHERE id=?`,
         [user.id,reason,params.id]
       );
-      return {accountId:String(batch.bank_account_id),removed,originalName:String(batch.original_name)};
+      await auditLog({user,action:batch.source_bank==="MANDIRI"?"BANK_MANDIRI_IMPORT_UNDO":"BANK_BRI_IMPORT_UNDO",
+        entityType:"BANK_IMPORT",entityId:params.id,request,
+        metadata:{accountId:String(batch.bank_account_id),removedTransactions:removed,originalName:String(batch.original_name),reason}},conn);
+      return {removed};
     });
-    await auditLog({user,action:"BANK_BRI_IMPORT_UNDO",entityType:"BANK_IMPORT",entityId:params.id,request,metadata:{accountId:result.accountId,removedTransactions:result.removed,originalName:result.originalName,reason}});
     return NextResponse.json({ok:true,data:{removed_transactions:result.removed}});
   }catch(e){
-    return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Undo import gagal."},{status:400});
+    return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Undo import gagal."},{status:bankWriteStatus(e)});
   }
 }

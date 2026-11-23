@@ -4,14 +4,15 @@ import { useEffect,useMemo,useState } from "react";
 import type { FormEvent } from "react";
 import type { SessionUser } from "@/lib/types";
 import CurrencyInput from "@/components/CurrencyInput";
+import { useAppDialog } from "@/components/AppDialogProvider";
 
 type Account={
   id:string;bank_name:string;account_name:string;account_number:string;product_name?:string|null;currency:string;
-  branch_name?:string|null;unit_name?:string|null;company_address?:string|null;opening_balance:number;opening_balance_date:string;
+  branch_name?:string|null;unit_name?:string|null;company_address?:string|null;opening_balance:number;opening_balance_date:string;first_data_date?:string;finance_locked:number;
 };
 type Tx={
   id:string;transaction_at:string;description:string;teller_id?:string|null;reference_no?:string|null;
-  debit_amount:number;credit_amount:number;notes?:string|null;creator_name:string;balance:number;
+  debit_amount:number;credit_amount:number;notes?:string|null;creator_name:string;balance:number;imported:boolean;
 };
 type Statement={
   account:Account;period:{from:string;to:string};opening_balance:number;total_debit:number;total_credit:number;
@@ -26,6 +27,7 @@ function localDate(d=new Date()){return `${d.getFullYear()}-${pad(d.getMonth()+1
 function localDateTime(d=new Date()){return `${localDate(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`}
 function firstMonthDay(){const d=new Date();d.setDate(1);return localDate(d)}
 function sqlDate(v?:string|null){return String(v||"").slice(0,10)}
+function firstDataDate(account:Account){return sqlDate(account.first_data_date||account.opening_balance_date)}
 function money(v:number){return new Intl.NumberFormat("id-ID",{minimumFractionDigits:2,maximumFractionDigits:2}).format(Number(v||0))}
 function dateOnlyLabel(v:string){const d=new Date(`${v}T00:00:00`);return new Intl.DateTimeFormat("id-ID",{day:"2-digit",month:"2-digit",year:"numeric"}).format(d)}
 function dateTimeLabel(v:string){const d=new Date(v);if(Number.isNaN(d.getTime()))return v;return new Intl.DateTimeFormat("id-ID",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}).format(d).replace(",","")}
@@ -40,7 +42,9 @@ function Modal({title,subtitle,onClose,children}:{title:string;subtitle?:string;
 }
 
 export default function BankStatementClient({user}:{user:SessionUser}){
-  const canEdit=user.role==="ROOT_ADMIN"||user.role==="FINANCE";
+  const isRoot=user.role==="ROOT_ADMIN";
+  const canEdit=isRoot||user.role==="FINANCE";
+  const dialog=useAppDialog();
   const [accounts,setAccounts]=useState<Account[]>([]);
   const [accountId,setAccountId]=useState("");
   const [from,setFrom]=useState(firstMonthDay());
@@ -67,11 +71,12 @@ export default function BankStatementClient({user}:{user:SessionUser}){
       const j=await r.json();
       if(!j.ok) throw new Error(j.error||"Gagal memuat rekening koran.");
       setStatement(j.data);
+      setAccounts(list=>list.map(account=>account.id===id?{...account,finance_locked:j.data.account.finance_locked}:account));
     }catch(e){setStatement(null);setError(e instanceof Error?e.message:"Gagal memuat rekening koran.")}
     finally{setLoading(false)}
   }
 
-  async function loadAccounts(preferId?:string){
+  async function loadAccounts(preferId?:string,requestedFrom=from,requestedTo=to){
     setError("");
     try{
       const r=await fetch("/api/finance/bank-accounts",{cache:"no-store"});const j=await r.json();
@@ -81,15 +86,22 @@ export default function BankStatementClient({user}:{user:SessionUser}){
       setAccountId(chosen);
       if(chosen){
         const account=list.find(a=>a.id===chosen)!;
-        const safeFrom=firstMonthDay()<sqlDate(account.opening_balance_date)?sqlDate(account.opening_balance_date):firstMonthDay();
-        const nextFrom=from<sqlDate(account.opening_balance_date)?safeFrom:from;
-        setFrom(nextFrom);
-        await loadStatement(chosen,nextFrom,to);
+        const nextFrom=requestedFrom<firstDataDate(account)?firstDataDate(account):requestedFrom;
+        const nextTo=requestedTo<nextFrom?nextFrom:requestedTo;
+        setFrom(nextFrom);setTo(nextTo);
+        await loadStatement(chosen,nextFrom,nextTo);
       }else setStatement(null);
     }catch(e){setError(e instanceof Error?e.message:"Gagal memuat rekening.")}
   }
 
-  useEffect(()=>{void loadAccounts()},[]);
+  useEffect(()=>{
+    const query=new URLSearchParams(window.location.search);
+    const initialFrom=query.get("from");
+    const initialTo=query.get("to");
+    const date=/^\d{4}-\d{2}-\d{2}$/;
+    void loadAccounts(query.get("account_id")||undefined,
+      initialFrom&&date.test(initialFrom)?initialFrom:from,initialTo&&date.test(initialTo)?initialTo:to);
+  },[]);
 
   function setPreset(kind:"week"|"last7"|"month"|"lastweek"){
     const now=new Date();let start=new Date(now),end=new Date(now);
@@ -100,7 +112,7 @@ export default function BankStatementClient({user}:{user:SessionUser}){
     if(kind==="lastweek"){end.setDate(now.getDate()-weekday-1);start=new Date(end);start.setDate(end.getDate()-6)}
     let f=localDate(start),t=localDate(end);
     const account=accounts.find(a=>a.id===accountId);
-    if(account&&f<sqlDate(account.opening_balance_date)) f=sqlDate(account.opening_balance_date);
+    if(account&&f<firstDataDate(account)) f=firstDataDate(account);
     setFrom(f);setTo(t);void loadStatement(accountId,f,t);
   }
 
@@ -151,6 +163,31 @@ export default function BankStatementClient({user}:{user:SessionUser}){
   }
 
   const selected=accounts.find(a=>a.id===accountId)||null;
+  const canChange=canEdit&&(isRoot||!Number(selected?.finance_locked));
+  const canChangeRows=canChange&&statement?.account.id===selected?.id;
+
+  async function changeLock(account:Account){
+    const locked=!Number(account.finance_locked);
+    const confirmed=await dialog.confirm({
+      title:locked?"Kunci Rekening untuk Finance":"Buka Edit untuk Finance",
+      message:locked?`Finance hanya dapat melihat dan mengunduh laporan ${account.bank_name} • ${account.account_number}.`
+        :`Finance kembali dapat mengubah rekening ${account.bank_name} • ${account.account_number}.`,
+      confirmLabel:locked?"Kunci Rekening":"Buka Kunci",
+    });
+    if(!confirmed) return;
+    setSaving(true);setMessage("");setError("");
+    try{
+      const response=await fetch(`/api/finance/bank-accounts/${account.id}/lock`,{
+        method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({locked}),
+      });
+      const result=await response.json();
+      if(!response.ok||!result.ok) throw new Error(result.error||"Status kunci belum tersimpan.");
+      setAccounts(list=>list.map(item=>item.id===account.id?{...item,finance_locked:Number(locked)}:item));
+      setMessage(locked?"Rekening dikunci untuk Finance.":"Kunci rekening dibuka untuk Finance.");
+    }catch(error){setError(error instanceof Error?error.message:"Status kunci belum tersimpan.")}
+    finally{setSaving(false)}
+  }
+
   const exportUrl=useMemo(()=>accountId?`/api/finance/bank-statement/export?account_id=${encodeURIComponent(accountId)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`:"#",[accountId,from,to]);
 
   return <main className="page bank-statement-page">
@@ -162,13 +199,17 @@ export default function BankStatementClient({user}:{user:SessionUser}){
     `}</style>
 
     <div className="bank-statement-screen-only">
-      <div className="page-head"><div><h2>Rekening Koran</h2><p>Input transaksi bank oleh Finance, filter periode bebas, laporan bergaya rekening koran, Excel, dan cetak/simpan PDF.</p></div><div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{canEdit&&<><button className="btn btn-secondary" onClick={()=>openAccount(selected||undefined)}>{selected?"⚙ Data Rekening":"+ Tambah Rekening"}</button>{selected&&<button className="btn btn-primary" onClick={()=>openTx()}>+ Transaksi</button>}</>}</div></div>
-      <div className="notice" style={{marginBottom:14}}><b>Akses:</b> Finance dan Root dapat input/koreksi transaksi. Direktur Operasional dan Direktur Utama bersifat view-only. Pembatalan transaksi tidak menghapus histori; jejaknya masuk Audit Log.</div>
+      <div className="page-head"><div><h2>Rekening Koran</h2><p>Lihat saldo dan transaksi per rekening. Pilih periode untuk ekspor Excel atau cetak laporan.</p></div><div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{isRoot&&selected&&<button className="btn btn-secondary" disabled={saving} onClick={()=>void changeLock(selected)}>
+        {Number(selected.finance_locked)?"Buka Kunci Finance":"Kunci untuk Finance"}
+      </button>}{canChange&&<><button className="btn btn-secondary" onClick={()=>openAccount(selected||undefined)}>{selected?"Data Rekening":"+ Tambah Rekening"}</button>{selected&&<button className="btn btn-primary" onClick={()=>openTx()}>+ Transaksi</button>}</>}</div></div>
+      {selected&&Boolean(Number(selected.finance_locked))&&<div className="notice" style={{marginBottom:14}} role="status">
+        <b>Dikunci untuk Finance.</b> Laporan dan unduhan tetap tersedia.
+      </div>}
       {message&&<div className="success" style={{marginBottom:12}}>{message}</div>}{error&&<div className="error" style={{marginBottom:12}}>{error}</div>}
       <section className="card bank-filter-card"><div className="card-body">
         <div className="bank-filter-grid">
-          <div className="field bank-filter-account"><label>Rekening</label><select className="select" value={accountId} onChange={e=>{const id=e.target.value;setAccountId(id);const a=accounts.find(x=>x.id===id);let f=from;if(a&&f<sqlDate(a.opening_balance_date)){f=sqlDate(a.opening_balance_date);setFrom(f)}void loadStatement(id,f,to)}}><option value="">Pilih rekening...</option>{accounts.map(a=><option key={a.id} value={a.id}>{a.bank_name} • {a.account_number} • {a.account_name}</option>)}</select></div>
-          <div className="field"><label>Dari tanggal</label><input className="input" type="date" value={from} min={selected?sqlDate(selected.opening_balance_date):undefined} onChange={e=>setFrom(e.target.value)}/></div>
+          <div className="field bank-filter-account"><label>Rekening</label><select className="select" value={accountId} onChange={e=>{const id=e.target.value;setAccountId(id);const a=accounts.find(x=>x.id===id);let f=from;if(a&&f<firstDataDate(a)){f=firstDataDate(a);setFrom(f)}const end=to<f?f:to;setTo(end);setStatement(null);void loadStatement(id,f,end)}}><option value="">Pilih rekening...</option>{accounts.map(a=><option key={a.id} value={a.id}>{a.bank_name} • {a.account_number} • {a.account_name}</option>)}</select></div>
+          <div className="field"><label>Dari tanggal</label><input className="input" type="date" value={from} min={selected?firstDataDate(selected):undefined} onChange={e=>setFrom(e.target.value)}/></div>
           <div className="field"><label>Sampai tanggal</label><input className="input" type="date" value={to} onChange={e=>setTo(e.target.value)}/></div>
           <button className="btn btn-primary" disabled={!accountId||loading} onClick={()=>void loadStatement()}>Terapkan</button>
         </div>
@@ -179,7 +220,7 @@ export default function BankStatementClient({user}:{user:SessionUser}){
     {!accounts.length&&!loading?<div className="card bank-empty"><b>Belum ada rekening bank.</b><p>Finance/Root dapat menambahkan rekening perusahaan untuk mulai mencatat transaksi.</p>{canEdit&&<button className="btn btn-primary" onClick={()=>openAccount()}>+ Tambah Rekening</button>}</div>:loading&&!statement?<div className="card bank-empty">Memuat rekening koran...</div>:statement&&<section className="bank-statement-print-area">
       <header className="bank-statement-head"><div className="bank-statement-brand"><img src="/aru-logo.png" alt="ARU Raharja"/><div><b>PT ARU RAHARJA</b><span>Sistem Informasi ARU Terintegrasi</span></div></div><div className="bank-statement-title"><h2>REKENING KORAN</h2><p>STATEMENT OF FINANCIAL TRANSACTION</p><small>Tanggal Laporan: {dateTimeLabel(statement.generated_at)}</small></div></header>
       <div className="bank-meta-grid"><div className="bank-meta"><span>Kepada Yth.</span><i>:</i><b>{statement.account.account_name}</b><span>Alamat</span><i>:</i><b>{statement.account.company_address||"-"}</b><span>No. Rekening</span><i>:</i><b>{statement.account.account_number}</b><span>Nama Bank</span><i>:</i><b>{statement.account.bank_name}</b><span>Nama Produk</span><i>:</i><b>{statement.account.product_name||"-"}</b><span>Valuta</span><i>:</i><b>{statement.account.currency}</b></div><div className="bank-meta"><span>Periode Transaksi</span><i>:</i><b>{dateOnlyLabel(statement.period.from)} s.d. {dateOnlyLabel(statement.period.to)}</b><span>Unit / Kantor</span><i>:</i><b>{statement.account.unit_name||"PT Aru Raharja"}</b><span>Cabang Bank</span><i>:</i><b>{statement.account.branch_name||"-"}</b><span>Saldo Awal Dasar</span><i>:</i><b>{money(statement.account.opening_balance)}</b><span>Tanggal Saldo Dasar</span><i>:</i><b>{dateOnlyLabel(sqlDate(statement.account.opening_balance_date))}</b></div></div>
-      <div className="bank-statement-table-wrap"><table className="bank-statement-table"><thead><tr><th>Tanggal Transaksi<br/><small>Transaction Date</small></th><th>Uraian Transaksi<br/><small>Transaction Description</small></th><th>Teller / User ID</th><th>Debit</th><th>Kredit<br/><small>Credit</small></th><th>Saldo<br/><small>Balance</small></th>{canEdit&&<th className="bank-statement-screen-only">Aksi</th>}</tr></thead><tbody>{statement.rows.map(r=><tr key={r.id}><td>{dateTimeLabel(r.transaction_at)}</td><td className="tx-desc"><b>{r.description}</b>{r.reference_no&&<div className="muted" style={{marginTop:3}}>Ref: {r.reference_no}</div>}{r.notes&&<div className="muted" style={{marginTop:2}}>{r.notes}</div>}</td><td>{r.teller_id||r.creator_name||"-"}</td><td className="num">{money(r.debit_amount)}</td><td className="num">{money(r.credit_amount)}</td><td className="num"><b>{money(r.balance)}</b></td>{canEdit&&<td className="bank-statement-screen-only"><div className="bank-statement-row-actions"><button className="btn btn-secondary" onClick={()=>openTx(r)}>Edit</button><button className="btn btn-danger" onClick={()=>{setVoidTx(r);setVoidReason("")}}>Batalkan</button></div></td>}</tr>)}{!statement.rows.length&&<tr><td colSpan={canEdit?7:6} style={{textAlign:"center",padding:26,color:"var(--muted)"}}>Tidak ada transaksi pada periode ini.</td></tr>}</tbody></table></div>
+      <div className="bank-statement-table-wrap"><table className="bank-statement-table"><thead><tr><th>Tanggal Transaksi<br/><small>Transaction Date</small></th><th>Uraian Transaksi<br/><small>Transaction Description</small></th><th>Teller / User ID</th><th>Debit</th><th>Kredit<br/><small>Credit</small></th><th>Saldo<br/><small>Balance</small></th>{canChangeRows&&<th className="bank-statement-screen-only">Aksi</th>}</tr></thead><tbody>{statement.rows.map(r=><tr key={r.id}><td>{dateTimeLabel(r.transaction_at)}</td><td className="tx-desc"><b>{r.description}</b>{r.reference_no&&<div className="muted" style={{marginTop:3}}>Ref: {r.reference_no}</div>}{r.notes&&<div className="muted" style={{marginTop:2}}>{r.notes}</div>}</td><td>{r.teller_id||(r.imported?"-":r.creator_name)||"-"}</td><td className="num">{money(r.debit_amount)}</td><td className="num">{money(r.credit_amount)}</td><td className="num"><b>{money(r.balance)}</b></td>{canChangeRows&&<td className="bank-statement-screen-only"><div className="bank-statement-row-actions"><button className="btn btn-secondary" onClick={()=>openTx(r)}>Edit</button><button className="btn btn-danger" onClick={()=>{setVoidTx(r);setVoidReason("")}}>Batalkan</button></div></td>}</tr>)}{!statement.rows.length&&<tr><td colSpan={canChangeRows?7:6} style={{textAlign:"center",padding:26,color:"var(--muted)"}}>Tidak ada transaksi pada periode ini.</td></tr>}</tbody></table></div>
       <div className="bank-statement-summary"><div><span>Saldo Awal<br/><small>Opening Balance</small></span><b>{money(statement.opening_balance)}</b></div><div><span>Total Transaksi Debit</span><b>{money(statement.total_debit)}</b></div><div><span>Total Transaksi Kredit</span><b>{money(statement.total_credit)}</b></div><div><span>Saldo Akhir<br/><small>Closing Balance</small></span><b>{money(statement.closing_balance)}</b></div></div>
       <div className="bank-terbilang"><b>Terbilang / In Words</b>{statement.terbilang}</div>
       <footer className="bank-statement-footer"><span>Dokumen internal PT Aru Raharja • Data berasal dari SIAP ARU.</span><span>Generated: {dateTimeLabel(statement.generated_at)}</span></footer>

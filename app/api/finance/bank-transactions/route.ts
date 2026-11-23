@@ -2,7 +2,7 @@ import crypto from "crypto";
 import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { getCurrentUser } from "@/lib/auth";
-import { db } from "@/lib/db";
+import { bankWriteStatus, withBankAccountWrite } from "@/lib/bank-write";
 import { auditLog } from "@/lib/audit";
 import { canEditFinance } from "@/lib/permissions";
 import { amount, required, str } from "@/lib/http";
@@ -32,28 +32,30 @@ export async function POST(request:Request){
     const id=crypto.randomUUID();
     const accountId=required(b.bank_account_id,"Rekening",36);
     const transactionAt=dateTime(b.transaction_at);
-    const [accounts]=await db.query<RowDataPacket[]>(
-      `SELECT DATE_FORMAT(
-         CASE WHEN MIN(i.period_from) IS NOT NULL AND MIN(i.period_from)<a.opening_balance_date THEN MIN(i.period_from) ELSE a.opening_balance_date END,
-         '%Y-%m-%d') opening_date
-       FROM siap_bank_accounts a
-       LEFT JOIN siap_bank_import_batches i ON i.bank_account_id=a.id AND i.status='ACTIVE'
-       WHERE a.id=? AND a.is_active=1 GROUP BY a.id,a.opening_balance_date LIMIT 1`,[accountId]
-    );
-    if(!accounts[0]) throw new Error("Rekening tidak ditemukan atau sudah nonaktif.");
-    const openingDate=String(accounts[0].opening_date);
-    if(transactionAt.slice(0,10)<openingDate) throw new Error(`Tanggal transaksi tidak boleh sebelum periode data rekening (${openingDate}).`);
-    const description=required(b.description,"Uraian transaksi",500);
-    const {debit,credit}=txAmounts(b.debit_amount,b.credit_amount);
-    await db.execute(
-      `INSERT INTO siap_bank_transactions
-       (id,bank_account_id,transaction_at,description,teller_id,reference_no,debit_amount,credit_amount,notes,status,created_by,updated_by)
-       VALUES(?,?,?,?,?,?,?,?,?,'ACTIVE',?,?)`,
-      [id,accountId,transactionAt,description,str(b.teller_id,120)||null,str(b.reference_no,120)||null,debit,credit,str(b.notes,1000)||null,user.id,user.id]
-    );
-    await auditLog({user,action:"BANK_TRANSACTION_CREATE",entityType:"BANK_TRANSACTION",entityId:id,metadata:{accountId,transactionAt,debit,credit,description},request});
+    await withBankAccountWrite(user.role,accountId,async conn=>{
+      const [accounts]=await conn.query<RowDataPacket[]>(
+        `SELECT DATE_FORMAT(
+           CASE WHEN MIN(i.period_from) IS NOT NULL AND MIN(i.period_from)<a.opening_balance_date THEN MIN(i.period_from) ELSE a.opening_balance_date END,
+           '%Y-%m-%d') opening_date
+         FROM siap_bank_accounts a
+         LEFT JOIN siap_bank_import_batches i ON i.bank_account_id=a.id AND i.status='ACTIVE'
+         WHERE a.id=? AND a.is_active=1 GROUP BY a.id,a.opening_balance_date LIMIT 1`,[accountId]
+      );
+      if(!accounts[0]) throw new Error("Rekening tidak ditemukan atau sudah nonaktif.");
+      const openingDate=String(accounts[0].opening_date);
+      if(transactionAt.slice(0,10)<openingDate) throw new Error(`Tanggal transaksi tidak boleh sebelum periode data rekening (${openingDate}).`);
+      const description=required(b.description,"Uraian transaksi",500);
+      const {debit,credit}=txAmounts(b.debit_amount,b.credit_amount);
+      await conn.execute(
+        `INSERT INTO siap_bank_transactions
+         (id,bank_account_id,transaction_at,description,teller_id,reference_no,debit_amount,credit_amount,notes,status,created_by,updated_by)
+         VALUES(?,?,?,?,?,?,?,?,?,'ACTIVE',?,?)`,
+        [id,accountId,transactionAt,description,str(b.teller_id,120)||null,str(b.reference_no,120)||null,debit,credit,str(b.notes,1000)||null,user.id,user.id]
+      );
+      await auditLog({user,action:"BANK_TRANSACTION_CREATE",entityType:"BANK_TRANSACTION",entityId:id,metadata:{accountId,transactionAt,debit,credit,description},request},conn);
+    });
     return NextResponse.json({ok:true,data:{id}},{status:201});
   }catch(e){
-    return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Gagal menambah transaksi."},{status:400});
+    return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Gagal menambah transaksi."},{status:bankWriteStatus(e)});
   }
 }

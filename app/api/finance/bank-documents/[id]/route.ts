@@ -3,6 +3,7 @@ import type { RowDataPacket } from "mysql2";
 import { getCurrentUser } from "@/lib/auth";
 import { canEditFinance } from "@/lib/permissions";
 import { db } from "@/lib/db";
+import { BankWriteError, bankWriteStatus, withBankAccountWrite } from "@/lib/bank-write";
 import { auditLog } from "@/lib/audit";
 import { deleteStoredFile } from "@/lib/upload";
 
@@ -21,36 +22,28 @@ export async function DELETE(request:Request,{params}:{params:{id:string}}){
     const doc=rows[0];
     if(!doc) return NextResponse.json({ok:false,error:"Dokumen bank tidak ditemukan."},{status:404});
 
-    await db.execute(`DELETE FROM siap_bank_documents WHERE id=?`,[params.id]);
-
+    await withBankAccountWrite(user.role,String(doc.bank_account_id),async conn=>{
+      const [[current]]=await conn.query<RowDataPacket[]>("SELECT id FROM siap_bank_documents WHERE id=?", [params.id]);
+      if(!current) throw new BankWriteError("Dokumen bank tidak ditemukan.",404);
+      await conn.execute(`DELETE FROM siap_bank_documents WHERE id=?`,[params.id]);
+      await auditLog({
+        user,action:"BANK_DOCUMENT_DELETE",entityType:"BANK_DOCUMENT",entityId:params.id,request,
+        metadata:{
+          accountId:String(doc.bank_account_id),originalName:String(doc.original_name),documentKind:String(doc.document_kind),
+          documentDate:String(doc.document_date),periodFrom:doc.period_from?String(doc.period_from):null,
+          periodTo:doc.period_to?String(doc.period_to):null,permanent:true,
+        },
+      },conn);
+    });
     let fileWarning:string|null=null;
-    try{
+    try {
       await deleteStoredFile(String(doc.storage_path));
-    }catch(error){
-      console.error("BANK_DOCUMENT physical delete failed",error);
-      fileWarning="Record dokumen sudah dihapus, tetapi file fisik gagal dibersihkan dari storage.";
+    } catch {
+      console.error("BANK_DOCUMENT physical delete failed", params.id);
+      fileWarning="Dokumen sudah dihapus dari daftar. File fisik gagal dibersihkan.";
     }
-
-    await auditLog({
-      user,
-      action:"BANK_DOCUMENT_DELETE",
-      entityType:"BANK_DOCUMENT",
-      entityId:params.id,
-      request,
-      metadata:{
-        accountId:String(doc.bank_account_id),
-        originalName:String(doc.original_name),
-        documentKind:String(doc.document_kind),
-        documentDate:String(doc.document_date),
-        periodFrom:doc.period_from?String(doc.period_from):null,
-        periodTo:doc.period_to?String(doc.period_to):null,
-        permanent:true,
-        fileWarning
-      }
-    }).catch(error=>console.error("BANK_DOCUMENT_DELETE audit failed",error));
-
     return NextResponse.json({ok:true,data:{deleted:true,file_warning:fileWarning}});
   }catch(e){
-    return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Gagal menghapus dokumen bank."},{status:400});
+    return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Gagal menghapus dokumen bank."},{status:bankWriteStatus(e)});
   }
 }

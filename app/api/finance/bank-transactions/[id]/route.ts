@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { ResultSetHeader,RowDataPacket } from "mysql2";
 import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { BankWriteError, bankWriteStatus, withBankAccountWrite } from "@/lib/bank-write";
 import { auditLog } from "@/lib/audit";
 import { canEditFinance } from "@/lib/permissions";
 import { amount, required, str } from "@/lib/http";
@@ -28,35 +29,39 @@ export async function PATCH(request:Request,{params}:{params:{id:string}}){
   try{
     const b=await request.json();
     const transactionAt=dateTime(b.transaction_at);
-    const [currentRows]=await db.query<RowDataPacket[]>(
-      `SELECT t.bank_account_id,t.status,
-              DATE_FORMAT(
-                CASE WHEN MIN(i.period_from) IS NOT NULL AND MIN(i.period_from)<a.opening_balance_date THEN MIN(i.period_from) ELSE a.opening_balance_date END,
-                '%Y-%m-%d') opening_date
-       FROM siap_bank_transactions t
-       JOIN siap_bank_accounts a ON a.id=t.bank_account_id
-       LEFT JOIN siap_bank_import_batches i ON i.bank_account_id=a.id AND i.status='ACTIVE'
-       WHERE t.id=?
-       GROUP BY t.bank_account_id,t.status,a.opening_balance_date LIMIT 1`,[params.id]
-    );
-    const current=currentRows[0];
-    if(!current) return NextResponse.json({ok:false,error:"Transaksi tidak ditemukan."},{status:404});
-    if(String(current.status)!=="ACTIVE") throw new Error("Transaksi sudah dibatalkan.");
-    const openingDate=String(current.opening_date);
-    if(transactionAt.slice(0,10)<openingDate) throw new Error(`Tanggal transaksi tidak boleh sebelum periode data rekening (${openingDate}).`);
-    const description=required(b.description,"Uraian transaksi",500);
-    const {debit,credit}=txAmounts(b.debit_amount,b.credit_amount);
-    const [result]=await db.execute<ResultSetHeader>(
-      `UPDATE siap_bank_transactions
-       SET transaction_at=?,description=?,teller_id=?,reference_no=?,debit_amount=?,credit_amount=?,notes=?,updated_by=?
-       WHERE id=? AND status='ACTIVE'`,
-      [transactionAt,description,str(b.teller_id,120)||null,str(b.reference_no,120)||null,debit,credit,str(b.notes,1000)||null,user.id,params.id]
-    );
-    if(!result.affectedRows) return NextResponse.json({ok:false,error:"Transaksi tidak ditemukan atau sudah dibatalkan."},{status:404});
-    await auditLog({user,action:"BANK_TRANSACTION_UPDATE",entityType:"BANK_TRANSACTION",entityId:params.id,metadata:{accountId:String(current.bank_account_id),transactionAt,debit,credit,description},request});
+    const [[target]]=await db.query<RowDataPacket[]>("SELECT bank_account_id FROM siap_bank_transactions WHERE id=?", [params.id]);
+    if(!target) throw new BankWriteError("Transaksi tidak ditemukan.",404);
+    await withBankAccountWrite(user.role,String(target.bank_account_id),async conn=>{
+      const [currentRows]=await conn.query<RowDataPacket[]>(
+        `SELECT t.bank_account_id,t.status,
+                DATE_FORMAT(
+                  CASE WHEN MIN(i.period_from) IS NOT NULL AND MIN(i.period_from)<a.opening_balance_date THEN MIN(i.period_from) ELSE a.opening_balance_date END,
+                  '%Y-%m-%d') opening_date
+         FROM siap_bank_transactions t
+         JOIN siap_bank_accounts a ON a.id=t.bank_account_id
+         LEFT JOIN siap_bank_import_batches i ON i.bank_account_id=a.id AND i.status='ACTIVE'
+         WHERE t.id=?
+         GROUP BY t.bank_account_id,t.status,a.opening_balance_date LIMIT 1`,[params.id]
+      );
+      const current=currentRows[0];
+      if(!current) throw new BankWriteError("Transaksi tidak ditemukan.",404);
+      if(String(current.status)!=="ACTIVE") throw new Error("Transaksi sudah dibatalkan.");
+      const openingDate=String(current.opening_date);
+      if(transactionAt.slice(0,10)<openingDate) throw new Error(`Tanggal transaksi tidak boleh sebelum periode data rekening (${openingDate}).`);
+      const description=required(b.description,"Uraian transaksi",500);
+      const {debit,credit}=txAmounts(b.debit_amount,b.credit_amount);
+      const [result]=await conn.execute<ResultSetHeader>(
+        `UPDATE siap_bank_transactions
+         SET transaction_at=?,description=?,teller_id=?,reference_no=?,debit_amount=?,credit_amount=?,notes=?,updated_by=?
+         WHERE id=? AND status='ACTIVE'`,
+        [transactionAt,description,str(b.teller_id,120)||null,str(b.reference_no,120)||null,debit,credit,str(b.notes,1000)||null,user.id,params.id]
+      );
+      if(!result.affectedRows) throw new BankWriteError("Transaksi tidak ditemukan atau sudah dibatalkan.",404);
+      await auditLog({user,action:"BANK_TRANSACTION_UPDATE",entityType:"BANK_TRANSACTION",entityId:params.id,metadata:{accountId:String(current.bank_account_id),transactionAt,debit,credit,description},request},conn);
+    });
     return NextResponse.json({ok:true});
   }catch(e){
-    return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Gagal mengubah transaksi."},{status:400});
+    return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Gagal mengubah transaksi."},{status:bankWriteStatus(e)});
   }
 }
 
@@ -67,17 +72,21 @@ export async function DELETE(request:Request,{params}:{params:{id:string}}){
   try{
     const body=await request.json().catch(()=>({}));
     const reason=required(body.reason,"Alasan pembatalan",1000);
-    const [rows]=await db.query<RowDataPacket[]>(`SELECT bank_account_id,DATE_FORMAT(transaction_at,'%Y-%m-%d %H:%i:%s') transaction_at,debit_amount,credit_amount,description,status FROM siap_bank_transactions WHERE id=? LIMIT 1`,[params.id]);
-    const tx=rows[0];
-    if(!tx) return NextResponse.json({ok:false,error:"Transaksi tidak ditemukan."},{status:404});
-    if(String(tx.status)!=="ACTIVE") throw new Error("Transaksi sudah dibatalkan.");
-    await db.execute(
-      `UPDATE siap_bank_transactions SET status='VOIDED',void_reason=?,voided_by=?,voided_at=UTC_TIMESTAMP(),updated_by=? WHERE id=?`,
-      [reason,user.id,user.id,params.id]
-    );
-    await auditLog({user,action:"BANK_TRANSACTION_VOID",entityType:"BANK_TRANSACTION",entityId:params.id,metadata:{reason,accountId:String(tx.bank_account_id),transactionAt:String(tx.transaction_at),debit:Number(tx.debit_amount||0),credit:Number(tx.credit_amount||0),description:String(tx.description)},request});
+    const [[target]]=await db.query<RowDataPacket[]>("SELECT bank_account_id FROM siap_bank_transactions WHERE id=?", [params.id]);
+    if(!target) throw new BankWriteError("Transaksi tidak ditemukan.",404);
+    await withBankAccountWrite(user.role,String(target.bank_account_id),async conn=>{
+      const [rows]=await conn.query<RowDataPacket[]>(`SELECT bank_account_id,DATE_FORMAT(transaction_at,'%Y-%m-%d %H:%i:%s') transaction_at,debit_amount,credit_amount,description,status FROM siap_bank_transactions WHERE id=? LIMIT 1`,[params.id]);
+      const tx=rows[0];
+      if(!tx) throw new BankWriteError("Transaksi tidak ditemukan.",404);
+      if(String(tx.status)!=="ACTIVE") throw new Error("Transaksi sudah dibatalkan.");
+      await conn.execute(
+        `UPDATE siap_bank_transactions SET status='VOIDED',void_reason=?,voided_by=?,voided_at=UTC_TIMESTAMP(),updated_by=? WHERE id=?`,
+        [reason,user.id,user.id,params.id]
+      );
+      await auditLog({user,action:"BANK_TRANSACTION_VOID",entityType:"BANK_TRANSACTION",entityId:params.id,metadata:{reason,accountId:String(tx.bank_account_id),transactionAt:String(tx.transaction_at),debit:Number(tx.debit_amount||0),credit:Number(tx.credit_amount||0),description:String(tx.description)},request},conn);
+    });
     return NextResponse.json({ok:true});
   }catch(e){
-    return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Gagal membatalkan transaksi."},{status:400});
+    return NextResponse.json({ok:false,error:e instanceof Error?e.message:"Gagal membatalkan transaksi."},{status:bankWriteStatus(e)});
   }
 }

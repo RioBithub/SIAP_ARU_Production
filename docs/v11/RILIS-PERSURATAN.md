@@ -22,6 +22,7 @@ Jalankan dari sesi operator VPS yang mengelola PM2 `siap-aru`. Langkah ini untuk
     database/migrations/2026-11-23-v11-nota-drafting-recipients.sql
     database/migrations/2026-11-23-v11-system-correspondence.sql
     database/migrations/2026-11-23-v11-correspondence-word.sql
+    database/migrations/2026-11-23-bank-account-lock-mandiri.sql
   )
   for migration in "${migrations[@]}"; do
     git cat-file -e "$target:$migration"
@@ -122,3 +123,10 @@ Untuk menyematkan Arial, simpan `arial.ttf` dan `arialbd.ttf` berlisensi pada di
 Tab memakai kolom **No. Surat** dan **Tanggal Surat** pada B4:C4. Nota Dinas menggunakan seri UM secara bawaan, dengan pilihan seri Operasional atau Direksi pada draf baru. Seri di luar tabel mengikuti penomoran SIAP. Pada mode Sheets, SIAP membaca dua kolom register setiap kali memperkirakan atau mereservasi nomor. Gangguan koneksi menghentikan pengambilan nomor untuk seri yang terhubung. Nomor diambil dari ruang urut per tahun dan ikut memperhitungkan reservasi lokal serta varian .1, .2, dan seterusnya. Baris bertanggal kosong tetap diperhitungkan sebagai slot terpakai ketika nomor itu bertabrakan.
 
 Google Sheets digunakan dalam mode baca. Jika petugas juga mengambil nomor baru secara manual di Sheet, kedua aplikasi bisa mengambil slot sama pada waktu berdekatan. Gunakan satu jalur penerbitan nomor saat mulai beralih ke SIAP.
+
+
+## Impor rekening koran dan kunci Finance
+
+Di **Perbankan → Impor Rekening Koran**, pilih **BRI** untuk PDF IBBIZ atau **Mandiri** untuk PDF Account Statement. Pilih rekening tujuan atau biarkan nomor rekening dideteksi dari PDF. Setelah berhasil, **Lihat periode yang diimpor** membuka rekening dan periode tertera di PDF. PDF asli tersedia di **Dokumen Bank**. Pada format Mandiri yang didukung, validasi mencocokkan jumlah transaksi, total debit dan kredit, serta saldo tiap baris dengan ringkasan. Impor berhenti ketika pemeriksaan tidak cocok.
+
+Root Admin memilih rekening di **Rekening Koran** lalu klik **Kunci untuk Finance** atau **Buka Kunci Finance**. Ketika terkunci, Finance dapat melihat dan mengunduh laporan. Perubahan data rekening, transaksi, saldo, impor, pembatalan impor, dan dokumen bank diblokir untuk Finance. Audit Log mencatat `BANK_ACCOUNT_LOCK` dan `BANK_ACCOUNT_UNLOCK`. Rekening yang ada mulai dalam keadaan dapat diedit oleh Finance hingga dikunci oleh Root Admin.

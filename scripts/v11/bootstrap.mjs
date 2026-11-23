@@ -128,6 +128,9 @@ try {
   const correspondenceWord = await readFile("database/migrations/2026-11-23-v11-correspondence-word.sql", "utf8");
   await cn.query(correspondenceWord);
   await cn.query(correspondenceWord);
+  const bankAccountLock = await readFile("database/migrations/2026-11-23-bank-account-lock-mandiri.sql", "utf8");
+  await cn.query(bankAccountLock);
+  await cn.query(bankAccountLock);
   const accountSwitch = await readFile("database/migrations/2026-11-18-root-admin-account-switch.sql", "utf8");
   await cn.query(accountSwitch);
   await cn.query(accountSwitch);
