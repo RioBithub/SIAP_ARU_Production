@@ -61,6 +61,28 @@ export function staffCanVerify(requestingUnit: RequestingUnit, accountUnit: stri
   return staffUnit(accountUnit) === requestingUnit;
 }
 
+export function isGeneralPicRole(role: string) {
+  return role === "STAFF" || role === "FINANCE";
+}
+
+export function normalizeUnitName(unit: string | null) {
+  return (unit ?? "").trim().toLocaleLowerCase("id-ID").replace(/\s+/g, " ");
+}
+
+export function managerCanAssignByUnit(
+  managerUnit: string | null, scope: ManagerScope | null | undefined, target: { role: Role; unit_name: string | null },
+) {
+  if (scope) {
+    const targetScope = target.role === "FINANCE" ? "KSU" : unitManagerScope(staffUnit(target.unit_name));
+    return !targetScope || targetScope === scope;
+  }
+  const unit = normalizeUnitName(managerUnit);
+  if (!unit) return false;
+  const mappedUnit = staffUnit(managerUnit);
+  return (mappedUnit !== null && mappedUnit === staffUnit(target.unit_name))
+    || unit === normalizeUnitName(target.unit_name);
+}
+
 export function dispositionTargetRoles(role: Role, strict: boolean): Role[] {
   if (role === "PRESIDENT_DIRECTOR") return strict ? ["DIRECTOR_OPS", "MANAGER"] : ["DIRECTOR_OPS", "MANAGER", "FINANCE", "STAFF"];
   if (role === "DIRECTOR_OPS") return strict ? ["MANAGER"] : ["MANAGER", "FINANCE", "STAFF"];

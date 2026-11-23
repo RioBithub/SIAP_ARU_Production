@@ -2,7 +2,7 @@ import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { delegatedUsers } from "@/lib/correspondence-settings";
 import { checkedDate, officialManager } from "@/lib/v11-data";
 import { requirePaymentDocuments } from "@/lib/v11-payment-documents";
-import { dispositionTargetRoles, staffCanVerify, staffUnit, unitManagerScope } from "@/lib/v11-workflow";
+import { dispositionTargetRoles, managerCanAssignByUnit, staffCanVerify, type ManagerScope } from "@/lib/v11-workflow";
 import type { SessionUser } from "@/lib/types";
 
 export function dispositionDeadlineInput(fields: Record<string, unknown>) {
@@ -20,18 +20,28 @@ export async function dispositionTarget(conn: PoolConnection, user: SessionUser,
   );
   const target = targets[0];
   if (!target) throw new Error("Penerima disposisi tidak ditemukan atau tidak aktif.");
-  if (!dispositionTargetRoles(user.role, strict).includes(target.role)) {
+  if (target.id === user.id || !dispositionTargetRoles(user.role, strict).includes(target.role)) {
     throw new Error("Penerima tidak sesuai jalur delegasi disposisi.");
   }
-  if (strict && target.role === "MANAGER") await officialManager(conn, target.id);
+  if (strict && purpose !== "GENERAL" && target.role === "MANAGER") await officialManager(conn, target.id);
   if (user.role === "MANAGER") {
-    const manager = strict ? await officialManager(conn, user.id) : null;
-    const configured = purpose === "GENERAL" ? await delegatedUsers(user.id, conn) : null;
-    if (configured !== null) {
-      if (!configured.includes(target.id)) throw new Error("Penerima belum terdaftar sebagai PIC Manager ini.");
-    } else if (manager) {
-      const targetScope = target.role === "FINANCE" ? "KSU" : unitManagerScope(staffUnit(target.unit_name));
-      if (targetScope && targetScope !== manager.scope) throw new Error("Penerima berada di bawah Manager lain.");
+    if (purpose === "GENERAL") {
+      const configured = await delegatedUsers(user.id, conn);
+      if (configured !== null) {
+        if (!configured.includes(target.id)) throw new Error("Penerima belum terdaftar sebagai PIC Manager ini.");
+      } else if (strict) {
+        const [[manager]] = await conn.query<(RowDataPacket & { scope: ManagerScope })[]>(
+          "SELECT scope FROM siap_v11_managers WHERE user_id=?", [user.id],
+        );
+        if (!managerCanAssignByUnit(user.unit_name, manager?.scope, { role: target.role, unit_name: target.unit_name })) {
+          throw new Error("Penerima tidak berada dalam jalur unit Manager ini.");
+        }
+      }
+    } else if (strict) {
+      const manager = await officialManager(conn, user.id);
+      if (!managerCanAssignByUnit(user.unit_name, manager.scope, { role: target.role, unit_name: target.unit_name })) {
+        throw new Error("Penerima tidak berada dalam jalur unit Manager ini.");
+      }
     }
   }
   return target;
