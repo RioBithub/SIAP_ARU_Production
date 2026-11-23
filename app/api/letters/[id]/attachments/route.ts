@@ -47,14 +47,14 @@ export async function POST(request:Request,{params}:{params:{id:string}}){
         }
       } else if (user.role !== "ROOT_ADMIN") {
         let allowed = Boolean(letter.is_public) || letter.created_by === user.id ||
-          (letter.direction === "INTERNAL" && workflow?.nota_author_user_id === user.id) ||
+          (workflow && canEditNotaDocument(user, letter, workflow)) ||
           letter.current_owner_user_id === user.id || (!letter.current_owner_user_id && letter.current_role === user.role);
         if (!allowed) {
           const [participants] = await conn.query<RowDataPacket[]>(
             `SELECT 1 FROM siap_dispositions WHERE letter_id=? AND (to_user_id=? OR from_user_id=?)
              UNION ALL SELECT 1 FROM siap_letter_actions WHERE letter_id=? AND actor_user_id=?
-               AND action<>'UPLOAD_NOTA_SIGNATURE' LIMIT 1`,
-            [params.id, user.id, user.id, params.id, user.id],
+               AND (?<>'INTERNAL' OR action NOT IN ('UPLOAD_NOTA_SIGNATURE','RESPONSE')) LIMIT 1`,
+            [params.id, user.id, user.id, params.id, user.id, letter.direction],
           );
           allowed = participants.length > 0;
         }

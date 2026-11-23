@@ -39,6 +39,10 @@ export function isNotaDirector(role: Role) {
   return NOTA_DIRECTORS.some(director => director === role);
 }
 
+export function canRequestNotaDraft(role: Role) {
+  return role === "MANAGER" || isNotaDirector(role);
+}
+
 export function canReceiveDirectorNota(sender: Role, recipient: Role) {
   return ["MANAGER", "STAFF", "FINANCE", "SECRETARIAT"].includes(recipient) ||
     (sender === "PRESIDENT_DIRECTOR" && recipient === "DIRECTOR_OPS");
@@ -62,6 +66,7 @@ const letterActions: Record<string, string> = {
   CREATE_INTERNAL: "Nota Dinas Dibuat",
   SEND_NOTA_REPLY: "Balasan Nota Dinas Dikirim",
   SEND_NOTA_DIRECT: "Nota Dinas Direksi Dikirim",
+  HANDOFF_NOTA_DRAFT: "Draf diserahkan ke pengirim",
   SUBMIT: "Diajukan",
   APPROVE: "Disetujui & Diteruskan",
   APPROVE_FINAL: "Disetujui / Selesai",

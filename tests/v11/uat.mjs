@@ -1799,7 +1799,7 @@ try {
       await page.goto(new URL("/letters/internal", base).href);
       await page.getByRole("button", { name: "+ Buat Nota Dinas", exact: true }).click();
       await dialog.getByLabel("Siapkan draf untuk").selectOption(roles.dirut.id);
-      await dialog.getByLabel("Penerima Nota Dinas").selectOption(roles.ops.id);
+      await dialog.getByLabel("Penerima Nota Dinas", { exact: true }).selectOption(roles.ops.id);
       await dialog.locator('input[name="subject"]').fill(subject("Nota Direksi langsung"));
       await dialog.locator('textarea[name="summary"]').fill("SIMULASI arahan kerja dari Dirut.");
       const savedResponse = page.waitForResponse(response => response.url().endsWith("/api/letters") && response.request().method() === "POST");
@@ -1919,10 +1919,141 @@ try {
     }
     return "Empat halaman Persuratan pulih setelah aset tersedia dan pengguna memilih muat ulang. Arsip Dokumen terbuka saat aset uji gagal.";
   });
+  await test(71, async () => {
+    const topic = subject("Manager meminta draf Staff");
+    const brief = "Arahan internal untuk Staff penyusun";
+    const basic = { direction: "INTERNAL", document_type: "NOTA_DINAS", letter_date: d, subject: topic,
+      confidentiality: "RAHASIA", nota_draft_instruction: brief };
+    await post("staff", "/api/letters", { ...basic, nota_drafter_user_id: roles.sdm.id }, 400);
+    await post("ops", "/api/letters", { ...basic, nota_drafter_user_id: roles.staffkeu.id }, 400);
+    const browser = await chromium.launch({ executablePath: env.SIAP_V11_CHROMIUM || undefined,
+      headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    let id;
+    try {
+      const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+      const as = role => context.addCookies([{ name: "siap_session",
+        value: sessions.get(role).slice("siap_session=".length), url: base.origin }]);
+      const page = await context.newPage();
+      await as("ops");
+      await page.goto(new URL("/letters/internal", base).href);
+      await page.getByRole("button", { name: "+ Minta Staff Siapkan Nota Dinas" }).click();
+      const request = page.getByRole("dialog", { name: "Minta Staff Siapkan Nota Dinas" });
+      await request.getByLabel("Staff penyusun", { exact: true }).selectOption(roles.staff.id);
+      await request.getByLabel("Perihal", { exact: true }).fill(topic);
+      await request.getByLabel("Arahan untuk Staff", { exact: false }).fill(brief);
+      await request.getByLabel("Sifat Dokumen").selectOption("RAHASIA");
+      const saving = page.waitForResponse(res => res.url().endsWith("/api/letters") && res.request().method() === "POST");
+      await request.getByRole("button", { name: "Kirim Permintaan Draf" }).click();
+      const body = await (await saving).json();
+      assert(body.ok, body.error);
+      id = body.data.id;
+      const href = "/letters/internal?letter_id=" + id;
+      assert((await call("staff", "/api/notifications")).items.some(item => item.href === href && /Diminta menyiapkan/.test(item.title)));
+      assert.equal((await detail("ops", id)).letter.current_owner_user_id, roles.staff.id);
+      await call("sdm", "/api/letters/" + id, { status: 403 });
+      await as("staff");
+      await page.goto(new URL(href, base).href);
+      await page.getByText(brief, { exact: false }).waitFor();
+      await page.getByRole("button", { name: "Isi Draf Nota Dinas", exact: true }).click();
+      const editing = page.getByRole("dialog", { name: "Edit Data Dokumen" });
+      await editing.getByLabel("Tujuan review", { exact: true }).selectOption(roles.dirops.id);
+      await editing.getByLabel("Penerima tambahan", { exact: true }).selectOption(roles.finance.id);
+      await editing.getByLabel("Penerima tambahan", { exact: true }).selectOption(roles.sdm.id);
+      await editing.getByLabel("Isi Nota Dinas").fill("SIMULASI naskah draf dari Staff.");
+      await editing.getByRole("button", { name: "Simpan Perubahan" }).click();
+      await editing.waitFor({ state: "hidden" });
+      await page.getByRole("button", { name: "Serahkan Draf ke Pengirim" }).click();
+      const handoff = page.getByRole("dialog", { name: "Serahkan Draf ke Pengirim" });
+      await handoff.getByRole("button", { name: "Serahkan Draf ke Pengirim" }).click();
+      await handoff.waitFor({ state: "hidden" });
+      assert((await call("ops", "/api/notifications")).items.some(item => item.href === href && /siap diperiksa/.test(item.title)));
+    } finally {
+      await browser.close();
+    }
+    const url = "/api/letters/" + id;
+    const document = url + "/nota-document";
+    assert.equal((await detail("ops", id)).letter.current_owner_user_id, roles.ops.id);
+    assert.equal((await detail("ops", id)).notaRouting.authorId, roles.ops.id);
+    await letterAction("staff", id, "SUBMIT", {}, [], 400);
+    await post("staff", document, { action: "GENERATE" });
+    const { source } = (await detail("ops", id)).notaDocument;
+    await post("ops", document, file(multipart({
+      action: "UPLOAD_SIGNATURE", source_id: source.id, signature_method: "DIGITAL",
+    }, []), "signed_file"));
+    assert.equal((await letterAction("ops", id, "SUBMIT")).status, "DIRECTOR_OPS_REVIEW");
+    await call("finance", url, { status: 403 });
+    await call("finance", "/api/attachments/" + source.id, { status: 403 });
+    await letterAction("dirops", id, "APPROVE_FINAL");
+    for (const recipient of ["finance", "sdm"]) {
+      const note = await detail(recipient, id);
+      assert.equal(note.letter.status, "APPROVED");
+      assert.equal(note.notaRouting.draftInstruction, null);
+      assert.equal(note.v11.nota_draft_instruction, undefined);
+      assert((await call(recipient, "/api/notifications")).items.some(item => item.href === "/letters/internal?letter_id=" + id));
+    }
+    await letterAction("finance", id, "RESPONSE", { comment: "SIMULASI penerima tambahan mengonfirmasi." });
+    await call("staffkeu", url, { status: 403 });
+    return "Manager menugaskan Staff dari browser. Staff mengisi dua tujuan tambahan dan menyerahkan draf; pengirim yang mengajukan. Penerima tambahan mendapat akses dan notifikasi setelah ACC.";
+  });
+  await test(72, async () => {
+    const browser = await chromium.launch({ executablePath: env.SIAP_V11_CHROMIUM || undefined,
+      headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    try {
+      for (const director of ["dirops", "dirut"]) {
+        const context = await browser.newContext();
+        try {
+          await context.addCookies([{ name: "siap_session", value: sessions.get(director).slice("siap_session=".length), url: base.origin }]);
+          const page = await context.newPage();
+          const topic = subject("Nota beberapa penerima dari " + director);
+          await page.goto(new URL("/letters/internal", base).href);
+          await page.getByRole("button", { name: "+ Minta Staff Siapkan Nota Dinas" }).click();
+          const request = page.getByRole("dialog", { name: "Minta Staff Siapkan Nota Dinas" });
+          await request.getByLabel("Staff penyusun", { exact: true }).selectOption(roles.staffkeu.id);
+          await request.getByLabel("Perihal", { exact: true }).fill(topic);
+          const saving = page.waitForResponse(res => res.url().endsWith("/api/letters") && res.request().method() === "POST");
+          await request.getByRole("button", { name: "Kirim Permintaan Draf" }).click();
+          const body = await (await saving).json();
+          assert(body.ok, body.error);
+          const id = body.data.id;
+          const url = "/api/letters/" + id;
+          await call("staffkeu", url, { method: "PATCH", body: { routing_target_user_id: roles.ops.id, nota_recipient_ids: [roles.root.id] }, status: 400 });
+          await call("staffkeu", url, { method: "PATCH", body: { routing_target_user_id: roles.ops.id,
+            summary: "SIMULASI arahan Direksi untuk beberapa akun.", nota_recipient_ids: [roles.finance.id, roles.finance.id, roles.ops.id] } });
+          const note = await detail(director, id);
+          assert.deepEqual(note.notaRouting.additionalRecipients.map(person => person.id), [roles.finance.id]);
+          assert.equal(note.notaRouting.drafter.id, roles.staffkeu.id);
+          assert.equal(note.notaRouting.authorId, roles[director].id);
+          await letterAction("staffkeu", id, "HANDOFF_NOTA_DRAFT");
+          await letterAction("staffkeu", id, "SEND_NOTA_DIRECT", {}, [], 400);
+          await letterAction(director, id, "SEND_NOTA_DIRECT", {}, [], 400);
+          await call("ops", url, { status: 403 });
+          await call("finance", url, { status: 403 });
+          const endpoint = url + "/nota-document";
+          await post(director, endpoint, { action: "GENERATE" });
+          const { source } = (await detail(director, id)).notaDocument;
+          await post(director, endpoint, file(multipart({
+            action: "UPLOAD_SIGNATURE", source_id: source.id, signature_method: "DIGITAL",
+          }, []), "signed_file"));
+          assert.equal((await letterAction(director, id, "SEND_NOTA_DIRECT")).status, "COMPLETED");
+          for (const recipient of ["ops", "finance"]) {
+            assert.equal((await detail(recipient, id)).notaDocument.method, "DIGITAL");
+            const notifications = await call(recipient, "/api/notifications");
+            assert.equal(notifications.items.filter(item => item.href === "/letters/internal?letter_id=" + id).length, 1);
+          }
+          await call("staff", url, { status: 403 });
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+    }
+    return "Dirops dan Dirut meminta draf dari Staff dan mengirim ke beberapa akun sekaligus setelah PDF tersedia. Duplikasi penerima dan akses sebelum pengiriman diuji.";
+  });
 } finally {
   await sql.end();
   await writeFile(path.join(out, "uat.json"), JSON.stringify({ runId, db: profile.version, cases: result }, null, 2));
 }
 const totals = Object.fromEntries(["PASS","FAIL","SKIP"].map(status => [status,result.filter(row=>row.status===status).length]));
 console.log(JSON.stringify(totals));
-if (totals.FAIL || result.length !== 70) process.exitCode=1;
+if (totals.FAIL || result.length !== 72) process.exitCode=1;

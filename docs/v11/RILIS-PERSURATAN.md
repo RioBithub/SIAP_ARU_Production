@@ -19,6 +19,7 @@ Jalankan dari sesi operator VPS yang mengelola PM2 `siap-aru`. Langkah ini untuk
     database/migrations/2026-11-19-v11-invoice-payment-mode.sql
     database/migrations/2026-11-19-v11-bpk-nota-documents.sql
     database/migrations/2026-11-22-v11-nota-collaboration.sql
+    database/migrations/2026-11-23-v11-nota-drafting-recipients.sql
   )
   for migration in "${migrations[@]}"; do
     git cat-file -e "$target:$migration"
@@ -84,4 +85,6 @@ Satu rilis aset statis sebelumnya tetap tersedia setelah restart untuk tab yang 
 - Sebagai Root Admin, buka **Pengaturan Persuratan** lalu pastikan pilihan tujuan Surat Masuk dan PIC sesuai akun dan unit perusahaan. **Sampah** menyediakan **Pulihkan** dan **Hapus Permanen**. Uji hapus permanen hanya pada surat simulasi yang dibuat untuk uji tersebut. Masukkan alasan dan ketik `HAPUS PERMANEN`. Status tanda tangan aktif, catatan Finance yang terhubung, dan rujukan bisnis dapat mencegah penghapusan.
 - Sebagai Staff atau PIC, buka **Keuangan → Bukti Pengeluaran (BPK)**. Buat draf simulasi dan cek PDF. Dari invoice simulasi, **BPK untuk Invoice** mengisi data awal dan menautkan PDF saat BPK diajukan.
 - Buat Nota Dinas fiktif, pilih **Buat PDF dari Isi Nota** atau **Unggah PDF sendiri**, lalu cek pilihannya di **PDF & Tanda Tangan Nota Dinas**. Setelah diajukan, reviewer dapat membuka PDF dan menggunakan **Tanggapan**. Periksa badge di detail dan notifikasi penerima.
+- Dari akun Manager, Dirops, atau Dirut, klik **Minta Staff Siapkan Nota Dinas**. Dari notifikasi Staff, isi draf dan beberapa tujuan, lalu klik **Serahkan Draf ke Pengirim**. Pengirim memeriksa dan menyiapkan tanda tangan. Pastikan penerima tambahan dapat membuka nota setelah dikirim atau disetujui.
+- Saat Mekari Sandbox lampiran aktif, gunakan **Minta bantuan Sekretariat**. Akun Sekretariat yang ditunjuk bisa membuka **Tanda Tangan Mekari Sandbox** pada PDF utama, menyegarkan status, dan memastikan hasil terlihat pada akun pengirim.
 - Uji hasil disposisi Dirut yang ditugaskan langsung ke Manager. Periksa urutan **Review Dirops → Review Dirut → Selesai**. Dari detail tugas selesai, unduh **Lembar Disposisi (PDF)** dan **Unduh Riwayat (.xlsx)**.

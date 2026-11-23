@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { NextResponse } from "next/server";
-import { isDirectNota, notaAuthorId, requireNotaSignature } from "@/lib/nota-document";
-import { activeNotaAccount } from "@/lib/nota-routing";
+import { isDirectNota, isNotaDraft, notaAuthorId, notaDocument, requireNotaSignature } from "@/lib/nota-document";
+import { activeNotaAccount, listNotaRecipients, notaPrimaryTarget, validateNotaRecipients } from "@/lib/nota-routing";
 import { canRespondToNota } from "@/lib/nota-responses";
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { getCurrentUser } from "@/lib/auth";
@@ -10,7 +10,7 @@ import { auditLog } from "@/lib/audit";
 import { cancelLedgerForLetter } from "@/lib/numbering";
 import { dateOnly, required, str } from "@/lib/http";
 import { activeReviewer } from "@/lib/correspondence-data";
-import { canHandleSecretariat, canReceiveDirectorNota, isNotaDirector, NOTA_DIRECTORS,
+import { canHandleSecretariat, canReceiveDirectorNota, canRequestNotaDraft, isNotaDirector, NOTA_DIRECTORS,
   REVIEW_STATUS, reviewRole } from "@/lib/correspondence-workflow";
 import { letterAccess } from "@/lib/letter-access";
 import { reversibleApproval, type ApprovalSnapshot } from "@/lib/letter-approval";
@@ -188,6 +188,21 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         nextRole = target.role;
         nextOwner = target.id;
 
+      } else if (action === "HANDOFF_NOTA_DRAFT") {
+        if (!isNotaDraft(letter) || user.role !== "STAFF" || workflow?.nota_drafter_user_id !== user.id ||
+            letter.current_owner_user_id !== user.id) {
+          throw new Error("Draf ini tidak sedang ditugaskan kepada Anda.");
+        }
+        const author = await activeNotaAccount(conn, authorId);
+        if (!author || !canRequestNotaDraft(author.role)) throw new Error("Akun pengirim Nota Dinas tidak aktif.");
+        await notaPrimaryTarget(conn, author.role, required(letter.routing_target_user_id, "Tujuan Nota Dinas", 36), directNota);
+        if (!String(letter.summary ?? "").trim() && !(await notaDocument(conn, params.id))?.source) {
+          throw new Error("Isi naskah pada Isi Draf Nota Dinas atau unggah PDF sebelum menyerahkan draf.");
+        }
+        nextRole = author.role;
+        nextOwner = author.id;
+        routingNote = "Draf diserahkan kepada " + author.name;
+
       } else if(action==="SUBMIT") {
         if(!["DRAFT","RETURNED_STAFF"].includes(status))
           throw new Error("Dokumen tidak berada pada tahap yang dapat diajukan.");
@@ -235,15 +250,17 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
             status !== "DRAFT" || user.id !== authorId || !isNotaDirector(user.role)) {
           throw new Error("Draf hanya dapat dikirim oleh Direktur yang tercantum sebagai pengirim.");
         }
-        const recipient = await activeNotaAccount(conn, letter.routing_target_user_id);
+        const recipient = await activeNotaAccount(conn, required(letter.routing_target_user_id, "Penerima Nota Dinas", 36));
         if (!recipient || (!notaReply && !canReceiveDirectorNota(user.role, recipient.role))) {
           throw new Error("Akun penerima sudah tidak aktif atau perannya berubah.");
         }
+        const additional = await listNotaRecipients(conn, params.id);
+        await validateNotaRecipients(conn, additional.map(person => person.id), user, recipient.id, true);
         await requireNotaSignature(conn, params.id, workflow!);
         next = "COMPLETED";
         nextRole = null;
         nextOwner = recipient.id;
-        routingNote = "Dikirim ke " + recipient.name;
+        routingNote = "Dikirim ke " + [recipient, ...additional].map(person => person.name).join(", ");
 
       } else if (action === "UNDO_APPROVAL") {
         if (!comment) throw new Error("Isi alasan pembatalan persetujuan.");
@@ -467,7 +484,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
         }
         await assertNoActiveTasks();
 
-        if ((business || secretariat) && (outgoing
+        if ((workflow && direction === "INTERNAL" && status !== "APPROVED") || (business || secretariat) && (outgoing
           ? status !== "ISSUED" || (secretariat && !letter.sent_date)
           : !["APPROVED","DISPOSED","IN_PROGRESS"].includes(status))) {
           throw new Error("Dokumen belum dapat diselesaikan pada tahap ini.");

@@ -119,6 +119,9 @@ try {
   const notaCollaboration = await readFile("database/migrations/2026-11-22-v11-nota-collaboration.sql", "utf8");
   await cn.query(notaCollaboration);
   await cn.query(notaCollaboration);
+  const notaDrafting = await readFile("database/migrations/2026-11-23-v11-nota-drafting-recipients.sql", "utf8");
+  await cn.query(notaDrafting);
+  await cn.query(notaDrafting);
   const accountSwitch = await readFile("database/migrations/2026-11-18-root-admin-account-switch.sql", "utf8");
   await cn.query(accountSwitch);
   await cn.query(accountSwitch);

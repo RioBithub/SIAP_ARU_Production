@@ -131,14 +131,14 @@ export default function NotaDocumentPanel({ id, data, assistants, refresh }: {
         </label>
         <div className="field full"><button type="submit" className="btn btn-primary" disabled={busy}>Simpan PDF Bertanda Tangan</button></div>
       </form>}
-      {data.editable && data.source && !data.signed && <div className="attachment-actions" style={{ marginTop: 8 }}>
+      {data.uploadable && data.source && !data.signed && <div className="attachment-actions" style={{ marginTop: 8 }}>
           {data.sandbox && !data.manualReason && <button type="button" className="btn btn-primary" disabled={busy}
             aria-expanded={showSigning} onClick={() => { setShowSigning(!showSigning); setShowDeclaration(false); setShowUpload(false); }}>Tanda Tangan Mekari Sandbox</button>}
-          {data.manualReason
+          {data.editable && (data.manualReason
             ? <button type="button" className="btn btn-secondary" disabled={busy}
               onClick={() => void save({ action: "RESET", source_id: data.source?.id })}>Tandai Belum Ditandatangani</button>
             : !data.requiresProof && <button type="button" className="btn btn-secondary" disabled={busy} aria-expanded={showDeclaration}
-              onClick={() => { setShowDeclaration(!showDeclaration); setShowSigning(false); setShowUpload(false); }}>Catat Sudah Ditandatangani</button>}
+              onClick={() => { setShowDeclaration(!showDeclaration); setShowSigning(false); setShowUpload(false); }}>Catat Sudah Ditandatangani</button>)}
       </div>}
       {data.editable && showDeclaration && data.source && !data.signed && !data.requiresProof && <form className="form-grid workflow-form" onSubmit={declare}>
           <p className="field full notice">Keterangan ini tercatat sebagai pernyataan pengirim. Untuk dokumen operasional, unggah PDF yang sudah ditandatangani.</p>
@@ -148,7 +148,7 @@ export default function NotaDocumentPanel({ id, data, assistants, refresh }: {
           </label>
           <div className="field full"><button className="btn btn-primary" disabled={busy}>Simpan Status Tanda Tangan</button></div>
         </form>}
-      {data.editable && showSigning && data.source && !data.signed && data.sandbox && !data.manualReason &&
+      {showSigning && data.source && !data.signed && data.sandbox && !data.manualReason &&
           <V11SigningPanel key={data.source.id} id={data.source.id}
             source={{ ...data.source, attachment_kind: "ORIGINAL" }} onReady={onSignature}/>}
       {busy && <p role="status">Menyimpan PDF atau status tanda tangan…</p>}

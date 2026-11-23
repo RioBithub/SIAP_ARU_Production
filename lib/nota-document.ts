@@ -11,7 +11,8 @@ export const notaAuthorId = (letter: RowDataPacket, workflow?: RowDataPacket | n
   workflow?.nota_author_user_id || letter.created_by;
 
 export const canEditNotaDocument = (user: SessionUser, letter: RowDataPacket, workflow?: RowDataPacket | null) =>
-  isNotaDraft(letter) && [letter.created_by, notaAuthorId(letter, workflow)].includes(user.id);
+  isNotaDraft(letter) && ([letter.created_by, notaAuthorId(letter, workflow)].includes(user.id)
+    || (user.role === "STAFF" && workflow?.nota_drafter_user_id === user.id));
 
 export const canUploadNotaSignature = (user: SessionUser, letter: RowDataPacket, workflow: RowDataPacket) =>
   canEditNotaDocument(user, letter, workflow) || (isNotaDraft(letter)
@@ -79,7 +80,8 @@ export async function notaDocument(conn: Queryable, letterId: string) {
 }
 
 export async function generatedNotaFile(input: {
-  id: string; date: string; author: string; unit: string | null; recipient: string;
+  id: string; date: string; author: string; unit: string | null; recipient: string | null;
+  additionalRecipients?: string[];
   subject: string; summary: string; confidentiality: string; reference?: string | null;
 }) {
   const pdf = await AruPdf.create("NOTA DINAS", `Dokumen internal • ${input.confidentiality}`);
@@ -87,6 +89,10 @@ export async function generatedNotaFile(input: {
     { label: "Unit pengirim", value: input.unit }]);
   pdf.fields([{ label: "Dari", value: input.author }, { label: "Kepada", value: input.recipient }]);
   pdf.fields([{ label: "Perihal", value: input.subject }]);
+  if (input.additionalRecipients?.length) {
+    pdf.section("PENERIMA TAMBAHAN");
+    pdf.paragraph(input.additionalRecipients.join("\n"));
+  }
   if (input.reference) pdf.fields([{ label: "Nota Dinas yang dibalas", value: input.reference }]);
   pdf.section("ISI NOTA DINAS");
   pdf.paragraph(input.summary);

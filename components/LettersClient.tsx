@@ -2,14 +2,14 @@
 
 import { FormEvent,useEffect,useMemo,useRef,useState } from "react";
 import type { Role, SessionUser } from "@/lib/types";
-import { PURGE_CONFIRMATION, REVIEW_ROLES, canHandleSecretariat, canReceiveDirectorNota, isNotaDirector,
+import { PURGE_CONFIRMATION, REVIEW_ROLES, canHandleSecretariat, canReceiveDirectorNota, canRequestNotaDraft, isNotaDirector,
   formatLetterFileSize as size, letterDirectionLabel, reviewRole } from "@/lib/correspondence-workflow";
 import Modal from "@/components/Modal";
 import StatusBadge, { statusLabel } from "@/components/StatusBadge";
 import BusinessDocumentFields, { BusinessDocumentSummary, ReferencePicker } from "@/components/BusinessDocumentFields";
 import { INVOICE_INCOMING, INVOICE_OUTGOING, SPK_INCOMING, SPK_OUTGOING, isBusinessDocument, isInvoice, type DocumentReference } from "@/lib/business-documents";
 
-import { DELIVERY_METHODS, MANAGER_SCOPES, staffUnit, unitManagerScope, type ManagerScope } from "@/lib/v11-workflow";
+import { DELIVERY_METHODS, MANAGER_SCOPES, jakartaDate, staffUnit, unitManagerScope, type ManagerScope } from "@/lib/v11-workflow";
 import PaymentDocumentsPanel from "@/components/PaymentDocumentsPanel";
 import ConfidentialityBadge from "@/components/ConfidentialityBadge";
 import AttachmentActions from "@/components/AttachmentActions";
@@ -20,6 +20,7 @@ import AttachmentSandbox from "@/components/AttachmentSandbox";
 import V11SigningPanel from "@/components/V11SigningPanel";
 import NotaDocumentPanel from "@/components/NotaDocumentPanel";
 import NotaResponses from "@/components/NotaResponses";
+import NotaTargetFields from "@/components/NotaTargetFields";
 import { PersekotFields, ReceiptFields, UnitField, WorkflowSummary } from "@/components/V11LetterFields";
 
 type TrashOperation = "trash" | "restore" | "purge";
@@ -35,6 +36,9 @@ type ReplyOrigin = {
   authors: Array<{ id: string; name: string; recipient: ReplyRecipient }>;
 };
 const isReviewer=(account:RoutingUser)=>REVIEW_ROLES.some(role=>role===account.role);
+const notaOption = (account: Pick<RoutingUser, "id" | "name" | "unit_name"> & { email?: string }) => ({
+  value: account.id, label: [account.name, account.unit_name].filter(Boolean).join(" — "), search: account.email,
+});
 
 const today=()=>new Date().toISOString().slice(0,10);
 const fmtDate=(v:any)=>v?new Date(String(v).slice(0,10)+"T00:00:00").toLocaleDateString("id-ID",{day:"2-digit",month:"short",year:"numeric"}):"-";
@@ -139,6 +143,13 @@ export default function LettersClient({direction,user}:Props){
   const directingNota=v11Enabled&&direction==="INTERNAL"&&isNotaDirector(noteAuthorRole);
   const staffManagerScope=unitManagerScope(staffUnit(user.unit_name));
   const preparableAuthors=officialManagers.filter(account=>!staffManagerScope||account.v11_scope===staffManagerScope);
+  const requestScope=officialManagers.find(account=>account.id===user.id)?.v11_scope;
+  const draftStaff=routingUsers.filter(account=>{
+    if(account.role!=="STAFF") return false;
+    if(user.role!=="MANAGER") return true;
+    const scope=unitManagerScope(staffUnit(account.unit_name));
+    return Boolean(requestScope&&(!scope||scope===requestScope));
+  });
   const financeManager=officialManagers.some(account=>account.id===user.id&&account.v11_scope==="KSU");
   const reviewers=v11Enabled
     ? managerNota ? directorAccounts : officialManagers
@@ -154,6 +165,7 @@ export default function LettersClient({direction,user}:Props){
   const [message,setMessage]=useState("");
   const [error,setError]=useState("");
   const [createOpen,setCreateOpen]=useState(false);
+  const [draftRequestOpen,setDraftRequestOpen]=useState(false);
   const [notaSource,setNotaSource]=useState<"GENERATED"|"UPLOAD">("GENERATED");
   const [detail,setDetail]=useState<any>(null);
   const [detailOpen,setDetailOpen]=useState(false);
@@ -296,6 +308,13 @@ export default function LettersClient({direction,user}:Props){
 
   const directNotaForm=directingNota&&notaKind==="NOTA";
   const replyRecipient=replyOrigin?.recipient ?? replyOrigin?.authors.find(account=>account.id===notaAuthor)?.recipient;
+  const canAskStaff=direction==="INTERNAL"&&v11Enabled&&canRequestNotaDraft(user.role);
+
+  function notaOptions(role: Role, authorId: string, direct: boolean) {
+    const available=routingUsers.filter(account=>account.id!==authorId&&(!direct||canReceiveDirectorNota(role,account.role)));
+    const primary=direct?available:role==="MANAGER"?directorAccounts:officialManagers;
+    return { primaryOptions: primary.map(notaOption), additionalOptions: available.map(notaOption) };
+  }
 
   const canCreate=direction==="INTERNAL"||(direction==="OUTGOING"&&(canDraftOutgoing||(user.role==="FINANCE"&&sourceDispositionId)))
     ||(direction==="INCOMING"&&(canDraftOutgoing||user.role==="SECRETARIAT"
@@ -314,6 +333,8 @@ export default function LettersClient({direction,user}:Props){
     const out:any={};
     fd.forEach((value,key)=>{ out[key]=value; });
     if(typeof out.business==="string") out.business=JSON.parse(out.business);
+    if(typeof out.nota_recipient_ids==="string") out.nota_recipient_ids=JSON.parse(out.nota_recipient_ids);
+    delete out.nota_recipient_choice;
     if(fd.has("persekot_checklist")) out.persekot_checklist=fd.getAll("persekot_checklist");
     delete out.receipt_file;
     delete out.spb_file;
@@ -344,11 +365,14 @@ export default function LettersClient({direction,user}:Props){
       body.is_public = body.is_public === "on";
       delete body.original_file;
       delete body.additional_files;
-      if (direction==="INTERNAL" && v11Enabled) body.nota_document_source=notaSource;
-      if (replyOrigin) body.nota_reply_to_id=replyOrigin.id;
-      if (direction==="INTERNAL" && notaKind==="PAYMENT_REQUEST") body.payment_request=true;
-      if (direction==="INTERNAL" && persekot) {
-        body.persekot=true;
+      if (direction==="INTERNAL" && v11Enabled && !draftRequestOpen) {
+        body.nota_document_source=notaSource;
+        if (replyOrigin) body.nota_reply_to_id=replyOrigin.id;
+        if (notaKind==="PAYMENT_REQUEST") body.payment_request=true;
+        if (persekot) body.persekot=true;
+      }
+      if (draftRequestOpen) {
+        body.document_type="NOTA_DINAS";
       }
 
       if(direction==="OUTGOING"){
@@ -390,8 +414,9 @@ export default function LettersClient({direction,user}:Props){
       }
 
       setCreateOpen(false);
+      setDraftRequestOpen(false);
       setMessage(direction==="INCOMING"?(result.data.status==="SECRETARIAT_INTAKE"?"Surat diserahkan ke Sekretariat.":"Surat diregistrasi dan diteruskan.")
-        :direction==="INTERNAL"?(notaAuthor?"Draf tersimpan untuk diperiksa pengirim.":"Draf Nota Dinas tersimpan.")
+        :direction==="INTERNAL"?(draftRequestOpen?"Permintaan draf dikirim ke Staff.":notaAuthor?"Draf tersimpan untuk diperiksa pengirim.":"Draf Nota Dinas tersimpan.")
         :"Draft dan nomor dokumen tersimpan. Buka detail untuk mengajukan ke Manager reviewer.");
       await load();
       if (failedFiles.length) {
@@ -534,7 +559,8 @@ export default function LettersClient({direction,user}:Props){
   function canEditDetail(){
     if(!detail)return false;
     const letter=detail.letter;
-    const own=user.role==="ROOT_ADMIN"||letter.created_by===user.id||detail.notaRouting?.authorId===user.id;
+    const own=user.role==="ROOT_ADMIN"||letter.created_by===user.id||detail.notaRouting?.authorId===user.id||
+      (user.role==="STAFF"&&detail.notaRouting?.drafter?.id===user.id);
     const draft=["DRAFT","RETURNED_STAFF"].includes(letter.status);
     if(letter.uses_secretariat&&letter.status==="SECRETARIAT_INTAKE") return own||canHandleSecretariat(user.role);
     if(detail.v11||letter.uses_secretariat||detail.business?.managed||isInvoice(letter.document_type)) return own&&draft;
@@ -590,6 +616,8 @@ export default function LettersClient({direction,user}:Props){
 
     if(d==="INCOMING"&&s==="SECRETARIAT_INTAKE"&&handlesSecretariat)
       buttons.push(["REGISTER_INCOMING","Registrasi & Teruskan","btn-primary"]);
+    if(draft&&user.role==="STAFF"&&detail.notaRouting?.drafter?.id===user.id&&letter.current_owner_user_id===user.id)
+      buttons.push(["HANDOFF_NOTA_DRAFT","Serahkan Draf ke Pengirim","btn-primary"]);
     if (draft && detail.notaRouting?.direct) {
       if (author===user.id && isNotaDirector(user.role)) {
         buttons.push(detail.notaRouting.isReply
@@ -728,7 +756,9 @@ export default function LettersClient({direction,user}:Props){
 
   return <main className="page">
     <div className="page-head"><div><h2>{letterDirectionLabel(direction)}</h2><p>{pageDescription}</p></div><div style={{display:"flex",gap:8,flexWrap:"wrap",justifyContent:"flex-end"}}>{direction==="OUTGOING"&&<a className="btn btn-secondary" href="/api/letters/outgoing-excel">↓ Export Excel</a>}{direction==="OUTGOING"&&user.role==="ROOT_ADMIN"&&<button className="btn btn-secondary" onClick={()=>{setImportOpen(true);setImportResult(null);setImportFile(null)}}>↑ Import Excel Lama</button>}{isRoot&&<button className="btn btn-secondary" aria-pressed={trash}
-      onClick={()=>{setTrash(!trash);resetFilters(!trash);}}>{trash?"Kembali ke Daftar Surat":"Sampah"}</button>}{!trash&&canCreate&&<button className="btn btn-primary" onClick={openCreate}>+ {createLabel}</button>}</div></div>
+      onClick={()=>{setTrash(!trash);resetFilters(!trash);}}>{trash?"Kembali ke Daftar Surat":"Sampah"}</button>}
+      {!trash&&canAskStaff&&<button className="btn btn-secondary" onClick={()=>{setError("");setDraftRequestOpen(true);}}>+ Minta Staff Siapkan Nota Dinas</button>}
+      {!trash&&canCreate&&<button className="btn btn-primary" onClick={openCreate}>+ {createLabel}</button>}</div></div>
 
     {direction==="OUTGOING"&&<div className="notice" style={{marginBottom:13}}>
       {hasSecretariat?"Surat dengan alur Sekretariat masuk antrian penerbitan setelah ACC. Cek administrasi sebelum ACC mengikuti jenis surat."
@@ -813,6 +843,33 @@ export default function LettersClient({direction,user}:Props){
       </form>
     </Modal>}
 
+    {draftRequestOpen&&<Modal title="Minta Staff Siapkan Nota Dinas"
+      subtitle="Staff mengisi naskah dan tujuan. Anda memeriksa draf sebelum mengirim atau mengajukan Nota Dinas."
+      onClose={()=>!createBusy&&setDraftRequestOpen(false)}>
+      <form className="form-grid workflow-form" onSubmit={create}>
+        {error&&<div className="field full error" role="alert">{error}</div>}
+        <div className="field full">
+          <SearchableSelect label="Staff penyusun" name="nota_drafter_user_id" options={draftStaff.map(notaOption)}
+            placeholder="Pilih Staff…" required disabled={createBusy}/>
+          {!draftStaff.length&&<span className="hint">Belum ada akun Staff aktif yang tersedia untuk penugasan ini.</span>}
+        </div>
+        <label className="field full"><span>Perihal</span><input className="input" name="subject" maxLength={500} required/></label>
+        <label className="field"><span>Tanggal Nota Dinas</span>
+          <input className="input" name="letter_date" type="date" defaultValue={jakartaDate()} required/>
+        </label>
+        <label className="field"><span>Sifat Dokumen</span><select className="select" name="confidentiality">
+          <option>BIASA</option><option>PENTING</option><option>RAHASIA</option>
+        </select></label>
+        <label className="field full" data-need="Opsional"><span>Arahan untuk Staff</span>
+          <textarea className="textarea" name="nota_draft_instruction" maxLength={5000} placeholder="Contoh: Susun arahan tindak lanjut dan lengkapi daftar tujuan."/>
+        </label>
+        <div className="field full modal-actions">
+          <button type="button" className="btn btn-secondary" disabled={createBusy} onClick={()=>setDraftRequestOpen(false)}>Batal</button>
+          <button className="btn btn-primary" disabled={createBusy||!draftStaff.length}>Kirim Permintaan Draf</button>
+        </div>
+      </form>
+    </Modal>}
+
     {createOpen&&<Modal title={replyOrigin?"Buat Balasan Nota Dinas":direction==="INCOMING"?createLabel+" Masuk":createLabel} subtitle={replyOrigin?"Balasan dikirim kepada pengirim Nota Dinas asal.":direction==="INTERNAL"?"Pilih pengirim, tujuan dan sumber PDF sebelum menyimpan draf.":direction==="OUTGOING"?"Draft disusun Staff. Nomor direservasi per jenis surat dan seluruh proses tercatat di audit log.":"Semua perubahan tercatat di audit log."} onClose={()=>!createBusy&&setCreateOpen(false)}>
       <form onSubmit={create} className="form-grid workflow-form">
         {error&&<div className="field full error" role="alert">{error}</div>}
@@ -873,22 +930,22 @@ export default function LettersClient({direction,user}:Props){
           <b>Nota Dinas asal</b> · {replyOrigin.subject}
           {replyRecipient&&<><br/><b>Penerima</b> · {[replyRecipient.name,replyRecipient.unit].filter(Boolean).join(" — ")}</>}
         </div>}
-        {direction==="INTERNAL"&&!replyOrigin&&
+        {direction==="INTERNAL"&&v11Enabled&&<NotaTargetFields
+          key={`${notaAuthor}-${noteAuthorRole}-${notaKind}-${replyOrigin?.id||""}`}
+          direct={directNotaForm||Boolean(replyOrigin)} reply={Boolean(replyOrigin)} primary={replyRecipient?.id}
+          {...notaOptions(noteAuthorRole, notaAuthor||user.id, directNotaForm||Boolean(replyOrigin))}/>}
+        {direction==="INTERNAL"&&!v11Enabled&&!replyOrigin&&
           <div className="field">
-            <label>{directNotaForm?"Penerima Nota Dinas":"Tujuan Review Awal"}</label>
-            <select key={noteAuthorRole+"-"+directNotaForm} aria-label={directNotaForm?"Penerima Nota Dinas":"Tujuan review"}
-              className="select" name="routing_target_user_id" required>
+            <label>Tujuan Review Awal</label>
+            <select aria-label="Tujuan review" className="select" name="routing_target_user_id" required>
               <option value="">Pilih penerima...</option>
-              {(directNotaForm?routingUsers.filter(account=>canReceiveDirectorNota(noteAuthorRole,account.role)):reviewers).map(r=>
+              {reviewers.map(r=>
                 <option key={r.id} value={r.id}>
                   {reviewerLabel(r)}
                 </option>
               )}
             </select>
-            <span className="hint">
-              {directNotaForm?"Direktur mengirim langsung ke akun yang dipilih."
-                :managerNota?"Nota diajukan ke Dirops atau Dirut.":"Nota Dinas diajukan ke Manager yang dipilih."}
-            </span>
+            <span className="hint">Nota Dinas diajukan ke Manager yang dipilih.</span>
           </div>}
         <div className="field"><label>{direction==="INTERNAL"?"Tanggal Nota Dinas":"Tanggal Surat"}</label><input className="input" type="date" name="letter_date" value={letterDate} onChange={e=>setLetterDate(e.target.value)} required/>{direction==="OUTGOING"&&<span className="hint">Backdate diperbolehkan. Nomor existing tidak digeser; collision menghasilkan .1, .2, dst.</span>}</div>
         {direction==="OUTGOING"&&formatId&&<div className="field full notice" role="status">
@@ -931,7 +988,7 @@ export default function LettersClient({direction,user}:Props){
       </form>
     </Modal>}
 
-    {detailOpen&&detail&&<Modal title={detail.letter.subject} subtitle={direction==="OUTGOING"?`No. ${outgoingNumber(detail.letter)||"-"} • ${docLabel(detail.letter)}`:direction==="INTERNAL"?`${docLabel(detail.letter)} • kepada ${detail.letter.recipient||"Manager"}`:(detail.letter.external_number||"Detail surat")} onClose={()=>setDetailOpen(false)}>
+    {detailOpen&&detail&&<Modal title={detail.letter.subject} subtitle={direction==="OUTGOING"?`No. ${outgoingNumber(detail.letter)||"-"} • ${docLabel(detail.letter)}`:direction==="INTERNAL"?docLabel(detail.letter):(detail.letter.external_number||"Detail surat")} onClose={()=>setDetailOpen(false)}>
       <div className="grid-2">
         <div>
           <div className="kpi-list">
@@ -941,6 +998,9 @@ export default function LettersClient({direction,user}:Props){
             <div className="kpi-row"><span>Jenis Dokumen</span><b>{docLabel({...detail.letter,v11_kind:detail.v11?.kind})}</b></div>
             {direction==="OUTGOING"&&<div className="kpi-row"><span>Nomor Dokumen</span><b className="mono">{detail.letter.letter_number||outgoingNumber(detail.letter)||"-"}</b></div>}
             {detail.letter.recipient&&<div className="kpi-row"><span>Ditujukan Kepada</span><b>{detail.letter.recipient}</b></div>}
+            {detail.notaRouting?.additionalRecipients?.length>0&&<div className="kpi-row"><span>Penerima tambahan</span>
+              <b>{detail.notaRouting.additionalRecipients.map((account:RoutingUser)=>notaOption(account).label).join(", ")}</b>
+            </div>}
             {detail.sourceLetter&&<div className="kpi-row"><span>{detail.notaRouting?.isReply?"Nota Dinas Asal":"Dokumen Asal"}</span>
               <a href={"/letters/"+({INCOMING:"incoming",INTERNAL:"internal",OUTGOING:"outgoing"} as Record<string,string>)[detail.sourceLetter.direction]+"?letter_id="+encodeURIComponent(detail.sourceLetter.id)}>
                 {detail.sourceLetter.number||detail.sourceLetter.subject}
@@ -954,6 +1014,7 @@ export default function LettersClient({direction,user}:Props){
             <div className="kpi-row"><span>Sifat</span><b>{detail.letter.confidentiality}</b></div>
             {direction!=="INTERNAL"&&<div className="kpi-row"><span>Backdate</span><b>{detail.letter.is_backdated?"Ya":"Tidak"}</b></div>}
             {detail.notaRouting?.authorName&&<div className="kpi-row"><span>Pengirim Nota Dinas</span><b>{detail.notaRouting.authorName}</b></div>}
+            {detail.notaRouting?.drafter&&<div className="kpi-row"><span>Staff penyusun</span><b>{detail.notaRouting.drafter.name}</b></div>}
             <div className="kpi-row"><span>Dibuat oleh</span><b>{detail.letter.creator_name} · {formatWorkflowTime(detail.letter.created_at)}</b></div>
             <div className="kpi-row"><span>Terakhir diperbarui</span><b>{formatWorkflowTime(detail.letter.updated_at)}</b></div>
             {direction==="OUTGOING"&&detail.letter.legacy_sheet_name&&<div className="kpi-row"><span>Sumber Historis</span><b>{detail.letter.legacy_sheet_name} • baris {detail.letter.legacy_row_no}</b></div>}
@@ -963,6 +1024,9 @@ export default function LettersClient({direction,user}:Props){
           {direction==="OUTGOING"&&detail.letter.status==="READY_TO_ISSUE"&&<div className="success" style={{marginTop:13}}><b>ACC final selesai.</b> {detail.letter.uses_secretariat?"Sekretariat memfinalisasi nomor dan menyiapkan tanda tangan.":"Penyusun dapat menerbitkan surat dari detail ini."}</div>}
           {direction==="OUTGOING"&&detail.letter.status==="RETURNED_STAFF"&&<div className="error" style={{marginTop:13}}><b>Dikembalikan ke Staff.</b> Baca catatan reviewer pada riwayat, revisi draft, lalu ajukan kembali mulai dari Manager.</div>}
           <div style={{marginTop:13}} className="notice">{detail.letter.summary||"Belum ada ringkasan."}</div>
+          {detail.notaRouting?.draftInstruction&&<div className="notice" style={{marginTop:8}}>
+            <b>Arahan penyusunan</b><br/>{detail.notaRouting.draftInstruction}
+          </div>}
           {detail.business&&<BusinessDocumentSummary details={detail.business} documentType={detail.letter.document_type}/>}
           {direction!=="INTERNAL"&&<WorkflowSummary data={detail.v11} date={detail.letter.received_date} files={detail.attachments}/>}
           {detail.notaDocument&&<NotaDocumentPanel key={`nota-${detail.letter.id}`} id={detail.letter.id}
@@ -975,7 +1039,9 @@ export default function LettersClient({direction,user}:Props){
           {!detail.sandboxSigning&&detail.v11&&detail.letter.status==="WAITING_SIGNATURE"&&canHandleSecretariat(user.role)&&
             <V11SigningPanel key={`letter-signing-${detail.letter.id}`} id={detail.letter.id} files={signingFiles} onReady={setSigningReady}/>}
           <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:13}}>
-            {canEditDetail()&&<button className="btn btn-secondary" onClick={openEdit}>Edit Metadata</button>}
+            {canEditDetail()&&<button className="btn btn-secondary" onClick={openEdit}>
+              {user.role==="STAFF"&&detail.notaRouting?.drafter?.id===user.id?"Isi Draf Nota Dinas":"Edit Metadata"}
+            </button>}
             {direction==="OUTGOING"&&detail.business?.invoice&&!["CANCELLED","REJECTED"].includes(detail.letter.status)&&
               <a className="btn btn-secondary" href={"/print/letters/"+detail.letter.id} target="_blank" rel="noreferrer">Pratinjau Invoice ↗</a>}
             {direction==="OUTGOING"&&detail.letter.document_type===SPK_OUTGOING&&detail.letter.status===(detail.letter.uses_secretariat?"WAITING_SIGNATURE":"READY_TO_ISSUE")&&
@@ -1055,7 +1121,14 @@ export default function LettersClient({direction,user}:Props){
       <form className="form-grid workflow-form" onSubmit={editLetter}>
         {error&&<div className="field full error" role="alert">{error}</div>}
         <div className="field full"><label>Perihal</label><input className="input" name="subject" defaultValue={detail.letter.subject} required/></div>
-        {direction==="INCOMING"?<div className="field"><label>Asal / Pengirim</label><input className="input" name="sender" defaultValue={detail.letter.sender||""}/></div>:<div className="field"><label>Tujuan</label><input className="input" name="recipient" readOnly={detail.notaRouting?.direct||Boolean(detail.v11?.nota_author_user_id)} defaultValue={detail.letter.recipient||""}/></div>}
+        {direction==="INCOMING"?<div className="field"><label>Asal / Pengirim</label><input className="input" name="sender" defaultValue={detail.letter.sender||""}/></div>
+          : (direction!=="INTERNAL"||!detail.v11)&&<div className="field"><label>Tujuan</label><input className="input" name="recipient" defaultValue={detail.letter.recipient||""}/></div>}
+        {direction==="INTERNAL"&&detail.v11&&detail.notaRouting&&<>
+          {detail.notaRouting.isReply&&<div className="field full notice"><b>Penerima balasan</b> · {detail.letter.recipient}</div>}
+          <NotaTargetFields direct={detail.notaRouting.direct} reply={detail.notaRouting.isReply}
+            primary={detail.letter.routing_target_user_id} initialRecipients={detail.notaRouting.additionalRecipients.map(notaOption)}
+            {...notaOptions(detail.notaRouting.authorRole, detail.notaRouting.authorId, detail.notaRouting.direct)}/>
+        </>}
         {direction==="INCOMING"&&<div className="field">
           <label>Ditujukan Kepada</label><select className="select" name="recipient" defaultValue={detail.letter.recipient||recipients.defaultRecipient} required>
             {[...new Set([recipients.defaultRecipient,...recipients.recipients,detail.letter.recipient].filter(Boolean))].map((name:any)=><option key={name}>{name}</option>)}
@@ -1076,8 +1149,14 @@ export default function LettersClient({direction,user}:Props){
         </>}
         {detail.v11?.kind==="PERSEKOT"&&<PersekotFields proof={detail.v11.spb_attachment_id}/>}
         <div className="field"><label>Sifat</label><select className="select" name="confidentiality" defaultValue={detail.letter.confidentiality} disabled={detail.notaRouting?.isReply}><option>BIASA</option><option>PENTING</option><option>RAHASIA</option></select></div>
-        <div className="field full"><label>Ringkasan</label><textarea className="textarea" name="summary" defaultValue={detail.letter.summary||""}/></div>
-        <div className="field full"><label>Catatan</label><textarea className="textarea" name="notes" defaultValue={detail.letter.notes||""}/></div>
+        <label className="field full"><span>{direction==="INTERNAL"?"Isi Nota Dinas":"Ringkasan"}</span>
+          <textarea className="textarea" name="summary" defaultValue={detail.letter.summary||""}/></label>
+        <label className="field full"><span>Catatan</span>
+          <textarea className="textarea" name="notes" defaultValue={detail.letter.notes||""}/></label>
+        {detail.notaRouting?.drafter&&(isRoot||detail.notaRouting.authorId===user.id)&&<label className="field full">
+          <span>Arahan untuk Staff</span>
+          <textarea className="textarea" name="nota_draft_instruction" maxLength={5000}
+            defaultValue={detail.notaRouting.draftInstruction||""}/></label>}
         {!detail.v11&&<div className="field full"><label style={{display:"flex",alignItems:"center",gap:8,fontWeight:500}}><input type="checkbox" name="is_public" defaultChecked={Boolean(detail.letter.is_public)}/> Public</label><span className="hint">Dokumen RAHASIA tidak dapat dibuat public. Root Admin tetap dapat melihat seluruh data.</span></div>}
         {canChangeSource()&&<div className="field full">
           <ReferencePicker kind="source" letterId={detail.letter.id} selected={sourceLetter} onChange={setSourceLetter} limit={1}/>
@@ -1106,7 +1185,8 @@ export default function LettersClient({direction,user}:Props){
         </>}
         {pendingAction.action==="APPROVE_FINAL"&&<p className="field full notice">Surat berstatus Disetujui di level Anda. Pilih Teruskan ke Dirops atau Dirut di detail jika perlu persetujuan dari atas. Tindak lanjut dan pembayaran mengikuti prosesnya masing-masing.</p>}
         {["SEND_NOTA_DIRECT","SEND_NOTA_REPLY"].includes(pendingAction.action)&&<p className="field full notice">
-          PDF bertanda tangan akan tersedia bagi {detail.letter.recipient}.
+          PDF bertanda tangan akan tersedia bagi {[detail.letter.recipient,
+            ...detail.notaRouting.additionalRecipients.map((account:RoutingUser)=>notaOption(account).label)].join(", ")}.
         </p>}
         {pendingAction.action==="UNDO_APPROVAL"&&<p className="field full notice">Surat kembali ke reviewer sebelum persetujuan ini. Koreksi tersedia selama tahap berikutnya belum memproses surat atau tanda tangan.</p>}
         {pendingAction.action==="MARK_SENT"&&detail.v11&&<>
