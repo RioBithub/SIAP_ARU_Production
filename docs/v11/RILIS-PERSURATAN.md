@@ -21,6 +21,7 @@ Jalankan dari sesi operator VPS yang mengelola PM2 `siap-aru`. Langkah ini untuk
     database/migrations/2026-11-22-v11-nota-collaboration.sql
     database/migrations/2026-11-23-v11-nota-drafting-recipients.sql
     database/migrations/2026-11-23-v11-system-correspondence.sql
+    database/migrations/2026-11-23-v11-correspondence-word.sql
   )
   for migration in "${migrations[@]}"; do
     git cat-file -e "$target:$migration"
@@ -80,6 +81,8 @@ Satu rilis aset statis sebelumnya tetap tersedia setelah restart untuk tab yang 
 
 ## Verifikasi dari situs utama
 
+- Sebagai pengguna, buka **Profil Saya** dari avatar dan simpan nama. Sebagai Root Admin, buka **User & Role → Edit Profil** untuk mengubah nama atau email login pengguna. Cari `USER_PROFILE_UPDATE` di Audit Log untuk melihat pelaku dan nilai sebelum serta sesudah perubahan.
+
 - Setelah restart, buka **Surat Masuk**, **Nota Dinas**, **Surat Keluar**, dan **Disposisi** dari tab baru dan tab yang sudah terbuka sebelum rilis. Jika halaman menampilkan pesan gagal dimuat, klik **Muat ulang halaman** untuk mengambil tampilan terbaru.
 - Sebagai Sekretariat, buka Surat Masuk dan Surat Keluar. Daftar awal memuat semua surat yang dapat diakses. Gunakan **Antrian Sekretariat** untuk memfilter ke pekerjaan yang masih berada di Sekretariat.
 - Buka satu lampiran PDF simulasi lewat **Pratinjau**. Untuk menguji undangan, gunakan dokumen dan email penguji yang disetujui mengikuti [panduan Mekari Sandbox](MEKARI-SANDBOX.md).
@@ -94,6 +97,8 @@ Satu rilis aset statis sebelumnya tetap tersedia setelah restart untuk tab yang 
 ## Format PDF ARU dan sumber penomoran
 
 **Buat dari sistem (PDF ARU)** memakai perihal, tujuan, tanggal, serta nomor yang disimpan SIAP. Isi utama dicetak lebih dulu, lalu paragraf dan tabel tambahan sesuai urutannya. Kolom **Keterangan lampiran** bersifat opsional. Blok tanda tangan bisa di kiri, tengah, atau kanan. Ulangi pilihan posisi untuk memakai baris berikutnya. Di Mekari Sandbox, pilih PDF yang dibuat SIAP lalu klik **Pakai posisi dari draf** dan isi email penguji. Nama pada blok PDF menunjukkan penandatangan yang dimaksud. Tanda tangan tetap mengikuti proses Mekari atau unggahan bukti.
+
+Pada detail Surat Keluar dan Nota Dinas yang dibuat sistem, **Unduh Word Draf** menyediakan `.docx` yang bisa diedit dengan Arial 11 pada isi. PDF tetap tersedia untuk pratinjau dan tanda tangan. Setelah memperbarui isi, buat ulang atau unggah PDF terbaru sebelum mengajukan surat. PDF yang sudah disimpan sebelumnya tetap bisa ditinjau sesuai aksesnya.
 
 **Edit Metadata** mengubah perihal, tujuan, dan isi utama. Setelah isi draf berubah, gunakan **Ubah Format / Buat Ulang PDF**, atau unggah versi terbaru. Pilih **Unggah sendiri** saat membuat draf jika PDF sudah disiapkan di luar SIAP.
 

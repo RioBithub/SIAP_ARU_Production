@@ -474,3 +474,14 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit;
 .draft-layout .table-wrap{margin:0}
 .draft-table td{padding:4px}
 .draft-table input{min-width:104px}
+
+.profile-chip{background:transparent;border:0;border-left:1px solid var(--line);color:inherit;cursor:pointer;text-align:left}
+.profile-chip .avatar{flex-shrink:0}
+.profile-chip-name{max-width:166px}
+.profile-chip-name b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.profile-chip:hover .avatar,.profile-chip:focus-visible .avatar{outline:2px solid var(--cyan);outline-offset:2px}
+@media(max-width:820px){
+  .profile-chip,.account-switch-enabled .profile-chip{display:flex;padding:0;border:0}
+  .profile-chip-name{display:none}
+  .profile-chip .avatar{width:34px;height:34px;border-radius:10px}
+}

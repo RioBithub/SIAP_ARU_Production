@@ -13,6 +13,7 @@ export default function NotaDocumentPanel({ id, data, assistants, refresh }: {
     editable: boolean; sandbox: boolean; uploadable: boolean; requiresProof: boolean;
     canAssignAssistant: boolean; assistant: { id: string; name: string } | null;
     initialLayout: CorrespondenceLayout | null; slots: DraftSignatureSlot[];
+    wordSourceId: string | null;
   };
   assistants: Array<{ id: string; name: string }>;
   refresh: () => Promise<void>;
@@ -79,7 +80,8 @@ export default function NotaDocumentPanel({ id, data, assistants, refresh }: {
         </b></div>
         {!data.signed && data.manualReason && <div className="kpi-row"><span>Keterangan pengirim</span><b>{data.manualReason}</b></div>}
         {current && <div className="kpi-row"><span>{data.signed ? "PDF hasil tanda tangan" : "PDF utama"}</span>
-          <AttachmentActions id={current.id} name={current.original_name} downloadLabel="Unduh PDF Nota Dinas"/>
+          <AttachmentActions id={current.id} name={current.original_name} downloadLabel="Unduh PDF Nota Dinas"
+            word={data.wordSourceId ? { letterId: id, sourceId: data.wordSourceId } : undefined}/>
         </div>}
         {data.signed && data.source && <div className="kpi-row"><span>PDF sebelum tanda tangan</span>
           <AttachmentActions id={data.source.id} name={data.source.original_name} downloadLabel="Unduh PDF draf"/>

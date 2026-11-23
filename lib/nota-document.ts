@@ -70,6 +70,7 @@ export async function notaDocument(conn: Queryable, letterId: string) {
   if (!row) return null;
   return {
     source: row.source_id ? { id: String(row.source_id), original_name: String(row.original_name) } : null,
+    sourceKind: row.source_kind as "UPLOAD" | "GENERATED" | null,
     signed: row.signed_id ? { id: String(row.signed_id), original_name: String(row.signed_name) } : null,
     method: row.method as "DIGITAL" | "BASAH" | "MEKARI_SANDBOX" | null,
     manualReason: (row.manual_reason as string | null) ?? null,

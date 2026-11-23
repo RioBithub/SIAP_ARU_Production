@@ -2,34 +2,13 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import fontkit from "@pdf-lib/fontkit";
 import { PDFDocument, PageSizes, StandardFonts, rgb, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
-import { type CorrespondenceLayout, type DraftSignatureSlot, type SignatureLine, SIGNATURE_POSITIONS } from "@/lib/correspondence-layout";
+import { type DraftSignatureSlot, type SignatureLine, SIGNATURE_POSITIONS } from "@/lib/correspondence-layout";
+import { ARU_BODY_WIDTH as width, ARU_FONT_SIZE as size, ARU_FOOTER, ARU_LETTERHEAD, ARU_LINE_HEIGHT as leading, ARU_PAGE,
+  correspondenceColumnWidths, correspondenceContent, correspondenceLogoPath, type CorrespondenceDocumentInput } from "@/lib/correspondence-document";
 
 const [pageWidth, pageHeight] = PageSizes.A4;
-const left = 72;
-const right = pageWidth - 50;
-const width = right - left;
-const pageBottom = 70;
-const size = 11;
-const leading = 14;
-const lineColor = rgb(0.45, 0.45, 0.45);
-const footer = [
-  "PT Aru Raharja, Gedung Wisma Raharja Lantai 9, Jl. TB Simatupang, Kav. 1, Cilandak Timur, Jakarta Selatan 12560",
-  "Tel : +62-21-7818124, website : www.aruraharja.co.id, email : pusat@aruraharja.co.id",
-];
-
-export type CorrespondencePdfInput = {
-  direction: "INTERNAL" | "OUTGOING";
-  number: string | null;
-  date: string;
-  subject: string;
-  body: string;
-  recipient: string;
-  confidentiality: string;
-  author: string;
-  authorTitle: string;
-  reference?: string | null;
-  layout: CorrespondenceLayout;
-};
+const { left, bottom: pageBottom } = ARU_PAGE;
+const lineColor = rgb(0.68, 0.68, 0.68);
 
 async function bodyFonts(doc: PDFDocument) {
   const dir = process.env.ARU_ARIAL_FONT_DIR;
@@ -74,9 +53,9 @@ class CorrespondencePdf {
 
   private newPage() {
     this.page = this.doc.addPage(PageSizes.A4);
-    const logo = this.logo.scaleToFit(145, 34);
-    this.page.drawImage(this.logo, { x: left, y: pageHeight - 70, ...logo });
-    this.y = pageHeight - 92;
+    const { x, top, width, height } = ARU_LETTERHEAD;
+    this.page.drawImage(this.logo, { x, y: pageHeight - top - height, width, height });
+    this.y = pageHeight - ARU_PAGE.top;
   }
 
   private reserve(height: number) {
@@ -88,20 +67,20 @@ class CorrespondencePdf {
       .map(char => char === "\n" || this.characters.has(char.codePointAt(0)!) ? char : "·").join("");
   }
 
-  private wrap(value: string, maxWidth: number, font: PDFFont) {
+  private wrap(value: string, maxWidth: number, font: PDFFont, fontSize = size) {
     const lines: string[] = [];
     for (const paragraph of this.visible(value).split("\n")) {
       let row = "";
       for (const word of paragraph.trim().split(/\s+/)) {
         const next = row ? row + " " + word : word;
-        if (font.widthOfTextAtSize(next, size) <= maxWidth) {
+        if (font.widthOfTextAtSize(next, fontSize) <= maxWidth) {
           row = next;
           continue;
         }
         if (row) lines.push(row);
         row = "";
         for (const char of word) {
-          if (font.widthOfTextAtSize(row + char, size) > maxWidth) {
+          if (font.widthOfTextAtSize(row + char, fontSize) > maxWidth) {
             lines.push(row);
             row = "";
           }
@@ -113,34 +92,36 @@ class CorrespondencePdf {
     return lines;
   }
 
-  private text(value: string, x: number, y: number, font: PDFFont = this.font) {
-    if (value) this.page.drawText(value, { x, y, font, size });
+  private text(value: string, x: number, y: number, font: PDFFont = this.font, fontSize = size) {
+    if (value) this.page.drawText(value, { x, y, font, size: fontSize });
   }
 
   gap(amount = 10) { this.y -= amount; }
 
-  paragraph(text: string, options: { bold?: boolean; align?: "center" | "right"; space?: number } = {}) {
+  paragraph(text: string, options: { bold?: boolean; center?: boolean; space?: number; size?: number } = {}) {
     const font = options.bold ? this.bold : this.font;
-    for (const row of this.wrap(text, width, font)) {
-      this.reserve(leading);
-      const textWidth = font.widthOfTextAtSize(row, size);
-      const x = options.align === "center" ? left + (width - textWidth) / 2
-        : options.align === "right" ? right - textWidth : left;
-      this.text(row, x, this.y - size, font);
-      this.y -= leading;
+    const fontSize = options.size ?? size;
+    const lineHeight = fontSize + leading - size;
+    for (const row of this.wrap(text, width, font, fontSize)) {
+      this.reserve(lineHeight);
+      const textWidth = font.widthOfTextAtSize(row, fontSize);
+      const x = options.center ? left + (width - textWidth) / 2 : left;
+      this.text(row, x, this.y - fontSize, font, fontSize);
+      this.y -= lineHeight;
     }
     this.gap(options.space ?? 7);
   }
 
-  field(label: string, value: string, isBold = false) {
-    const valueX = left + 113;
-    const font = isBold ? this.bold : this.font;
-    const lines = this.wrap(value, right - valueX, font);
+  field(field: { label: string; value: string; bold?: boolean }, labelWidth: number, colonWidth: number) {
+    const colonX = left + labelWidth;
+    const valueX = colonX + colonWidth;
+    const font = field.bold ? this.bold : this.font;
+    const lines = this.wrap(field.value, left + width - valueX, font);
     for (const [index, row] of lines.entries()) {
       this.reserve(leading);
       if (index === 0) {
-        this.text(label, left, this.y - size);
-        this.text(":", valueX - 13, this.y - size);
+        this.text(field.label, left, this.y - size);
+        this.text(":", colonX, this.y - size);
       }
       this.text(row, valueX, this.y - size, font);
       this.y -= leading;
@@ -148,13 +129,7 @@ class CorrespondencePdf {
   }
 
   table(rows: string[][]) {
-    const weights = rows[0].map((title, column) => Math.sqrt(Math.max(
-      title.length, ...rows.slice(1).map(row => Math.min(140, row[column].length)), 1,
-    )));
-    const minWidth = 44;
-    const flexWidth = width - minWidth * weights.length;
-    const weightTotal = weights.reduce((sum, value) => sum + value, 0);
-    const columnWidths = weights.map(weight => minWidth + flexWidth * weight / weightTotal);
+    const columnWidths = correspondenceColumnWidths(rows);
     const prepare = (row: string[], font: PDFFont) => row.map((value, index) => this.wrap(value, columnWidths[index] - 12, font));
     const height = (cells: string[][]) => 10 + Math.max(...cells.map(lines => lines.length)) * leading;
     const header = prepare(rows[0], this.bold);
@@ -193,13 +168,7 @@ class CorrespondencePdf {
     this.gap();
   }
 
-  signatures(signers: SignatureLine[]) {
-    const rows: SignatureLine[][] = [];
-    for (const person of signers) {
-      const row = rows.at(-1);
-      if (row && !row.some(entry => entry.position === person.position)) row.push(person);
-      else rows.push([person]);
-    }
+  signatures(rows: SignatureLine[][]) {
     const columnWidth = width / SIGNATURE_POSITIONS.length;
     for (const [index, row] of rows.entries()) {
       const lines = row.map(person => ({
@@ -229,48 +198,31 @@ class CorrespondencePdf {
 
   async bytes() {
     for (const page of this.doc.getPages()) {
-      page.drawLine({ start: { x: left, y: 53 }, end: { x: right, y: 53 }, thickness: .5, color: lineColor });
-      footer.forEach((line, index) => {
-        const footerSize = 8;
+      ARU_FOOTER.forEach((line, index) => {
+        const footerSize = 9;
         const x = left + (width - this.font.widthOfTextAtSize(line, footerSize)) / 2;
-        page.drawText(line, { x, y: 40 - index * 10, size: footerSize, font: this.font });
+        page.drawText(line, { x, y: 56 - index * 12, size: footerSize, font: this.font });
       });
     }
     return this.doc.save();
   }
 }
 
-export async function renderCorrespondencePdf(input: CorrespondencePdfInput) {
-  const { direction, layout } = input;
-  const internal = direction === "INTERNAL";
+export async function renderCorrespondencePdf(input: CorrespondenceDocumentInput) {
+  const { layout } = input;
+  const content = correspondenceContent(input);
   const doc = await PDFDocument.create();
   doc.setTitle(input.subject);
   doc.setAuthor("PT Aru Raharja");
   const [regular, bold] = await bodyFonts(doc);
-  const logo = await doc.embedPng(await readFile(path.join(process.cwd(), "public", "aru-letterhead.png")));
+  const logo = await doc.embedPng(await readFile(correspondenceLogoPath()));
   const pdf = new CorrespondencePdf(doc, regular, bold, logo);
-  const date = new Intl.DateTimeFormat("id-ID", { dateStyle: "long", timeZone: "UTC" })
-    .format(new Date(input.date + "T00:00:00Z"));
-  const sifat = input.confidentiality.slice(0, 1) + input.confidentiality.slice(1).toLowerCase();
-  if (internal) {
-    pdf.paragraph("NOTA DINAS", { align: "center", bold: true, space: 12 });
-    pdf.field("Kepada", /^Yth[.\s]/i.test(input.recipient) ? input.recipient : "Yth. " + input.recipient);
-    pdf.field("Dari", input.authorTitle || input.author);
-    pdf.field("Nomor Surat", input.number || "–");
-    pdf.field("Tanggal", date);
-    if (input.confidentiality !== "BIASA") pdf.field("Sifat", sifat);
-    if (layout.enclosures) pdf.field("Lampiran", layout.enclosures);
-    pdf.field("Perihal", input.subject, true);
-    if (input.reference) pdf.field("Rujukan", input.reference);
-  } else {
-    pdf.paragraph([layout.place, date].filter(Boolean).join(", "), { align: "right" });
-    pdf.field("Nomor", input.number || "–");
-    pdf.field("Sifat", sifat);
-    if (layout.enclosures) pdf.field("Lampiran", layout.enclosures);
-    pdf.field("Hal", input.subject, true);
-    pdf.gap(12);
-    pdf.paragraph(/^Yth[.\s]/i.test(input.recipient) ? input.recipient : "Yth. " + input.recipient, { space: 0 });
-    if (layout.address) pdf.paragraph(layout.address);
+  if (content.title) pdf.paragraph(content.title, { bold: true, center: true, size: 16, space: 10 });
+  if (content.headingDate) pdf.paragraph(content.headingDate, { space: 13 });
+  for (const field of content.fields) pdf.field(field, content.labelWidth, content.colonWidth);
+  if (content.address) {
+    pdf.gap(28);
+    pdf.paragraph(content.address, { space: 0 });
   }
   pdf.gap(12);
   if (input.body) pdf.paragraph(input.body);
@@ -278,13 +230,12 @@ export async function renderCorrespondencePdf(input: CorrespondencePdfInput) {
     if (block.type === "TEXT") pdf.paragraph(block.text);
     else pdf.table(block.rows);
   }
-  if (!internal && layout.closing) pdf.paragraph(layout.closing);
-  const signers = layout.signers.length ? layout.signers : [{ name: input.author, title: input.authorTitle, position: "LEFT" } as const];
+  if (content.closing) pdf.paragraph(content.closing);
   pdf.gap(8);
-  pdf.signatures(signers);
+  pdf.signatures(content.signatures);
   if (layout.copies) {
     pdf.gap(8);
-    pdf.paragraph("Tembusan", { bold: true });
+    pdf.paragraph("Tembusan:", { space: 0 });
     pdf.paragraph(layout.copies);
   }
   return { bytes: await pdf.bytes(), slots: pdf.slots };

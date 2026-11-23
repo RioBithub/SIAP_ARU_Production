@@ -13,8 +13,9 @@ export async function GET(request:Request){
      FROM siap_audit_logs a LEFT JOIN siap_users u ON u.id=a.user_id
      LEFT JOIN siap_users admin ON admin.id=JSON_UNQUOTE(JSON_EXTRACT(a.metadata_json,'$.impersonatedByUserId'))
      WHERE (?='' OR a.action LIKE ? OR a.entity_type LIKE ? OR u.name LIKE ? OR u.email LIKE ?
+       OR (a.action='USER_PROFILE_UPDATE' AND JSON_EXTRACT(a.metadata_json,'$.changes') LIKE ?)
        OR admin.name LIKE ? OR admin.email LIKE ? OR a.id=?)
      ORDER BY a.created_at DESC,a.id DESC LIMIT 500`,
-    [q,like,like,like,like,like,like,reference]);
+    [q,like,like,like,like,like,like,like,reference]);
   return NextResponse.json({ok:true,data:rows});
 }

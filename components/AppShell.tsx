@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import type { SessionUser } from "@/lib/types";
 import { ROLE_LABELS } from "@/lib/types";
 import WorkflowNotifications from "@/components/WorkflowNotifications";
+import AccountProfileDialog from "@/components/AccountProfileDialog";
 import AccountSwitcher, { ACCOUNT_SWITCH_EVENT, RestoreAccountButton } from "@/components/AccountSwitcher";
 
 type Item = { href:string; label:string; icon:string; roles?:string[] };
@@ -18,6 +19,7 @@ export default function AppShell({ user, rootName, targetId, children }: {
   const pathname=usePathname();
   const router=useRouter();
   const [open,setOpen]=useState(false);
+  const [profileOpen,setProfileOpen]=useState(false);
 
   useEffect(() => {
     if (!rootName) return;
@@ -109,7 +111,10 @@ export default function AppShell({ user, rootName, targetId, children }: {
         <div className="top-right">
           <WorkflowNotifications/>
           {rootName && <AccountSwitcher targetId={targetId}/>}
-          <div className="user-chip"><div className="avatar">{user.name.slice(0,2).toUpperCase()}</div><div><b>{user.name}</b><small>{ROLE_LABELS[user.role]}</small></div></div>
+          <button type="button" className="user-chip profile-chip" aria-label="Profil Saya" title="Profil Saya" onClick={()=>setProfileOpen(true)}>
+            <span className="avatar">{user.name.slice(0,2).toUpperCase()}</span>
+            <span className="profile-chip-name"><b>{user.name}</b><small>{ROLE_LABELS[user.role]}</small></span>
+          </button>
           <button className="btn btn-secondary" onClick={logout}>Keluar</button>
         </div>
       </header>
@@ -120,6 +125,7 @@ export default function AppShell({ user, rootName, targetId, children }: {
         </div>
         <RestoreAccountButton targetId={targetId}>Kembali ke Root Admin</RestoreAccountButton>
       </div>}
+      {profileOpen && <AccountProfileDialog key={user.id} account={user} onClose={()=>setProfileOpen(false)}/>}
       {children}
     </div>
   </div>;
