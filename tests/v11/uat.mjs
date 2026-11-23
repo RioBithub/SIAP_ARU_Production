@@ -2070,7 +2070,8 @@ try {
     await choose([roles.root.id], 400);
     const row = await incoming("pic-unit-baru");
     await register(row.id);
-    await letterAction("ops", row.id, "APPROVE_FINAL");
+    await letterAction("ops", row.id, "APPROVE");
+    await letterAction("dirops", row.id, "APPROVE_FINAL");
     const parent = await assign("dirops", row.id, "managerit");
     await start("managerit", parent.id);
     await assign("managerit", row.id, "staffsupport", { parent_id: parent.id }, 400);
