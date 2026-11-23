@@ -4,6 +4,9 @@ import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { getCurrentUser } from "@/lib/auth";
 import { db, withTransaction } from "@/lib/db";
 import { auditLog } from "@/lib/audit";
+import { REGISTER_SHEETS as SHEETS, normalizeRegisterNumber, parseRegisterDate, parseRegisterSlot,
+  type SheetConfig } from "@/lib/aru-register";
+import { letterAccess } from "@/lib/letter-access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,88 +16,10 @@ export const dynamic = "force-dynamic";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const XLSX: any = require("xlsx");
 
-type SheetConfig = {
-  sheet: string;
-  title: string;
-  formatText: string;
-  documentType: string;
-  formatCode: string;
-  hasUserInput: boolean;
-  prefix: string;
-};
-
-const SHEETS: SheetConfig[] = [
-  { sheet:"Perjanjian Kerjasama", title:"Perjanjian Kerjasama", formatText:"Format : P/ Nomor Surat / AR / tahun", documentType:"PERJANJIAN_KERJA_SAMA", formatCode:"PKS", hasUserInput:true, prefix:"P" },
-  { sheet:"Surat Keluar- Direksi", title:"Direksi", formatText:"Format : Dir/ Nomor Surat / AR / tahun", documentType:"SURAT_DIREKSI", formatCode:"DIR", hasUserInput:true, prefix:"Dir" },
-  { sheet:"Surat Keluar - Bag. Operasional", title:"Bagian Operasional", formatText:"Format : Oprsl / No. Surat / AR / tahun", documentType:"SURAT_OPERASIONAL", formatCode:"OPS", hasUserInput:false, prefix:"Oprsl" },
-  { sheet:"Purchase Order", title:"Purchase Order", formatText:"Format : PO/ No. Surat / AR / tahun", documentType:"PURCHASE_ORDER", formatCode:"PO", hasUserInput:true, prefix:"PO" },
-  { sheet:"Surat keluar- Bag. umum", title:"Bagian Umum", formatText:"Format : UM/ Nomor Surat / AR / tahun", documentType:"SURAT_UMUM", formatCode:"UMUM", hasUserInput:true, prefix:"UM" },
-];
 const BY_SHEET = new Map(SHEETS.map(x=>[x.sheet,x]));
 const ALLOWED_EXPORT = new Set(["ROOT_ADMIN","STAFF","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR"]);
 
 function s(v: unknown, max=5000) { return String(v ?? "").trim().slice(0,max); }
-function pad2(v:number){ return String(v).padStart(2,"0"); }
-function isoDate(y:number,m:number,d:number){
-  const dt=new Date(Date.UTC(y,m-1,d));
-  if(dt.getUTCFullYear()!==y||dt.getUTCMonth()!==m-1||dt.getUTCDate()!==d)return null;
-  return `${y}-${pad2(m)}-${pad2(d)}`;
-}
-const MONTHS:Record<string,number>={
-  januari:1,jan:1,februari:2,feb:2,maret:3,mar:3,april:4,apr:4,mei:5,may:5,
-  juni:6,jun:6,juli:7,jul:7,agustus:8,agu:8,aug:8,september:9,sep:9,
-  oktober:10,okt:10,oct:10,november:11,nov:11,desember:12,des:12,dec:12,
-};
-function normalizeDateText(input:string){
-  return input
-    .replace(/(\d)([A-Za-z])/g,"$1 $2")
-    .replace(/aprill/ig,"April")
-    .replace(/agutus|agusuts/ig,"Agustus")
-    .replace(/septrember|setember/ig,"September")
-    .replace(/\s+/g," ")
-    .trim();
-}
-function parseDate(value:unknown):{date:string|null;warning?:string}{
-  if(value==null||s(value)==="")return {date:null};
-  if(value instanceof Date && !Number.isNaN(value.getTime())){
-    return {date:`${value.getUTCFullYear()}-${pad2(value.getUTCMonth()+1)}-${pad2(value.getUTCDate())}`};
-  }
-  if(typeof value==="number"&&Number.isFinite(value)){
-    const p=XLSX.SSF.parse_date_code(value);
-    if(p){ const d=isoDate(Number(p.y),Number(p.m),Number(p.d)); if(d)return {date:d}; }
-  }
-  const raw=s(value,100);
-  if(/^\d{4}-\d{2}-\d{2}$/.test(raw))return {date:raw};
-  const normalized=normalizeDateText(raw);
-  const m=normalized.match(/^(\d{1,2})[\s\/-]+([A-Za-z]+|\d{1,2})[\s\/-]+(\d{2,4})$/);
-  if(m){
-    const day=Number(m[1]);
-    const month=/^\d+$/.test(m[2])?Number(m[2]):MONTHS[m[2].toLowerCase()];
-    let year=Number(m[3]);
-    if(year<100)year+=2000;
-    let warning:string|undefined;
-    if(year===206){year=2026;warning=`Tahun pada Excel \"${raw}\" dinormalisasi menjadi 2026.`;}
-    if(month){const d=isoDate(year,month,day);if(d)return {date:d,warning};}
-  }
-  return {date:null,warning:`Tanggal \"${raw}\" tidak dapat dibaca.`};
-}
-function normalizeNumber(value:unknown){
-  if(value==null)return "";
-  if(typeof value==="number"&&Number.isFinite(value)){
-    if(Number.isInteger(value))return String(value);
-    return String(Number(value.toFixed(6)));
-  }
-  return s(value,80).replace(/\s+/g,"");
-}
-function parseLedgerSlot(raw:string){
-  const m=raw.match(/^(\d+)(?:\.(\d+))?$/);
-  if(!m)return null;
-  const base=Number(m[1]), variant=Number(m[2]||0);
-  // Protect the future numbering ledger from obvious legacy spreadsheet/date
-  // serial mistakes while still preserving the original row in the database.
-  if(!Number.isInteger(base)||base<1||base>9999||!Number.isInteger(variant)||variant<0)return null;
-  return {base,variant};
-}
 function renderNumber(cfg:SheetConfig, raw:string, date:string){
   return `${cfg.prefix}/${raw}/AR/${date.slice(0,4)}`;
 }
@@ -133,12 +58,10 @@ export async function GET(request:Request){
   if(!user)return NextResponse.json({ok:false,error:"Unauthorized"},{status:401});
   if(!ALLOWED_EXPORT.has(user.role))return NextResponse.json({ok:false,error:"Anda tidak memiliki akses untuk export persuratan."},{status:403});
 
-  const where=["l.direction='OUTGOING'",`l.document_type IN (${SHEETS.map(()=>"?").join(",")})`];
-  const params:any[]=[...SHEETS.map(x=>x.documentType)];
-  if(user.role!=="ROOT_ADMIN"){
-    where.push(`(l.is_public=1 OR l.created_by=? OR l.current_owner_user_id=? OR (l.current_owner_user_id IS NULL AND l.\`current_role\`=?) OR EXISTS(SELECT 1 FROM siap_letter_actions a WHERE a.letter_id=l.id AND a.actor_user_id=?))`);
-    params.push(user.id,user.id,user.role,user.id);
-  }
+  const access = letterAccess(user);
+  const where=[`((l.direction='OUTGOING' AND l.document_type IN (${SHEETS.map(()=>"?").join(",")}))
+    OR (l.direction='INTERNAL' AND l.document_type='NOTA_DINAS' AND l.letter_number IS NOT NULL))`, access.clause];
+  const params=[...SHEETS.map(x=>x.documentType), ...access.params];
   const [rows]=await db.query<RowDataPacket[]>(
     `SELECT l.*,u.name creator_name,nf.code format_code,nl.seq_base,nl.variant
      FROM siap_letters l
@@ -169,8 +92,15 @@ export async function GET(request:Request){
     setSheetAppearance(ws,cfg);
     XLSX.utils.book_append_sheet(book,ws,cfg.sheet);
   }
+  const notas = [["Nomor Surat","Tanggal Surat","Pengirim","Tujuan Surat","Perihal","Status"],
+    ...rows.filter(row => row.direction === "INTERNAL").map(row => [
+      row.letter_number, workbookDate(row.letter_date), row.sender, row.recipient, row.subject, row.status,
+    ])];
+  const notaSheet = XLSX.utils.aoa_to_sheet(notas, { cellDates: true, dateNF: "dd mmm yyyy" });
+  notaSheet["!cols"] = [22, 18, 30, 35, 68, 22].map(wch => ({ wch }));
+  XLSX.utils.book_append_sheet(book, notaSheet, "Nota Dinas");
   const out=XLSX.write(book,{type:"buffer",bookType:"xlsx",cellDates:true});
-  await auditLog({user,action:"OUTGOING_EXCEL_EXPORT",entityType:"LETTER",metadata:{rows:rows.length,sheets:SHEETS.map(x=>x.sheet)},request});
+  await auditLog({user,action:"OUTGOING_EXCEL_EXPORT",entityType:"LETTER",metadata:{rows:rows.length,sheets:book.SheetNames},request});
   const filename=`Form Persuratan ARU ${new Date().toISOString().slice(0,10)}.xlsx`;
   return new Response(out,{headers:{
     "Content-Type":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -181,11 +111,14 @@ export async function GET(request:Request){
 
 async function formatMap(conn:PoolConnection){
   const [rows]=await conn.query<RowDataPacket[]>(
-    `SELECT id,code,document_type,pattern FROM siap_number_formats WHERE is_active=1 AND document_type IN (${SHEETS.map(()=>"?").join(",")})`,
+    `SELECT id,code,document_type,pattern FROM siap_number_formats WHERE is_active=1 AND document_type IN (${SHEETS.map(()=>"?").join(",")}) ORDER BY id FOR UPDATE`,
     SHEETS.map(x=>x.documentType)
   );
   const map=new Map<string,any>();
-  for(const r of rows)map.set(String(r.document_type),r);
+  for(const cfg of SHEETS){
+    const format=rows.find(row=>row.code===cfg.formatCode && row.document_type===cfg.documentType);
+    if(format) map.set(cfg.documentType,format);
+  }
   return map;
 }
 
@@ -214,8 +147,8 @@ export async function POST(request:Request){
       for(let i=4;i<data.length;i++){
         const excelRow=i+1;
         const row=data[i]||[];
-        const rawNumber=normalizeNumber(row[1]);
-        const dateResult=parseDate(row[2]);
+        const rawNumber=normalizeRegisterNumber(row[1]);
+        const dateResult=parseRegisterDate(row[2]);
         const userInput=cfg.hasUserInput?s(row[3],180):"";
         const recipient=cfg.hasUserInput?s(row[4],255):s(row[3],255);
         const subject=cfg.hasUserInput?s(row[5],500):s(row[4],500);
@@ -259,7 +192,7 @@ export async function POST(request:Request){
           inserted++;
         }
 
-        const slot=parseLedgerSlot(src.rawNumber);
+        const slot=parseRegisterSlot(src.rawNumber);
         let conflict=0;
         if(slot){
           const [byLetter]=await conn.query<RowDataPacket[]>(`SELECT id FROM siap_number_ledger WHERE letter_id=? LIMIT 1`,[letterId]);

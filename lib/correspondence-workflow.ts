@@ -82,6 +82,7 @@ const letterActions: Record<string, string> = {
   COMPLETE: "Diselesaikan",
   RESPONSE: "Tanggapan",
   GENERATE_NOTA_PDF: "PDF Nota Dinas dibuat",
+  GENERATE_OUTGOING_PDF: "PDF Surat Keluar dibuat",
   DECLARE_NOTA_SIGNED: "Tanda tangan dicatat oleh pengirim",
   RESET_NOTA_SIGNATURE: "Nota Dinas ditandai belum ditandatangani",
   UPLOAD_NOTA_SIGNATURE: "PDF bertanda tangan diunggah",

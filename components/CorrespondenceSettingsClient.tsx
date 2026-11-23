@@ -2,11 +2,14 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import SearchableSelect from "@/components/SearchableSelect";
+import NumberSourcePanel from "@/components/NumberSourcePanel";
+import type { NumberSourceSettings } from "@/lib/correspondence-number-source";
 
 type Account = { id: string; name: string; email: string; role: string; unit_name: string | null };
 const path = "/api/admin/correspondence-settings";
 
 export default function CorrespondenceSettingsClient() {
+  const [numbering,setNumbering] = useState<NumberSourceSettings | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [names, setNames] = useState("");
   const [defaultRecipient, setDefaultRecipient] = useState("");
@@ -30,6 +33,7 @@ export default function CorrespondenceSettingsClient() {
         setNames(config.data.recipients.join("\n"));
         setDefaultRecipient(config.data.defaultRecipient);
         setAccounts(list.data);
+        setNumbering(config.data.numbering ?? null);
         setLoaded(true);
       } catch {
         setError("Pengaturan belum dapat dimuat.");
@@ -81,11 +85,12 @@ export default function CorrespondenceSettingsClient() {
   const toggle = (id: string) => setSelected(ids => ids.includes(id) ? ids.filter(value => value !== id) : [...ids, id]);
 
   return <main className="page">
-    <div className="page-head"><div><h2>Pengaturan Persuratan</h2><p>Kelola tujuan Surat Masuk dan pilihan PIC per Manager.</p></div></div>
+    <div className="page-head"><div><h2>Pengaturan Persuratan</h2><p>Kelola tujuan Surat Masuk, pilihan PIC, dan sumber nomor dokumen.</p></div></div>
     {message && <p className="success" role="status">{message}</p>}
     {error && <p className="error" role="alert">{error}</p>}
     {!loaded && !error && <p className="hint" role="status">Memuat pengaturan…</p>}
     {loaded && <div className="grid-2">
+      {numbering && <NumberSourcePanel initial={numbering}/>}
       <section className="card">
         <div className="card-head"><h3>Tujuan Surat Masuk</h3></div>
         <div className="card-body">

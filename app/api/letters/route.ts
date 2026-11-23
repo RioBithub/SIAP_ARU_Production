@@ -6,7 +6,7 @@ import { db, withTransaction } from "@/lib/db";
 import { auditLog } from "@/lib/audit";
 import { canCreateInternal, canCreateOutgoing, canRegisterIncoming } from "@/lib/permissions";
 import { dateOnly, required, str } from "@/lib/http";
-import { reserveOutgoingNumber } from "@/lib/numbering";
+import { defaultNotaFormatId, reserveLetterNumber } from "@/lib/numbering";
 import { INVOICE_INCOMING, SPK_INCOMING, isBusinessDocument } from "@/lib/business-documents";
 import { saveBusinessDocument } from "@/lib/business-document-data";
 import { getAccessibleLetter, letterAccess } from "@/lib/letter-access";
@@ -16,7 +16,9 @@ import { canHandleSecretariat, canRequestNotaDraft, isNotaDirector,
   REVIEW_ROLES, REVIEW_STATUS } from "@/lib/correspondence-workflow";
 import { discardUncommittedFiles, insertLetterAttachment, type StoredLetterFile } from "@/lib/letter-uploads";
 import { saveUpload } from "@/lib/upload";
-import { generatedNotaFile, saveNotaSource } from "@/lib/nota-document";
+import { saveNotaSource } from "@/lib/nota-document";
+import { checkedCorrespondenceLayout } from "@/lib/correspondence-layout";
+import { saveCorrespondencePdf, senderTitle } from "@/lib/correspondence-draft-data";
 import { activeNotaAccount, notaPartyLabel, notaPrimaryTarget, notaReplyRecipient,
   saveNotaRecipients, validateNotaRecipients } from "@/lib/nota-routing";
 import { checkedDate, invoiceKey, officialManager, persekotChecklist, receiptFields,
@@ -222,7 +224,7 @@ export async function POST(request: Request) {
     }
     const id = crypto.randomUUID();
     const subject = required(body.subject, "Perihal", 500);
-    const letterDate = dateOnly(body.letter_date, "Tanggal dokumen");
+    const letterDate = checkedDate(body.letter_date, "Tanggal dokumen");
     const targetId = replyId ? "" : drafterId ? str(body.routing_target_user_id, 36)
       : required(body.routing_target_user_id, nota && (isNotaDirector(user.role) || delegatedAuthorId) ? "Tujuan Nota Dinas" : "Tujuan review", 36);
     const unit = v11 && direction === "INCOMING" ? requestingUnit(body.requesting_unit) : null;
@@ -243,7 +245,8 @@ export async function POST(request: Request) {
       if (externalNumber!.length > 120) throw new Error("Nomor invoice masuk maksimal 120 karakter.");
       checkedDate(body.business?.due_date, "Jatuh tempo invoice");
     }
-    const formatId = direction === "OUTGOING" ? required(body.number_format_id, "Format nomor", 36) : null;
+    const formatId = direction === "OUTGOING" ? required(body.number_format_id, "Format nomor", 36)
+      : nota ? str(body.number_format_id, 36) || await defaultNotaFormatId() : null;
     const issuedDate = direction === "OUTGOING" && body.issued_date ? dateOnly(body.issued_date, "Tanggal terbit") : null;
     const customBase = direction === "OUTGOING" && body.custom_number_base != null && String(body.custom_number_base).trim() !== ""
       ? Number(body.custom_number_base) : null;
@@ -251,9 +254,15 @@ export async function POST(request: Request) {
       throw new Error("Nomor dasar custom harus angka bulat minimal 1.");
     }
 
-    const generateNota = nota && body.nota_document_source === "GENERATED";
-    if (generateNota && file) throw new Error("Pilih buat PDF dari SIAP atau unggah satu PDF sendiri.");
-    if (nota && body.nota_document_source === "UPLOAD" && !file) throw new Error("Unggah PDF Nota Dinas.");
+    const documentSource = body.document_source ?? body.nota_document_source;
+    const canGenerate = nota || direction === "OUTGOING";
+    if (documentSource !== undefined && (!canGenerate || !["GENERATED", "UPLOAD"].includes(documentSource))) {
+      throw new Error("Pilih sumber dokumen yang sesuai.");
+    }
+    const generate = canGenerate && documentSource === "GENERATED";
+    if (generate && file) throw new Error("Pilih buat PDF dari SIAP atau unggah satu berkas sendiri.");
+    if (nota && documentSource === "UPLOAD" && !file) throw new Error("Unggah PDF Nota Dinas.");
+    const layout = generate ? checkedCorrespondenceLayout(body.document_layout) : null;
     const data = await withTransaction(async conn => {
       // Serialize reservations before any consistent reads or FK locks in this transaction.
       if (formatId) await conn.query("SELECT id FROM siap_number_formats WHERE id=? FOR UPDATE", [formatId]);
@@ -290,11 +299,7 @@ export async function POST(request: Request) {
       const status = needsRegistration ? "SECRETARIAT_INTAKE"
         : direction === "INCOMING" ? REVIEW_STATUS[target!.role as keyof typeof REVIEW_STATUS] : "DRAFT";
       const role = needsRegistration ? "SECRETARIAT" : direction === "INCOMING" ? target!.role : drafter?.role ?? author.role;
-      const original = generateNota ? await generatedNotaFile({
-        id, date: letterDate, author: author.name, unit: author.unit_name, recipient, subject,
-        additionalRecipients: additionalRecipients.map(notaPartyLabel),
-        summary: required(summary, "Isi Nota Dinas", 5000), confidentiality, reference: origin?.subject,
-      }) : file ? await (nota ? saveProof(file, true, "ORIGINAL") : saveUpload(file, "ORIGINAL")) : null;
+      const original = file ? await (nota ? saveProof(file, true, "ORIGINAL") : saveUpload(file, "ORIGINAL")) : null;
       if (original) stored.push(original);
       const { sourceLetterId, sourceDispositionId } = direction === "OUTGOING"
         ? await outgoingSources(conn, user, str(body.source_letter_id, 36), str(body.source_disposition_id, 36))
@@ -313,19 +318,26 @@ export async function POST(request: Request) {
           Number(requiresSecretariatReview), sourceLetterId, sourceDispositionId],
       );
 
-      let number: string | null = null;
+      let reservation: Awaited<ReturnType<typeof reserveLetterNumber>> | null = null;
       if (formatId) {
-        const reserved = await reserveOutgoingNumber({
+        reservation = await reserveLetterNumber({
           conn, formatId, letterId: id, letterDate, userId: user.id, documentType, requestedSeqBase: customBase,
         });
-        number = reserved.rendered;
-        await conn.execute("UPDATE siap_letters SET letter_number=? WHERE id=?", [number, id]);
+        await conn.execute("UPDATE siap_letters SET letter_number=? WHERE id=?", [reservation.rendered, id]);
       }
+      const number = reservation?.rendered ?? null;
       await saveBusinessDocument(conn, user, { id, document_type: documentType, direction }, body.business, true);
-      if (original) {
+      if (layout && (direction === "OUTGOING" || direction === "INTERNAL")) {
+        const generated = await saveCorrespondencePdf(conn, {
+          id, userId: user.id, direction, date: letterDate, number, subject, body: summary ?? "", layout, confidentiality,
+          recipient: [recipient, ...additionalRecipients.map(notaPartyLabel)].filter(Boolean).join("\n"),
+          author: author.name, authorTitle: senderTitle(author), reference: origin?.subject,
+        }, stored);
+        if (nota) await saveNotaSource(conn, id, generated.id, "GENERATED");
+      } else if (original) {
         const originalId = await insertLetterAttachment(conn, id, user.id, original, "ORIGINAL");
         await conn.execute("UPDATE siap_letters SET active_original_attachment_id=? WHERE id=?", [originalId, id]);
-        if (nota) await saveNotaSource(conn, id, originalId, generateNota ? "GENERATED" : "UPLOAD");
+        if (nota) await saveNotaSource(conn, id, originalId, "UPLOAD");
       }
 
       if (v11) {
@@ -372,6 +384,7 @@ export async function POST(request: Request) {
         user, action: "LETTER_CREATE", entityType: "LETTER", entityId: id,
         metadata: { direction, documentType, subject, routingTargetId: target?.id ?? null, isBackdated,
           customNumberBase: customBase, usesSecretariat, sourceLetterId, sourceDispositionId, workflowV11: v11,
+          numberSource: reservation?.source, documentSource: documentSource ?? (file ? "UPLOAD" : undefined),
           requestingUnit: unit, notaAuthorUserId: delegate || drafter ? author.id : null, notaDrafterUserId: drafter?.id,
           notaRecipientIds: additionalRecipients.map(person => person.id), note: draftInstruction ?? undefined },
         request,

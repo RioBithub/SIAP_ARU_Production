@@ -8,6 +8,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { withTransaction } from "@/lib/db";
 import { auditLog } from "@/lib/audit";
 import { cancelLedgerForLetter } from "@/lib/numbering";
+import { correspondenceDraft } from "@/lib/correspondence-draft-data";
 import { dateOnly, required, str } from "@/lib/http";
 import { activeReviewer } from "@/lib/correspondence-data";
 import { canHandleSecretariat, canReceiveDirectorNota, canRequestNotaDraft, isNotaDirector, NOTA_DIRECTORS,
@@ -212,6 +213,9 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
           throw new Error("Akun yang tercantum sebagai pengirim harus mengajukan Nota Dinas ini.");
         if(user.role!=="ROOT_ADMIN" && authorId!==String(user.id))
           throw new Error("Hanya penyusun dokumen yang dapat mengajukan ulang.");
+        if (outgoing && !letter.active_original_attachment_id && await correspondenceDraft(conn, params.id)) {
+          throw new Error("Buat ulang PDF dari isi terbaru atau unggah dokumen utama sebelum mengajukan surat.");
+        }
 
         let target: { id: string; role: keyof typeof REVIEW_STATUS } | null;
         if (workflow) {
@@ -578,7 +582,7 @@ export async function POST(request:Request,{params}:{params:{id:string}}) {
       if (signature && business) {
         await conn.execute("UPDATE siap_business_documents SET signature_method=? WHERE letter_id=?", [signature, params.id]);
       }
-      if (action === "ISSUE") {
+      if (action === "ISSUE" || (direction === "INTERNAL" && ["SUBMIT", "SEND_NOTA_REPLY", "SEND_NOTA_DIRECT"].includes(action))) {
         await conn.execute(
           "UPDATE siap_number_ledger SET status='ISSUED' WHERE letter_id=? AND status='RESERVED'",
           [params.id],

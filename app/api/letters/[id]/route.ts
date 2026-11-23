@@ -21,6 +21,7 @@ import { canEditNotaDocument, canUploadNotaSignature, isDirectNota, isNotaDraft,
 import { activeNotaAccount, directorsForNotaReply, listNotaRecipients, notaPartyLabel, notaPrimaryTarget,
   notaReplyRecipient, saveNotaRecipients, validateNotaRecipients } from "@/lib/nota-routing";
 import { discardUncommittedFiles, insertLetterAttachment, listLetterAttachments, markPaymentAttachment, type StoredLetterFile } from "@/lib/letter-uploads";
+import { canEditOutgoingDraft, correspondenceDraft } from "@/lib/correspondence-draft-data";
 
 export const runtime = "nodejs";
 
@@ -56,8 +57,10 @@ export async function GET(_:Request,{params}:{params:{id:string}}) {
   ]);
   const approval = await reversibleApproval(db, user, letters[0]);
   const { source_letter_id: sourceLetterId, source_disposition_id: sourceDispositionId, approval_snapshot, ...letter } = letters[0];
+  const draftDocument = letter.direction === "INCOMING" ? null : await correspondenceDraft(db, params.id);
   const originalId = letter.active_original_attachment_id ??
-    [...attachments].reverse().find(file => file.attachment_kind === "ORIGINAL")?.id;
+    (draftDocument ? null : [...attachments].reverse().find(file => file.attachment_kind === "ORIGINAL")?.id);
+  const draftSlots = draftDocument?.attachmentId && draftDocument.attachmentId === originalId ? draftDocument.slots : [];
   const business = isBusinessDocument(letter.document_type)
     ? await getBusinessDocumentDetails(user, params.id, letter.document_type)
     : undefined;
@@ -113,7 +116,13 @@ export async function GET(_:Request,{params}:{params:{id:string}}) {
   const canSignNota = nota && canUploadNotaSignature(user, letter, workflow);
   return NextResponse.json({ok:true,data:{letter,actions,attachments,business,v11,
     originalId: nota ? nota.source?.id : originalId, approvalId:approval?.id,
+    draftDocument: letter.direction === "OUTGOING" ? {
+      editable: canEditOutgoingDraft(user, letter), initialLayout: draftDocument?.layout ?? null,
+      source: attachments.find(file => file.id === originalId) ?? null, slots: draftSlots,
+      needsSource: Boolean(draftDocument && !originalId),
+    } : null,
     notaDocument: nota && { ...nota, editable: canEditNotaDocument(user, letter, workflow),
+      initialLayout: draftDocument?.layout ?? null, slots: draftSlots,
       sandbox: canSignNota && sandboxAttachmentsEnabled(), uploadable: canSignNota, requiresProof: requiresNotaProof(workflow),
       canAssignAssistant: isNotaDraft(letter) && authorId === user.id,
       assistant: assistant ? { id: assistant.id, name: assistant.name } : null },
@@ -230,10 +239,16 @@ export async function PATCH(request: Request, { params }: { params: { id: string
       await saveBusinessDocument(conn, user, {
         id: params.id, document_type: letter.document_type, direction: letter.direction,
       }, body.business, false);
-      if (v11 && letter.direction === "INTERNAL" && (subject !== letter.subject || summary !== letter.summary ||
-          sender !== letter.sender || recipient !== letter.recipient || notaRoutingChanged || (conf && conf !== letter.confidentiality))) {
+      const mainContentChanged = subject !== letter.subject || summary !== letter.summary ||
+        recipient !== letter.recipient || (conf && conf !== letter.confidentiality);
+      if (nota && (mainContentChanged || sender !== letter.sender || notaRoutingChanged)) {
         await saveNotaSource(conn, params.id, null, "GENERATED");
         await conn.execute("UPDATE siap_letters SET active_original_attachment_id=NULL WHERE id=?", [params.id]);
+      } else if (draft && letter.direction === "OUTGOING" && mainContentChanged && letter.active_original_attachment_id) {
+        const generated = await correspondenceDraft(conn, params.id);
+        if (generated?.attachmentId === letter.active_original_attachment_id) {
+          await conn.execute("UPDATE siap_letters SET active_original_attachment_id=NULL WHERE id=?", [params.id]);
+        }
       }
       let revision = v11?.invoice_revision;
       if (v11?.requesting_unit) {

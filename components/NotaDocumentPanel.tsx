@@ -4,12 +4,15 @@ import { useCallback, useState, type FormEvent } from "react";
 import AttachmentActions from "@/components/AttachmentActions";
 import V11SigningPanel from "@/components/V11SigningPanel";
 import type { notaDocument } from "@/lib/nota-document";
+import CorrespondenceLayoutFields from "@/components/CorrespondenceLayoutFields";
+import { emptyCorrespondenceLayout, type CorrespondenceLayout, type DraftSignatureSlot } from "@/lib/correspondence-layout";
 
 export default function NotaDocumentPanel({ id, data, assistants, refresh }: {
   id: string;
   data: NonNullable<Awaited<ReturnType<typeof notaDocument>>> & {
     editable: boolean; sandbox: boolean; uploadable: boolean; requiresProof: boolean;
     canAssignAssistant: boolean; assistant: { id: string; name: string } | null;
+    initialLayout: CorrespondenceLayout | null; slots: DraftSignatureSlot[];
   };
   assistants: Array<{ id: string; name: string }>;
   refresh: () => Promise<void>;
@@ -19,12 +22,15 @@ export default function NotaDocumentPanel({ id, data, assistants, refresh }: {
   const [showSigning, setShowSigning] = useState(false);
   const [showDeclaration, setShowDeclaration] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
+  const [showLayout, setShowLayout] = useState(false);
+  const [layout, setLayout] = useState(() => data.initialLayout ?? emptyCorrespondenceLayout());
   const current = data.signed ?? data.source;
   const onSignature = useCallback((ready: boolean) => {
     if (ready) void refresh().catch(() => setError("Hasil tanda tangan tersimpan. Buka kembali detail untuk melihat PDF."));
   }, [refresh]);
 
-  async function save(body: { action: string; source_id?: string; reason?: string; assistant_id?: string } | FormData, endpoint = "nota-document") {
+  async function save(body: { action: string; source_id?: string; reason?: string; assistant_id?: string;
+    document_layout?: CorrespondenceLayout } | FormData, endpoint = "nota-document") {
     setBusy(true);
     setError("");
     try {
@@ -38,6 +44,7 @@ export default function NotaDocumentPanel({ id, data, assistants, refresh }: {
       setShowDeclaration(false);
       setShowSigning(false);
       setShowUpload(false);
+      setShowLayout(false);
       await refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Dokumen belum dapat disimpan.");
@@ -83,7 +90,8 @@ export default function NotaDocumentPanel({ id, data, assistants, refresh }: {
         <p className="muted">{data.needsSource ? "Siapkan ulang PDF utama sesuai isi Nota Dinas yang terbaru."
           : "Siapkan dan tandatangani PDF utama sebelum mengajukan Nota Dinas."}</p>
         <div className="attachment-actions">
-          <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void save({ action: "GENERATE" })}>Buat PDF dari Isi Nota</button>
+          <button type="button" className="btn btn-secondary" disabled={busy} aria-expanded={showLayout}
+            onClick={() => setShowLayout(!showLayout)}>{data.initialLayout ? "Ubah Format / Buat Ulang PDF" : "Buat PDF dari Isi Nota"}</button>
           <label className="btn btn-secondary" aria-disabled={busy}>Unggah PDF Nota Dinas
             <input hidden aria-label="Unggah PDF Nota Dinas" type="file" accept=".pdf,application/pdf" disabled={busy}
               onChange={event => {
@@ -97,6 +105,14 @@ export default function NotaDocumentPanel({ id, data, assistants, refresh }: {
               }}/>
           </label>
         </div>
+        {showLayout && <form className="form-grid workflow-form" onSubmit={event => {
+          event.preventDefault();
+          void save({ action: "GENERATE", document_layout: layout });
+        }}>
+          <p className="hint field full">PDF memakai isi, perihal, penerima, tanggal, dan nomor dari Nota Dinas tersimpan.</p>
+          <CorrespondenceLayoutFields layout={layout} onChange={setLayout} outgoing={false} disabled={busy}/>
+          <div className="field full"><button className="btn btn-primary" disabled={busy}>Simpan PDF</button></div>
+        </form>}
       </>}
       {data.canAssignAssistant && (assistants.length > 0 || data.assistant) && <form
         className="form-grid workflow-form" key={data.assistant?.id || "unassigned"} onSubmit={event => {
@@ -150,7 +166,7 @@ export default function NotaDocumentPanel({ id, data, assistants, refresh }: {
         </form>}
       {showSigning && data.source && !data.signed && data.sandbox && !data.manualReason &&
           <V11SigningPanel key={data.source.id} id={data.source.id}
-            source={{ ...data.source, attachment_kind: "ORIGINAL" }} onReady={onSignature}/>}
+            source={{ ...data.source, attachment_kind: "ORIGINAL", slots: data.slots }} onReady={onSignature}/>}
       {busy && <p role="status">Menyimpan PDF atau status tanda tangan…</p>}
       {error && <p className="error" role="alert">{error}</p>}
     </div>

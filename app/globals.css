@@ -468,3 +468,9 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}a{color:inherit;
 .nota-response-list article>div,.bpk-detail-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .bpk-detail-actions{margin-block:10px}
 .bpk-action-form{border-top:1px solid var(--line);margin-top:14px;padding-top:12px}
+
+.draft-layout{min-width:0;margin:0;padding:12px;border:1px solid var(--line);border-radius:11px}
+.draft-layout legend{padding:0 6px;font-weight:750}
+.draft-layout .table-wrap{margin:0}
+.draft-table td{padding:4px}
+.draft-table input{min-width:104px}
