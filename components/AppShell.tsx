@@ -55,6 +55,7 @@ export default function AppShell({ user, rootName, targetId, children }: {
     ]},
     {label:"Perbankan",items:[
       {href:"/finance/bank-statement",label:"Rekening Koran",icon:"▤",roles:["ROOT_ADMIN","FINANCE","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR"]},
+      {href:"/finance/bank-statement/details",label:"Rincian Rekening Koran",icon:"≡",roles:["ROOT_ADMIN","FINANCE","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR"]},
       {href:"/finance/bank-statement/import",label:"Impor Rekening Koran",icon:"↑",roles:["ROOT_ADMIN","FINANCE","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR"]},
       {href:"/finance/bank-statement/documents",label:"Dokumen Bank",icon:"▰",roles:["ROOT_ADMIN","FINANCE","MANAGER","DIRECTOR_OPS","PRESIDENT_DIRECTOR"]},
     ]},
@@ -113,7 +114,7 @@ export default function AppShell({ user, rootName, targetId, children }: {
           {rootName && <AccountSwitcher targetId={targetId}/>}
           <button type="button" className="user-chip profile-chip" aria-label="Profil Saya" title="Profil Saya" onClick={()=>setProfileOpen(true)}>
             <span className="avatar">{user.name.slice(0,2).toUpperCase()}</span>
-            <span className="profile-chip-name"><b>{user.name}</b><small>{ROLE_LABELS[user.role]}</small></span>
+            <span className="profile-chip-name"><b>{user.name}</b><small>{user.alias || ROLE_LABELS[user.role]}</small></span>
           </button>
           <button className="btn btn-secondary" onClick={logout}>Keluar</button>
         </div>

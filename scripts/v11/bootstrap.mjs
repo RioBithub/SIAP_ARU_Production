@@ -93,7 +93,10 @@ try {
     const snapshot = {};
     for (const table of legacyTables) {
       const [rows] = await cn.query("SELECT * FROM ?? ORDER BY id", [table]);
-      snapshot[table] = rows;
+      snapshot[table] = table === "siap_users" ? rows.map(({ alias, ...row }) => {
+        if (alias != null) throw new Error("Migrasi mengisi alias akun lama.");
+        return row;
+      }) : rows;
     }
     return JSON.stringify(snapshot);
   }
@@ -131,6 +134,9 @@ try {
   const bankAccountLock = await readFile("database/migrations/2026-11-23-bank-account-lock-mandiri.sql", "utf8");
   await cn.query(bankAccountLock);
   await cn.query(bankAccountLock);
+  const bankDetailsProfile = await readFile("database/migrations/2026-11-23-bank-details-profile.sql", "utf8");
+  await cn.query(bankDetailsProfile);
+  await cn.query(bankDetailsProfile);
   const accountSwitch = await readFile("database/migrations/2026-11-18-root-admin-account-switch.sql", "utf8");
   await cn.query(accountSwitch);
   await cn.query(accountSwitch);

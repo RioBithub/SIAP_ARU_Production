@@ -23,6 +23,7 @@ Jalankan dari sesi operator VPS yang mengelola PM2 `siap-aru`. Langkah ini untuk
     database/migrations/2026-11-23-v11-system-correspondence.sql
     database/migrations/2026-11-23-v11-correspondence-word.sql
     database/migrations/2026-11-23-bank-account-lock-mandiri.sql
+    database/migrations/2026-11-23-bank-details-profile.sql
   )
   for migration in "${migrations[@]}"; do
     git cat-file -e "$target:$migration"
@@ -130,3 +131,11 @@ Google Sheets digunakan dalam mode baca. Jika petugas juga mengambil nomor baru 
 Di **Perbankan → Impor Rekening Koran**, pilih **BRI** untuk PDF IBBIZ atau **Mandiri** untuk PDF Account Statement. Pilih rekening tujuan atau biarkan nomor rekening dideteksi dari PDF. Setelah berhasil, **Lihat periode yang diimpor** membuka rekening dan periode tertera di PDF. PDF asli tersedia di **Dokumen Bank**. Pada format Mandiri yang didukung, validasi mencocokkan jumlah transaksi, total debit dan kredit, serta saldo tiap baris dengan ringkasan. Impor berhenti ketika pemeriksaan tidak cocok.
 
 Root Admin memilih rekening di **Rekening Koran** lalu klik **Kunci untuk Finance** atau **Buka Kunci Finance**. Ketika terkunci, Finance dapat melihat dan mengunduh laporan. Perubahan data rekening, transaksi, saldo, impor, pembatalan impor, dan dokumen bank diblokir untuk Finance. Audit Log mencatat `BANK_ACCOUNT_LOCK` dan `BANK_ACCOUNT_UNLOCK`. Rekening yang ada mulai dalam keadaan dapat diedit oleh Finance hingga dikunci oleh Root Admin.
+
+### Rincian Rekening Koran dan profil pengguna
+
+Di **Perbankan → Rincian Rekening Koran**, pilih rekening BRI atau Mandiri lalu impor Laporan Buku Bank (.xls/.xlsx). Excel harus memuat bank, nomor rekening, saldo awal, transaksi, dan baris total bertanggal. Unggahan berulang melewati baris yang sudah tersimpan. Riwayat impor menyediakan file sumber. Finance mengikuti kunci rekening yang ditetapkan Root Admin.
+
+Rincian menampilkan angka buku bank dan tautan ke transaksi rekening koran yang punya satu pasangan berdasarkan tanggal, arah mutasi, dan nominal. Rincian mengikuti koreksi atau pembatalan transaksi ketika laporan dimuat ulang. Periksa baris berstatus **Belum cocok** atau **Perlu diperiksa**. Pilih periode untuk mengunduh hasil ke Excel.
+
+Di **User & Role → Edit Profil**, Root Admin dapat mengubah Unit dan Alias. Alias tampil di bawah nama akun dan bisa dicari saat ganti akun. Pengguna juga dapat mengubah aliasnya melalui **Profil Saya**. Perubahan tercatat sebagai `USER_PROFILE_UPDATE` di Audit Log.

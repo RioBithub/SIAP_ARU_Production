@@ -24,7 +24,7 @@ export default function AdminUsersClient({ activeName, activeEmail }: { activeNa
     <div className="page-head"><div><h2>User & Role</h2><p>Kelola profil, role, password, dan status akun.</p></div><button className="btn btn-primary" onClick={()=>setOpen(true)}>+ Tambah User</button></div>
     {message&&<div className="success" role="status" style={{marginBottom:12}}>{message}</div>}{error&&<div className="error" style={{marginBottom:12}}>{error}</div>}
     <div className="card"><div className="table-wrap"><table className="table"><thead><tr><th>Nama</th><th>Email</th><th>Role</th><th>Unit</th><th>Status</th><th>Aksi</th></tr></thead><tbody>
-      {rows.map(u=><tr key={u.id}><td><b>{u.name}</b></td><td>{u.email}</td><td><span className="badge blue">{u.role}</span></td><td>{u.unit_name||"-"}</td><td><StatusBadge status={u.is_active?"ACTIVE":"DISABLED"}/></td><td><div style={{display:"flex",gap:6,flexWrap:"wrap"}}><button className="btn btn-secondary" onClick={()=>{setError("");setMessage("");setEditing(u)}}>Edit Profil</button><button className="btn btn-secondary" onClick={()=>changeRole(u)}>Role</button><button className="btn btn-secondary" onClick={()=>reset(u)}>Reset Password</button><button className={`btn ${u.is_active?"btn-danger":"btn-success"}`} onClick={()=>toggle(u)}>{u.is_active?"Disable":"Enable"}</button></div></td></tr>)}
+      {rows.map(u=><tr key={u.id}><td><b>{u.name}</b>{u.alias && <div><small className="muted">{u.alias}</small></div>}</td><td>{u.email}</td><td><span className="badge blue">{u.role}</span></td><td>{u.unit_name||"-"}</td><td><StatusBadge status={u.is_active?"ACTIVE":"DISABLED"}/></td><td><div style={{display:"flex",gap:6,flexWrap:"wrap"}}><button className="btn btn-secondary" onClick={()=>{setError("");setMessage("");setEditing(u)}}>Edit Profil</button><button className="btn btn-secondary" onClick={()=>changeRole(u)}>Role</button><button className="btn btn-secondary" onClick={()=>reset(u)}>Reset Password</button><button className={`btn ${u.is_active?"btn-danger":"btn-success"}`} onClick={()=>toggle(u)}>{u.is_active?"Disable":"Enable"}</button></div></td></tr>)}
     </tbody></table></div></div>
     {editing&&<AccountProfileDialog account={editing} admin onClose={()=>setEditing(null)} onSaved={identity=>{
       setRows(rows=>rows.map(row=>row.id===editing.id?{...row,...identity}:row));
@@ -35,7 +35,8 @@ export default function AdminUsersClient({ activeName, activeEmail }: { activeNa
       <div className="field"><label>Nama</label><input className="input" name="name" required/></div>
       <div className="field"><label>Email</label><input className="input" type="email" name="email" required/></div>
       <div className="field"><label>Role</label><select className="select" name="role">{roles.map(r=><option key={r}>{r}</option>)}</select></div>
-      <div className="field"><label>Unit</label><input className="input" name="unit_name"/></div>
+      <div className="field"><label>Unit</label><input className="input" name="unit_name" maxLength={120}/></div>
+      <div className="field full"><label>Alias (nama orang, opsional)</label><input className="input" name="alias" maxLength={150}/></div>
       <div className="field full"><label>Password Awal</label><input className="input" type="password" name="password" minLength={10} required/></div>
       <div className="field full" style={{display:"flex",flexDirection:"row",justifyContent:"flex-end",gap:8}}><button type="button" className="btn btn-secondary" onClick={()=>setOpen(false)}>Batal</button><button className="btn btn-primary">Buat User</button></div>
     </form></Modal>}

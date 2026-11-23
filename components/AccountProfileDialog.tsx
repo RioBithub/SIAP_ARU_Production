@@ -19,7 +19,7 @@ export default function AccountProfileDialog({ account, admin = false, onClose, 
     event.preventDefault();
     if (busy) return;
     const form = new FormData(event.currentTarget);
-    const body = { name: form.get("name"), ...(admin ? { email: form.get("email") } : {}) };
+    const body = { name: form.get("name"), alias: form.get("alias"), ...(admin ? { email: form.get("email"), unit_name: form.get("unit_name") } : {}) };
     setBusy(true);
     setError("");
     try {
@@ -43,6 +43,12 @@ export default function AccountProfileDialog({ account, admin = false, onClose, 
       <label className="field full"><span>Nama</span>
         <input className="input" name="name" autoComplete="name" defaultValue={account.name} maxLength={150} required disabled={busy}/>
       </label>
+      <label className="field"><span>Alias (nama orang, opsional)</span>
+        <input className="input" name="alias" defaultValue={account.alias ?? ""} maxLength={150} disabled={busy}/>
+      </label>
+      {admin ? <label className="field"><span>Unit (opsional)</span>
+        <input className="input" name="unit_name" defaultValue={account.unit_name ?? ""} maxLength={120} disabled={busy}/>
+      </label> : <div className="field"><small className="muted">Unit</small><b>{account.unit_name || "–"}</b></div>}
       {admin ? <label className="field full"><span>Email login</span>
         <input className="input" name="email" type="email" autoComplete="off" defaultValue={account.email} maxLength={190} required disabled={busy}/>
       </label> : <div className="field full"><small className="muted">Email login</small><b>{account.email}</b>
