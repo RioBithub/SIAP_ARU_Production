@@ -12,12 +12,13 @@ import { saveBusinessDocument } from "@/lib/business-document-data";
 import { getAccessibleLetter, letterAccess } from "@/lib/letter-access";
 import { incomingRecipients } from "@/lib/correspondence-settings";
 import { activeReviewer, hasActiveSecretariat, outgoingSources } from "@/lib/correspondence-data";
-import { canHandleSecretariat, canReceiveDirectorNota, isNotaDirector, NOTA_DIRECTORS,
+import { canHandleSecretariat, canRequestNotaDraft, isNotaDirector,
   REVIEW_ROLES, REVIEW_STATUS } from "@/lib/correspondence-workflow";
 import { discardUncommittedFiles, insertLetterAttachment, type StoredLetterFile } from "@/lib/letter-uploads";
 import { saveUpload } from "@/lib/upload";
 import { generatedNotaFile, saveNotaSource } from "@/lib/nota-document";
-import { activeNotaAccount, notaReplyRecipient } from "@/lib/nota-routing";
+import { activeNotaAccount, notaPartyLabel, notaPrimaryTarget, notaReplyRecipient,
+  saveNotaRecipients, validateNotaRecipients } from "@/lib/nota-routing";
 import { checkedDate, invoiceKey, officialManager, persekotChecklist, receiptFields,
   requestingUnit, saveProof, takeFile, v11Enabled, v11Letter } from "@/lib/v11-data";
 import { jakartaDate, staffUnit } from "@/lib/v11-workflow";
@@ -91,8 +92,14 @@ async function listLetters(request: Request, user: SessionUser) {
     const columns = ["l.letter_number", "l.external_number", "l.subject", "l.sender", "l.recipient",
       "l.legacy_number_text", "CAST(nl.seq_base AS CHAR)"];
     if (forDisposition) columns.push(`(${ledgerNumber})`);
-    where.push(`(${columns.map(column => `${column} LIKE ?`).join(" OR ")})`);
+    const matches = columns.map(column => `${column} LIKE ?`);
     params.push(...columns.map(() => `%${q}%`));
+    if (direction === "INTERNAL") {
+      matches.push(`EXISTS (SELECT 1 FROM siap_v11_nota_recipients r JOIN siap_users u ON u.id=r.recipient_user_id
+        WHERE r.letter_id=l.id AND (u.name LIKE ? OR u.unit_name LIKE ?))`);
+      params.push(`%${q}%`, `%${q}%`);
+    }
+    where.push(`(${matches.join(" OR ")})`);
   }
 
   const access = trash ? { clause: "l.deleted_at IS NOT NULL", params: [] } : letterAccess(user);
@@ -203,22 +210,28 @@ export async function POST(request: Request) {
     const nota = v11 && direction === "INTERNAL";
     const replyId = str(body.nota_reply_to_id, 36);
     const delegatedAuthorId = str(body.nota_author_user_id, 36);
+    const drafterId = str(body.nota_drafter_user_id, 36);
     if (delegatedAuthorId && (!nota || user.role !== "STAFF")) {
       throw new Error("Draf untuk atasan dibuat oleh Staff melalui Nota Dinas.");
     }
     if (replyId && (!nota || persekot || paymentRequest)) {
       throw new Error("Balasan harus berupa Nota Dinas biasa dari Direktur.");
     }
+    if (drafterId && (!nota || !canRequestNotaDraft(user.role) || delegatedAuthorId || replyId || persekot || paymentRequest)) {
+      throw new Error("Manager atau Direksi dapat menugaskan Staff untuk menyiapkan Nota Dinas biasa.");
+    }
     const id = crypto.randomUUID();
     const subject = required(body.subject, "Perihal", 500);
     const letterDate = dateOnly(body.letter_date, "Tanggal dokumen");
-    const targetId = replyId ? "" : required(body.routing_target_user_id, "Tujuan review", 36);
+    const targetId = replyId ? "" : drafterId ? str(body.routing_target_user_id, 36)
+      : required(body.routing_target_user_id, nota && (isNotaDirector(user.role) || delegatedAuthorId) ? "Tujuan Nota Dinas" : "Tujuan review", 36);
     const unit = v11 && direction === "INCOMING" ? requestingUnit(body.requesting_unit) : null;
     const receipt = unit ? receiptFields(body, false) : null;
     const today = v11 ? jakartaDate() : new Date().toISOString().slice(0, 10);
     const isBackdated = letterDate < today;
     const summary = str(body.summary, 5000) || null;
     const notes = str(body.notes, 5000) || null;
+    const draftInstruction = drafterId ? str(body.nota_draft_instruction, 5000) || null : null;
     const conf = String(body.confidentiality || "").toUpperCase();
     const externalNumber = direction === "INCOMING" ? required(body.external_number, "Nomor dokumen asal", 255) : null;
     const addressedTo = direction === "OUTGOING" ? required(body.recipient, "Tujuan dokumen", 255)
@@ -249,36 +262,37 @@ export async function POST(request: Request) {
         throw new Error("Pilih akun Manager atau Direktur yang aktif.");
       }
       const author = delegate ?? user;
+      const drafter = drafterId ? await activeNotaAccount(conn, drafterId) : null;
+      if (drafterId && drafter?.role !== "STAFF") throw new Error("Pilih akun Staff yang aktif.");
       const directorNota = nota && isNotaDirector(author.role) && !persekot && !paymentRequest;
       if (delegate && isNotaDirector(author.role) && !directorNota) {
         throw new Error("Draf untuk Direktur tersedia untuk Nota Dinas biasa dan balasan.");
       }
       const managerNota = nota && author.role === "MANAGER";
-      if (managerNota) await officialManager(conn, author.id, delegate ? staffUnit(user.unit_name) : null);
+      if (managerNota) await officialManager(conn, author.id, drafter ? staffUnit(drafter.unit_name)
+        : delegate ? staffUnit(user.unit_name) : null);
       const origin = replyId ? await getAccessibleLetter(user, replyId, conn, true) : null;
       const repliedTo = origin ? await notaReplyRecipient(conn, author, origin, await v11Letter(replyId, conn)) : null;
       if (replyId && !repliedTo) throw new Error("Nota Dinas asal atau pengirimnya tidak dapat menerima balasan dari akun ini.");
-      const target = repliedTo ?? (directorNota ? await activeNotaAccount(conn, targetId)
-        : v11 && !managerNota ? await officialManager(conn, targetId, unit)
-        : await activeReviewer(conn, targetId, managerNota ? [...NOTA_DIRECTORS]
-          : direction === "INCOMING" && usesSecretariat ? REVIEW_ROLES : ["MANAGER"]));
-      if (!target || (directorNota && !replyId && !canReceiveDirectorNota(author.role, target.role))) {
-        throw new Error("Pilih penerima Nota Dinas Direksi yang aktif.");
-      }
-      const targetLabel = [target.name, target.unit_name].filter(Boolean).join(" — ");
+      const target = repliedTo ?? (!targetId ? null : nota ? await notaPrimaryTarget(conn, author.role, targetId, directorNota)
+        : v11 ? await officialManager(conn, targetId, unit)
+          : await activeReviewer(conn, targetId, direction === "INCOMING" && usesSecretariat ? REVIEW_ROLES : ["MANAGER"]));
+      const additionalRecipients = nota ? await validateNotaRecipients(conn, body.nota_recipient_ids ?? [], author, target?.id ?? null, directorNota) : [];
+      const targetLabel = target ? notaPartyLabel(target) : null;
       const recipient = addressedTo ?? targetLabel;
       const sender = direction === "INCOMING" ? required(body.sender, "Asal/pengirim", 255)
-        : direction === "INTERNAL" ? delegatedAuthorId || replyId ? author.name : user.unit_name || user.name : null;
+        : direction === "INTERNAL" ? delegatedAuthorId || drafter || replyId ? author.name : user.unit_name || user.name : null;
       const severity = ["BIASA", "PENTING", "RAHASIA"];
       const confidentiality = severity[Math.max(0, severity.indexOf(conf), severity.indexOf(origin?.confidentiality))];
       const isPublic = v11 || confidentiality === "RAHASIA" ? 0
         : direction === "INTERNAL" || business ? Number(body.is_public === true)
         : Number(body.is_public !== false);
       const status = needsRegistration ? "SECRETARIAT_INTAKE"
-        : direction === "INCOMING" ? REVIEW_STATUS[target.role as keyof typeof REVIEW_STATUS] : "DRAFT";
-      const role = needsRegistration ? "SECRETARIAT" : direction === "INCOMING" ? target.role : author.role;
+        : direction === "INCOMING" ? REVIEW_STATUS[target!.role as keyof typeof REVIEW_STATUS] : "DRAFT";
+      const role = needsRegistration ? "SECRETARIAT" : direction === "INCOMING" ? target!.role : drafter?.role ?? author.role;
       const original = generateNota ? await generatedNotaFile({
         id, date: letterDate, author: author.name, unit: author.unit_name, recipient, subject,
+        additionalRecipients: additionalRecipients.map(notaPartyLabel),
         summary: required(summary, "Isi Nota Dinas", 5000), confidentiality, reference: origin?.subject,
       }) : file ? await (nota ? saveProof(file, true, "ORIGINAL") : saveUpload(file, "ORIGINAL")) : null;
       if (original) stored.push(original);
@@ -294,8 +308,8 @@ export async function POST(request: Request) {
          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [id, direction, documentType, formatId, externalNumber, subject, sender, recipient, letterDate,
           receivedDate, issuedDate, confidentiality, summary, notes, status, role,
-          needsRegistration ? null : direction === "INCOMING" ? target.id : direction === "OUTGOING" || business || v11 ? author.id : null,
-          target.id, isPublic, isBackdated, user.id, user.id, Number(usesSecretariat),
+          needsRegistration ? null : direction === "INCOMING" ? target!.id : direction === "OUTGOING" || business || v11 ? drafter?.id ?? author.id : null,
+          target?.id ?? null, isPublic, isBackdated, user.id, user.id, Number(usesSecretariat),
           Number(requiresSecretariatReview), sourceLetterId, sourceDispositionId],
       );
 
@@ -326,23 +340,27 @@ export async function POST(request: Request) {
         await conn.execute(
           `INSERT INTO siap_v11_letters
            (letter_id,kind,requesting_unit,received_time,delivery_method,delivered_by,received_by,
-            receipt_note,receipt_attachment_id,invoice_key,persekot_checklist,spb_attachment_id,nota_author_user_id)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            receipt_note,receipt_attachment_id,invoice_key,persekot_checklist,spb_attachment_id,nota_author_user_id,
+            nota_drafter_user_id,nota_draft_instruction)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
           [id, replyId ? "NOTA_REPLY" : directorNota ? "NOTA_DIRECT" : persekot ? "PERSEKOT"
             : paymentRequest ? "PAYMENT_REQUEST" : "CORRESPONDENCE",
             unit, receipt?.receivedTime ?? null,
             receipt?.method ?? null, receipt?.deliveredBy ?? null, receipt?.receivedBy ?? null,
             receipt?.note ?? null, receiptId, documentType === INVOICE_INCOMING ? invoiceKey(sender!, externalNumber!) : null,
-            persekot ? JSON.stringify(persekotChecklist(body.persekot_checklist)) : null, spbId, delegatedAuthorId || null],
+            persekot ? JSON.stringify(persekotChecklist(body.persekot_checklist)) : null, spbId,
+            delegate || drafter ? author.id : null, drafter?.id ?? null, draftInstruction],
         );
+        if (additionalRecipients.length) await saveNotaRecipients(conn, id, additionalRecipients);
       }
 
       const action = needsRegistration ? "RECEIVE_INCOMING"
         : direction === "INCOMING" ? "REGISTER_INCOMING" : direction === "INTERNAL" ? "CREATE_INTERNAL" : "CREATE_OUTGOING";
       const comment = [
         number ? "Nomor direservasi: " + number : null,
-        (replyId ? "Penerima balasan: " : directorNota ? "Penerima nota: " : "Tujuan review: ") + targetLabel,
+        targetLabel ? (replyId ? "Penerima balasan: " : directorNota ? "Penerima nota: " : "Tujuan review: ") + targetLabel : null,
         delegatedAuthorId ? "Disiapkan untuk " + author.name : null,
+        drafter ? "Penyusunan draf ditugaskan ke " + drafter.name : null,
         direction !== "OUTGOING" ? notes : null,
       ].filter(Boolean).join(" • ");
       await conn.execute(
@@ -352,9 +370,10 @@ export async function POST(request: Request) {
       );
       await auditLog({
         user, action: "LETTER_CREATE", entityType: "LETTER", entityId: id,
-        metadata: { direction, documentType, subject, routingTargetId: target.id, isBackdated,
+        metadata: { direction, documentType, subject, routingTargetId: target?.id ?? null, isBackdated,
           customNumberBase: customBase, usesSecretariat, sourceLetterId, sourceDispositionId, workflowV11: v11,
-          requestingUnit: unit, notaAuthorUserId: delegatedAuthorId || null },
+          requestingUnit: unit, notaAuthorUserId: delegate || drafter ? author.id : null, notaDrafterUserId: drafter?.id,
+          notaRecipientIds: additionalRecipients.map(person => person.id), note: draftInstruction ?? undefined },
         request,
       }, conn);
       const [rows] = await conn.query<RowDataPacket[]>("SELECT * FROM siap_letters WHERE id=? LIMIT 1", [id]);

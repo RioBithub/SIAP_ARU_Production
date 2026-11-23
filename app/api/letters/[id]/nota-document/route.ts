@@ -9,7 +9,7 @@ import { getAccessibleLetter } from "@/lib/letter-access";
 import { discardUncommittedFiles, insertLetterAttachment, type StoredLetterFile } from "@/lib/letter-uploads";
 import { canEditNotaDocument, canUploadNotaSignature, generatedNotaFile, isNotaDraft, notaAuthorId,
   notaDocument, requiresNotaProof, saveNotaSource } from "@/lib/nota-document";
-import { activeNotaAccount } from "@/lib/nota-routing";
+import { activeNotaAccount, listNotaRecipients, notaPartyLabel } from "@/lib/nota-routing";
 import { readStoredFile } from "@/lib/upload";
 import { proofMimeType, saveProof, takeFile, v11Letter } from "@/lib/v11-data";
 
@@ -53,7 +53,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
         await conn.execute("UPDATE siap_v11_letters SET nota_signature_assistant_user_id=? WHERE letter_id=?",
           [assistantId, params.id]);
         event = "ASSIGN_NOTA_SIGNATURE";
-        detail = assistant ? "Unggah tanda tangan ditugaskan ke " + assistant.name : "Bantuan Sekretariat dicabut.";
+        detail = assistant ? "Bantuan tanda tangan ditugaskan ke " + assistant.name : "Bantuan Sekretariat dicabut.";
       } else if (action === "GENERATE") {
         const author = await activeNotaAccount(conn, authorId);
         if (!author) throw new Error("Akun pengirim Nota Dinas tidak aktif.");
@@ -62,6 +62,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
           ? await getAccessibleLetter(user, letter.source_letter_id, conn) : null;
         const file = await generatedNotaFile({
           id: params.id, date: dates.date, author: author.name, unit: author.unit_name, recipient: letter.recipient,
+          additionalRecipients: (await listNotaRecipients(conn, params.id)).map(notaPartyLabel),
           subject: letter.subject, summary: required(letter.summary, "Isi Nota Dinas", 5000),
           confidentiality: letter.confidentiality, reference: origin?.subject,
         });

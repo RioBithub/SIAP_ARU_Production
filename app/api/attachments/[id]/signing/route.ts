@@ -13,7 +13,7 @@ import {
   sendSandboxSignature, type SandboxProgress,
 } from "@/lib/mekari-sign";
 import { latestMekariSendFailure, type MekariSendFailureNotice } from "@/lib/mekari-signing-audit";
-import { canEditNotaDocument, notaDocument } from "@/lib/nota-document";
+import { canUploadNotaSignature, notaDocument } from "@/lib/nota-document";
 import type { SessionUser } from "@/lib/types";
 import { readStoredFile } from "@/lib/upload";
 import { saveProof, v11Letter } from "@/lib/v11-data";
@@ -47,9 +47,14 @@ async function sourceFor(user: SessionUser, id: string, conn: Pick<PoolConnectio
     return user.role === "ROOT_ADMIN" || [source.from_user_id, source.to_user_id, source.current_owner_user_id].includes(user.id)
       ? source : null;
   }
-  if (source.direction === "INTERNAL" && source.workflow_id && source.attachment_kind === "ORIGINAL") {
+  if (source.direction === "INTERNAL" && source.workflow_id) {
+    const workflow = await v11Letter(source.letter_id, conn);
+    if (source.attachment_kind !== "ORIGINAL") {
+      return workflow?.nota_signature_assistant_user_id !== user.id && canHandleSecretariat(user.role) &&
+        await getAccessibleLetter(user, source.letter_id, conn) ? source : null;
+    }
     const letter = await getAccessibleLetter(user, source.letter_id, conn);
-    if (!letter || !canEditNotaDocument(user, letter, await v11Letter(source.letter_id, conn))) return null;
+    if (!letter || !workflow || !canUploadNotaSignature(user, letter, workflow)) return null;
     const nota = await notaDocument(conn, source.letter_id);
     return nota?.source?.id === id ? source : null;
   }
@@ -203,6 +208,14 @@ export async function POST(request: Request, { params }: { params: { id: string 
         [status, finalId, id],
       );
       await audit("ATTACHMENT_MEKARI_STATUS", { status, finalAttachmentId: finalId }, conn);
+      if (finalId && source.direction === "INTERNAL" && source.workflow_id &&
+          !source.disposition_id && source.attachment_kind === "ORIGINAL") {
+        const nota = await notaDocument(conn, source.letter_id);
+        if (nota?.source?.id === id && nota.signed?.id === finalId) {
+          await auditLog({ user, action: "LETTER_NOTA_SANDBOX_SIGNED", entityType: "LETTER", entityId: source.letter_id,
+            metadata: { sourceAttachmentId: id, finalAttachmentId: finalId }, request }, conn);
+        }
+      }
     });
     files.length = 0;
     return response(await findJob(db, id), 200, undefined, progress);
