@@ -21,7 +21,7 @@ import { canEditNotaDocument, canUploadNotaSignature, isDirectNota, isNotaDraft,
 import { activeNotaAccount, directorsForNotaReply, listNotaRecipients, notaPartyLabel, notaPrimaryTarget,
   notaReplyRecipient, saveNotaRecipients, validateNotaRecipients } from "@/lib/nota-routing";
 import { discardUncommittedFiles, insertLetterAttachment, listLetterAttachments, markPaymentAttachment, type StoredLetterFile } from "@/lib/letter-uploads";
-import { canEditOutgoingDraft, correspondenceDraft } from "@/lib/correspondence-draft-data";
+import { canEditOutgoingDraft, correspondenceDraft, wordSourceId } from "@/lib/correspondence-draft-data";
 
 export const runtime = "nodejs";
 
@@ -119,10 +119,11 @@ export async function GET(_:Request,{params}:{params:{id:string}}) {
     draftDocument: letter.direction === "OUTGOING" ? {
       editable: canEditOutgoingDraft(user, letter), initialLayout: draftDocument?.layout ?? null,
       source: attachments.find(file => file.id === originalId) ?? null, slots: draftSlots,
-      needsSource: Boolean(draftDocument && !originalId),
+      needsSource: Boolean(draftDocument && !originalId), wordSourceId: wordSourceId(draftDocument, originalId),
     } : null,
     notaDocument: nota && { ...nota, editable: canEditNotaDocument(user, letter, workflow),
       initialLayout: draftDocument?.layout ?? null, slots: draftSlots,
+      wordSourceId: wordSourceId(draftDocument, nota.source?.id, nota.sourceKind),
       sandbox: canSignNota && sandboxAttachmentsEnabled(), uploadable: canSignNota, requiresProof: requiresNotaProof(workflow),
       canAssignAssistant: isNotaDraft(letter) && authorId === user.id,
       assistant: assistant ? { id: assistant.id, name: assistant.name } : null },

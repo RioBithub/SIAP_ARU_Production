@@ -12,6 +12,7 @@ export default function OutgoingDocumentPanel({ id, data, refresh }: {
     source: { id: string; original_name: string } | null;
     initialLayout: CorrespondenceLayout | null;
     needsSource: boolean;
+    wordSourceId: string | null;
   };
   refresh: () => Promise<void>;
 }) {
@@ -45,7 +46,8 @@ export default function OutgoingDocumentPanel({ id, data, refresh }: {
     <div className="card-head"><h3>Dokumen utama Surat Keluar</h3></div>
     <div className="card-body">
       {data.source && <div className="kpi-row">
-        <b>{data.source.original_name}</b><AttachmentActions id={data.source.id} name={data.source.original_name}/>
+        <b>{data.source.original_name}</b><AttachmentActions id={data.source.id} name={data.source.original_name}
+          word={data.wordSourceId ? { letterId: id, sourceId: data.wordSourceId } : undefined}/>
       </div>}
       {data.needsSource && <p className="hint">Isi surat berubah. Buat ulang PDF atau unggah versi terbaru di bagian Lampiran.</p>}
       {data.editable && <div className="attachment-actions">
