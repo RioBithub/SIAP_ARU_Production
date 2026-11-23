@@ -2050,10 +2050,75 @@ try {
     }
     return "Dirops dan Dirut meminta draf dari Staff dan mengirim ke beberapa akun sekaligus setelah PDF tersedia. Duplikasi penerima dan akses sebelum pengiriman diuji.";
   });
+  await test(73, async () => {
+    const createAccount = async (key, role, unit_name, name, alias) => {
+      const email = key + "@simulasi.siap.invalid";
+      const password = env.SIAP_V11_STAGE_PASSWORD;
+      roles[key] = await post("root", "/api/admin/users", { email, password, role, name, alias, unit_name }, 201);
+      const login = await call(null, "/api/auth/login", { method: "POST", body: { email, password }, raw: true });
+      const cookie = login.response.headers.get("set-cookie")?.split(";")[0];
+      assert(cookie?.startsWith("siap_session="));
+      sessions.set(key, cookie);
+    };
+    await createAccount("managerit", "MANAGER", "IT", "Manager IT Simulasi", "Koordinator IT");
+    await createAccount("staffit", "STAFF", "IT", "Staff IT Simulasi", "Teknisi Jaringan");
+    await createAccount("staffsupport", "STAFF", "Dukungan Aplikasi", "Staff Dukungan Simulasi", "Petugas Aplikasi");
+    const config = "/api/admin/correspondence-settings";
+    const choose = (userIds, status = 200) => call("root", config, {
+      method: "PATCH", body: { kind: "delegation", managerId: roles.managerit.id, userIds }, status,
+    });
+    await choose([roles.root.id], 400);
+    const row = await incoming("pic-unit-baru");
+    await register(row.id);
+    await letterAction("ops", row.id, "APPROVE_FINAL");
+    const parent = await assign("dirops", row.id, "managerit");
+    await start("managerit", parent.id);
+    await assign("managerit", row.id, "staffsupport", { parent_id: parent.id }, 400);
+    await assign("managerit", row.id, "staffit", { parent_id: parent.id, purpose: "INVOICE_VERIFY" }, 400);
+    const task = await assign("managerit", row.id, "staffit", { parent_id: parent.id });
+    await start("staffit", task.id);
+    await submit("staffit", task.id);
+    await taskAction("managerit", task.id, "APPROVE_RESULT");
+    await choose([roles.staffsupport.id]);
+    await assign("managerit", row.id, "staffit", { parent_id: parent.id }, 400);
+    await assign("managerit", row.id, "root", { parent_id: parent.id }, 400);
+
+    const browser = await chromium.launch({ executablePath: env.SIAP_V11_CHROMIUM, args: ["--no-sandbox"] });
+    try {
+      const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+      await context.addCookies([{ name: "siap_session", value: sessions.get("root").split("=")[1], url: base.origin }]);
+      const page = await context.newPage();
+      page.setDefaultTimeout(12_000);
+      await page.goto(new URL("/admin/correspondence-settings", base).href);
+      await page.getByLabel("Manager", { exact: true }).selectOption(roles.managerit.id);
+      const unit = page.getByRole("combobox", { name: /Unit PIC/ });
+      await unit.selectOption({ label: "IT" });
+      const search = page.getByRole("searchbox", { name: "Cari PIC" });
+      await search.fill("Teknisi Jaringan");
+      const it = page.getByRole("checkbox", { name: /Staff IT Simulasi/ });
+      await it.check();
+      await search.fill("");
+      await unit.selectOption({ label: "Dukungan Aplikasi" });
+      assert(await page.getByRole("checkbox", { name: /Staff Dukungan Simulasi/ }).isChecked());
+      await unit.selectOption({ label: "Semua unit" });
+      assert(await it.isChecked());
+      assert.equal(await page.getByRole("checkbox", { name: /SIMULASI Root/ }).count(), 0);
+      const saving = page.waitForResponse(response => response.url().endsWith(config) && response.request().method() === "PATCH");
+      await page.getByRole("button", { name: "Simpan PIC" }).click();
+      assert((await saving).ok());
+      assert.deepEqual(new Set((await call("managerit", config)).delegation), new Set([roles.staffit.id, roles.staffsupport.id]));
+    } finally { await browser.close(); }
+
+    const crossUnit = await assign("managerit", row.id, "staffsupport", { parent_id: parent.id });
+    assert.equal((await taskDetail("staffsupport", crossUnit.id)).disposition.to_user_id, roles.staffsupport.id);
+    await choose(null);
+    await assign("managerit", row.id, "staffsupport", { parent_id: parent.id }, 400);
+    return "Daftar unit mengikuti akun aktif, alias bisa dicari, Root Admin ditolak, Manager IT mendelegasikan lewat unit atau PIC lintas unit yang diizinkan.";
+  });
 } finally {
   await sql.end();
   await writeFile(path.join(out, "uat.json"), JSON.stringify({ runId, db: profile.version, cases: result }, null, 2));
 }
 const totals = Object.fromEntries(["PASS","FAIL","SKIP"].map(status => [status,result.filter(row=>row.status===status).length]));
 console.log(JSON.stringify(totals));
-if (totals.FAIL || result.length !== 72) process.exitCode=1;
+if (totals.FAIL || result.length !== 73) process.exitCode=1;

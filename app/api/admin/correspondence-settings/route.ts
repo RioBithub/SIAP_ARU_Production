@@ -7,6 +7,7 @@ import { withTransaction } from "@/lib/db";
 import { str } from "@/lib/http";
 import { REGISTER_SHEETS } from "@/lib/aru-register";
 import { normalizeSheetUrl, readNumberRegister } from "@/lib/google-number-register";
+import { isGeneralPicRole } from "@/lib/v11-workflow";
 import type { NumberSourceSettings } from "@/lib/correspondence-number-source";
 
 export async function GET(request: Request) {
@@ -84,13 +85,13 @@ export async function PATCH(request: Request) {
         if (!manager) throw new Error("Pilih akun Manager aktif.");
         const ids = body.userIds;
         if (ids !== null) {
-          if (!Array.isArray(ids) || ids.length > 250 || ids.some(id => typeof id !== "string" || !id || id.length > 36) ||
+          if (!Array.isArray(ids) || ids.length > 250 || ids.some(id => typeof id !== "string" || !id || id.length > 36 || id === managerId) ||
               new Set(ids).size !== ids.length) throw new Error("Daftar PIC tidak valid.");
           if (ids.length) {
             const [targets] = await conn.query<RowDataPacket[]>(
-              "SELECT id FROM siap_users WHERE id IN (?) AND is_active=1 AND role IN ('STAFF','FINANCE')", [ids],
+              "SELECT id,role FROM siap_users WHERE id IN (?) AND is_active=1", [ids],
             );
-            if (targets.length !== ids.length) throw new Error("Pilih hanya Staf atau Finance yang aktif.");
+            if (targets.length !== ids.length || targets.some(target => !isGeneralPicRole(target.role))) throw new Error("Pilih hanya Staf atau Finance yang aktif.");
           }
         }
         key = delegationKey(managerId);

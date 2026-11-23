@@ -15,8 +15,8 @@ import Modal from "@/components/Modal";
 import StatusBadge from "@/components/StatusBadge";
 import { letterDirectionLabel, RESULT_REQUIREMENTS, type ResultRequirement } from "@/lib/correspondence-workflow";
 import { INVOICE_INCOMING, formatInvoiceAmount, type DocumentReference } from "@/lib/business-documents";
-import { dispositionTargetRoles, jakartaDate, staffCanVerify, staffUnit, TASK_PURPOSES, TERMINAL_TASK_STATES,
-  unitManagerScope, type RequestingUnit, type TaskPurpose } from "@/lib/v11-workflow";
+import { dispositionTargetRoles, jakartaDate, managerCanAssignByUnit, staffCanVerify, TASK_PURPOSES, TERMINAL_TASK_STATES,
+  type RequestingUnit, type TaskPurpose } from "@/lib/v11-workflow";
 
 const size=(n:number)=>
   n<1024*1024
@@ -268,12 +268,14 @@ export default function DispositionsClient({user}:{user:SessionUser}){
   const allowed=dispositionTargetRoles(user.role, strict);
   const targetUsers=users.filter(account=>{
     if(account.id===user.id||!allowed.includes(account.role)) return false;
-    if(strict&&account.role==="MANAGER"&&!account.v11_scope) return false;
-    const accountScope=account.role==="FINANCE"?"KSU":unitManagerScope(staffUnit(account.unit_name));
+    if(strict&&purpose!=="GENERAL"&&account.role==="MANAGER"&&!account.v11_scope) return false;
     if(user.role==="MANAGER"){
       if(purpose==="GENERAL"&&delegation!==null){
         if(!delegation.includes(account.id)) return false;
-      } else if(strict&&accountScope&&accountScope!==scope) return false;
+      } else if(strict){
+        if(purpose!=="GENERAL"&&!scope) return false;
+        if(!managerCanAssignByUnit(user.unit_name,scope,account)) return false;
+      }
     }
     if(purpose==="INVOICE_VERIFY") return account.role==="STAFF"&&selectedLetter?.v11_unit&&staffCanVerify(selectedLetter.v11_unit,account.unit_name);
     if(purpose==="INVOICE_PAYMENT"||purpose==="REQUEST_PAYMENT") return account.role==="FINANCE";
@@ -746,7 +748,7 @@ export default function DispositionsClient({user}:{user:SessionUser}){
           </label>}
           <div className="field">
             <SearchableSelect key={purpose} label="Diteruskan Kepada" ariaLabel="Diteruskan kepada" name="to_user_id" required
-              options={targetUsers.map(u=>({value:u.id,label:u.name+" — "+(u.unit_name||u.role),search:u.email}))}
+              options={targetUsers.map(u=>({value:u.id,label:u.name+" — "+(u.unit_name||u.role),search:[u.email,u.alias].filter(Boolean).join(" ")}))}
               placeholder="Pilih PIC…" sizeThreshold={3}/>
           </div>
 
