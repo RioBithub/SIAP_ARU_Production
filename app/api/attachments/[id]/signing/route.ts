@@ -13,6 +13,7 @@ import {
   sendSandboxSignature, type SandboxProgress,
 } from "@/lib/mekari-sign";
 import { latestMekariSendFailure, type MekariSendFailureNotice } from "@/lib/mekari-signing-audit";
+import { canPrepareOutgoingSignature } from "@/lib/outgoing-signature";
 import { canUploadNotaSignature, notaDocument } from "@/lib/nota-document";
 import type { SessionUser } from "@/lib/types";
 import { readStoredFile } from "@/lib/upload";
@@ -57,6 +58,10 @@ async function sourceFor(user: SessionUser, id: string, conn: Pick<PoolConnectio
     if (!letter || !workflow || !canUploadNotaSignature(user, letter, workflow)) return null;
     const nota = await notaDocument(conn, source.letter_id);
     return nota?.source?.id === id ? source : null;
+  }
+  if (source.direction === "OUTGOING" && source.workflow_id && source.attachment_kind === "ORIGINAL") {
+    const letter = await getAccessibleLetter(user, source.letter_id, conn);
+    return letter && canPrepareOutgoingSignature(user, letter) ? source : null;
   }
   return canHandleSecretariat(user.role) && await getAccessibleLetter(user, source.letter_id, conn) ? source : null;
 }

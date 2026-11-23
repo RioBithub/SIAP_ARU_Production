@@ -74,6 +74,7 @@ export default function NotaDocumentPanel({ id, data, assistants, refresh }: {
       <div className="kpi-list">
         <div className="kpi-row"><span>Status tanda tangan</span><b>
           {data.method === "MEKARI_SANDBOX" ? "Ditandatangani di Mekari Sandbox"
+            : data.method === "MEKARI_MANUAL" ? "PDF bertanda tangan dari Mekari diunggah"
             : data.method === "DIGITAL" ? "PDF bertanda tangan digital diunggah"
             : data.method === "BASAH" ? "Hasil pindai tanda tangan basah diunggah"
             : data.manualReason ? "Pernyataan pengirim" : "Belum ditandatangani"}
@@ -133,13 +134,14 @@ export default function NotaDocumentPanel({ id, data, assistants, refresh }: {
       {data.uploadable && data.source && <div className="attachment-actions" style={{ marginTop: 8 }}>
         <button type="button" className="btn btn-primary" disabled={busy} aria-expanded={showUpload}
           onClick={() => { setShowUpload(!showUpload); setShowSigning(false); setShowDeclaration(false); }}>
-          {data.method === "BASAH" || data.method === "DIGITAL" ? "Ganti PDF Bertanda Tangan" : "Unggah PDF Bertanda Tangan"}
+          {data.signed ? "Ganti PDF Bertanda Tangan" : "Unggah PDF Bertanda Tangan"}
         </button>
       </div>}
       {showUpload && data.source && data.uploadable && <form className="form-grid workflow-form" onSubmit={uploadSignature}>
         <label className="field"><span>Metode tanda tangan</span>
           <select className="select" name="signature_method" defaultValue="" required>
             <option value="">Pilih metode</option>
+            <option value="MEKARI_MANUAL">PDF sudah ditandatangani di Mekari</option>
             <option value="DIGITAL">Digital</option>
             <option value="BASAH">Basah (hasil pindai PDF)</option>
           </select>

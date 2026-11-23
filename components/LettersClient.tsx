@@ -17,7 +17,7 @@ import LetterHistory from "@/components/LetterHistory";
 import SearchableSelect from "@/components/SearchableSelect";
 import { formatWorkflowTime } from "@/lib/workflow-time";
 import AttachmentSandbox from "@/components/AttachmentSandbox";
-import V11SigningPanel from "@/components/V11SigningPanel";
+import OutgoingSignaturePanel from "@/components/OutgoingSignaturePanel";
 import NotaDocumentPanel from "@/components/NotaDocumentPanel";
 import CorrespondenceLayoutFields from "@/components/CorrespondenceLayoutFields";
 import OutgoingDocumentPanel from "@/components/OutgoingDocumentPanel";
@@ -336,7 +336,8 @@ export default function LettersClient({direction,user}:Props){
     : direction==="INCOMING"?INCOMING_TYPE_OPTIONS:FALLBACK_LETTER_TYPE_OPTIONS;
   const businessForm=isBusinessDocument(createType);
   const incomingFileRequired=direction==="INCOMING"&&(businessForm||v11Enabled);
-  const signedIssue=Boolean(pendingAction?.issue&&(detail?.letter.uses_secretariat||(detail?.letter.document_type===SPK_OUTGOING&&detail?.business?.managed)));
+  const outgoingSigned=direction==="OUTGOING"&&detail?.attachments?.find((file:any)=>file.id===detail.v11?.signature_attachment_id);
+  const signedIssue=Boolean(pendingAction?.issue&&(outgoingSigned||signingReady||detail?.letter.uses_secretariat||(detail?.letter.document_type===SPK_OUTGOING&&detail?.business?.managed)));
   const actionFileLimit=signedIssue || (detail?.v11&&["MARK_SENT","REGISTER_INCOMING"].includes(pendingAction?.action||"")) ? 4 : 5;
 
   function formObject(fd:FormData){
@@ -468,7 +469,8 @@ export default function LettersClient({direction,user}:Props){
 
   async function openDetail(id:string){
     try{
-      setDetail(await readDetail(id));setDetailOpen(true);
+      const next=await readDetail(id);
+      setSigningReady(false);setDetail(next);setDetailOpen(true);
     }catch(e){
       setError(e instanceof Error?e.message:"Gagal membuka detail surat.");
     }
@@ -480,7 +482,7 @@ export default function LettersClient({direction,user}:Props){
   }
 
   function startAction(action:string,label:string,requiredComment=false,issue=false){
-    setActionFiles([]);setError("");setSignatureMethod("");
+    setActionFiles([]);setError("");setSignatureMethod(issue ? outgoingSigned ? "SAVED_SIGNATURE" : signingReady ? "MEKARI_API" : "" : "");
     setPendingAction({action,label,requiredComment,issue});
   }
 
@@ -508,7 +510,7 @@ export default function LettersClient({direction,user}:Props){
     if(signedIssue){
       const signed = form.get("signed_file");
       const method=String(form.get("signature_method")||"");
-      if (method!=="MEKARI_API") {
+      if (method!=="MEKARI_API"&&method!=="SAVED_SIGNATURE") {
         if (!signed || typeof signed === "string" || signed.size === 0) {
           setError("Unggah naskah yang sudah ditandatangani.");setActionBusy(false);return;
         }
@@ -696,7 +698,7 @@ export default function LettersClient({direction,user}:Props){
   const receiptFile=detail?.attachments?.find((file:any)=>file.id===detail.v11?.receipt_attachment_id);
   const signingFiles=(detail?.attachments??[]).filter((file:any)=>!file.letter_action_id&&(
     ["ADDITIONAL","PAYMENT_DOCUMENT"].includes(file.attachment_kind)||
-    (file.attachment_kind==="ORIGINAL"&&file.id===detail?.originalId&&!detail.notaDocument)))
+    (file.attachment_kind==="ORIGINAL"&&file.id===detail?.originalId&&!detail.notaDocument&&direction!=="OUTGOING")))
       .map((file:any)=>file.id===detail?.draftDocument?.source?.id?{...file,slots:detail.draftDocument.slots}:file);
 
   const pageDescription=direction==="INCOMING"
@@ -1062,8 +1064,12 @@ export default function LettersClient({direction,user}:Props){
             data={detail.v11.payment_documents} attachments={detail.attachments} onSaved={()=>refreshDetail(detail.letter.id)}/>}
           {detail.sandboxSigning && (!detail.notaDocument || signingFiles.length>0) && <AttachmentSandbox key={`attachment-sandbox-${detail.letter.id}`}
             files={signingFiles}/>}
-          {!detail.sandboxSigning&&detail.v11&&detail.letter.status==="WAITING_SIGNATURE"&&canHandleSecretariat(user.role)&&
-            <V11SigningPanel key={`letter-signing-${detail.letter.id}`} id={detail.letter.id} files={signingFiles} onReady={setSigningReady}/>}
+          {direction==="OUTGOING"&&<OutgoingSignaturePanel key={`outgoing-signature-${detail.letter.id}`} id={detail.letter.id}
+            signed={outgoingSigned||undefined} method={detail.v11?.signature_provenance} editable={detail.outgoingSigning}
+            source={detail.draftDocument?.source?.original_name.toLowerCase().endsWith(".pdf")
+              ? {...detail.draftDocument.source,slots:detail.draftDocument.slots} : undefined}
+            sandbox={detail.sandboxAttachments} staging={Boolean(detail.outgoingSigningMode)}
+            onReady={setSigningReady} refresh={()=>refreshDetail(detail.letter.id)}/>}
           <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:13}}>
             {canEditDetail()&&<button className="btn btn-secondary" onClick={openEdit}>
               {user.role==="STAFF"&&detail.notaRouting?.drafter?.id===user.id?"Isi Draf Nota Dinas":"Edit Metadata"}
@@ -1234,9 +1240,10 @@ export default function LettersClient({direction,user}:Props){
           <div className="field"><label>Metode Tanda Tangan</label><select aria-label="Metode tanda tangan" className="select" name="signature_method" required value={signatureMethod} onChange={e=>setSignatureMethod(e.target.value)}>
             <option value="">Pilih metode...</option><option value="DIGITAL">Digital</option><option value="BASAH">Basah</option>
             {detail.v11&&<option value="MEKARI_MANUAL">Unggah PDF Mekari manual</option>}
+            {outgoingSigned&&<option value="SAVED_SIGNATURE">Gunakan PDF final yang sudah disimpan</option>}
             {detail.v11&&signingReady&&<option value="MEKARI_API">Gunakan PDF final Mekari staging</option>}
           </select></div>
-          {signatureMethod!=="MEKARI_API"&&<div className="field full"><label>Naskah Bertanda Tangan</label><input aria-label="Naskah bertanda tangan" className="input" type="file" name="signed_file" accept=".pdf,.jpg,.jpeg,.png" required/>
+          {signatureMethod!=="MEKARI_API"&&signatureMethod!=="SAVED_SIGNATURE"&&<div className="field full"><label>Naskah Bertanda Tangan</label><input aria-label="Naskah bertanda tangan" className="input" type="file" name="signed_file" accept=".pdf,.jpg,.jpeg,.png" required/>
             <span className="hint">Unggah PDF dari layanan TTD digital atau hasil pindai tanda tangan basah. Maksimal 10 MB.</span>
           </div>}
         </>}

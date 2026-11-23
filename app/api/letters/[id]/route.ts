@@ -1,5 +1,5 @@
 import { canEditPaymentDocuments, invoicePaymentAccess, paymentDocuments } from "@/lib/v11-payment-documents";
-import { sandboxAttachmentsEnabled } from "@/lib/mekari-sign";
+import { mekariMode, sandboxAttachmentsEnabled } from "@/lib/mekari-sign";
 import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { getCurrentUser } from "@/lib/auth";
@@ -16,6 +16,7 @@ import { checkedDate, invoiceKey, invoiceVerified, officialManager, persekotChec
   requestingUnit, saveProof, takeFile, v11Enabled, v11Letter } from "@/lib/v11-data";
 import { invoiceVerificationStatus, jakartaDate } from "@/lib/v11-workflow";
 import { invoicePaymentSummary } from "@/lib/v11-finance";
+import { canPrepareOutgoingSignature } from "@/lib/outgoing-signature";
 import { canEditNotaDocument, canUploadNotaSignature, isDirectNota, isNotaDraft, notaAuthorId, notaDocument, requiresNotaProof,
   saveNotaSource } from "@/lib/nota-document";
 import { activeNotaAccount, directorsForNotaReply, listNotaRecipients, notaPartyLabel, notaPrimaryTarget,
@@ -133,6 +134,9 @@ export async function GET(_:Request,{params}:{params:{id:string}}) {
         ? workflow?.nota_draft_instruction ?? null : null,
       isReply: workflow?.kind === "NOTA_REPLY", direct: isDirectNota(workflow), replies, replyAuthors,
       replyRecipient: replyRecipient ? { id: replyRecipient.id, name: replyRecipient.name, unit: replyRecipient.unit_name } : null } : null,
+    outgoingSigning: Boolean(workflow && canPrepareOutgoingSignature(user, letter)),
+    outgoingSigningMode: workflow && canPrepareOutgoingSignature(user, letter) ? mekariMode() : null,
+    sandboxAttachments: sandboxAttachmentsEnabled(),
     sandboxSigning: sandboxAttachmentsEnabled() && canHandleSecretariat(user.role) &&
       !(nota && assistant?.id === user.id),
     sourceLetter, sourceDisposition, hasSourceDisposition: Boolean(sourceDispositionId), hasSourceLetter: Boolean(sourceLetterId)}});

@@ -9,7 +9,7 @@ export async function reversibleApproval(conn: Queryable, user: SessionUser, let
   if (!["DIRECTOR_OPS_REVIEW", "PRESIDENT_DIRECTOR_REVIEW", "SECRETARIAT_REVIEW", "READY_TO_ISSUE", "APPROVED"].includes(letter.status)
       || letter.issued_date || letter.sent_date) return null;
   const [[blocked]] = await conn.query<RowDataPacket[]>(
-    `SELECT EXISTS (SELECT 1 FROM siap_v11_letters WHERE letter_id=? AND payable_id IS NOT NULL)
+    `SELECT EXISTS (SELECT 1 FROM siap_v11_letters WHERE letter_id=? AND (payable_id IS NOT NULL OR signature_attachment_id IS NOT NULL))
       OR EXISTS (SELECT 1 FROM siap_dispositions WHERE letter_id=? AND status NOT IN ('COMPLETED','CANCELLED','RETURNED'))
       OR EXISTS (SELECT 1 FROM siap_v11_signing WHERE letter_id=?)
       OR EXISTS (SELECT 1 FROM siap_v11_attachment_signing s
